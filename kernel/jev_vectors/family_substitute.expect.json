@@ -1,0 +1,16 @@
+{
+  "action": "HOLD",
+  "engine": {
+    "blackout": false,
+    "calib_gate": "pass",
+    "deterministic_veto": false,
+    "disagreement": false,
+    "veto_max": false
+  },
+  "expected_cid": "1f768ad8af9ba001080f4cb51eb7a7e2efddc71f878570bed739cf73b36ea10e",
+  "expected_fhash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expected_symbol": "AAPL",
+  "now_unix": 1700000000,
+  "pubkey": "ebc198b8b8bfae7723278c3b31629f29de72829797ccc8c2ccce6d9436a4cff2",
+  "reason": "family_binding"
+}

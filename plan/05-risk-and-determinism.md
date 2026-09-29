@@ -55,7 +55,7 @@ text is the freeze-v2 contract unchanged.
   epsilon)) with epsilon = $1; ties → older position, then lexicographic
   symbol. If no removal reduces VaR, HOLD new entries and escalate.
 - R8. `max` budget requires the doc 03 §3.3 max-gate or downgrade. Applies
-  only when a sleeve's filter policy is `jev_v4`; the always-take path
+  only when a sleeve's filter policy is `jev`; the always-take path
   sizes at base budget only (no 2×R without a gate that can grant it).
 - R9. Sessions, broker rules, and corporate plumbing are hard vetoes via
   the `broker_compliance_policy` adapter table (broker, account type,
@@ -122,7 +122,7 @@ text is the freeze-v2 contract unchanged.
   timestamp are permanently CONTEXT-capped. *Default:* drop. (Model-memory
   lookahead is governed by doc 11 §11.0c, not by R12.)
 - **R13. Calibration floor, noise-gated.** For a sleeve with
-  `filter = jev_v4`: if trailing-200 Brier for `enter` or `latent_risk` is
+  `filter = jev`: if trailing-200 Brier for `enter` or `latent_risk` is
   worse than base rate by more than 0.02 AND ≥ 20 realized outcomes of the
   resolving class exist, that sleeve's entries halt and the stage demotes
   (doc 11). Below the sample floor: `insufficient`, not gated.
@@ -206,7 +206,7 @@ bit-identically before landing.
 - S4. Scheduler watchdog: no housekeeping cycle > 60 s in session →
   restart feed, reconcile before resuming. Off-session silence is normal.
 - S5. JEV error streak (5 consecutive failures) → entries paused for
-  sleeves configured with `jev_v4`; always-take sleeves unaffected; alert.
+  sleeves configured with `jev`; always-take sleeves unaffected; alert.
 - S6. Research-plane outage: features past TTL → absent → entries that
   require a TRIGGER feature HOLD. Cached features are never extended.
 - S7. Feature or candidate rejection rate > 5% over an hour → alert;
@@ -226,7 +226,7 @@ transitions are journaled):
 - `DEGRADED_RESEARCH` — research plane down; sleeves that need no research
   input continue; research-dependent sleeves HOLD entries.
 - `ENTRY_HALT` — entries off, management on (e.g. JEV down for a
-  `jev_v4` sleeve, R-trip, SOFT kill).
+  `jev` sleeve, R-trip, SOFT kill).
 - `EXIT_ONLY` — only exits, stops, reconcile.
 - `HARD_STOP` — doc 10 HARD sequence.
 - `BASELINE_ONLY` (shadow) — controls keep computing offline for

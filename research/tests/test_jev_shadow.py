@@ -1,4 +1,4 @@
-"""JEV shadow mode: logs answers, never touches candidates/journal, resumes
+"""JEV shadow mode: logs answers and the filter verdict, never touches candidates/journal, resumes
 by offset, fails closed without a key. Provider mocked; no network."""
 import json
 import os
@@ -57,7 +57,7 @@ assert jev_shadow.run(LOOP, now=1000.0, key="k", post_fn=post(resp())) == 2
 r = rows()
 assert [x["symbol"] for x in r] == ["AAA", "BBB"]
 assert all(x["action"] == "ANSWER" and x["shadow"] for x in r)
-assert r[0]["would_block"] is False
+assert r[0]["verdict"] == "PASS_BASE" and r[0]["reason"] == "lean"
 # candidates untouched, no journal/STAGE created
 assert open(CAND, "rb").read() == before
 assert sorted(os.listdir(LOOP)) == ["candidates.jsonl", "jev_shadow.jsonl",
@@ -69,13 +69,14 @@ assert jev_shadow.run(LOOP, now=1001.0, key="k", post_fn=post(resp())) == 0
 add("CCC")
 assert jev_shadow.run(LOOP, now=1002.0, key="k",
                       post_fn=post(resp(enter=0.2))) == 1
-assert rows()[-1]["symbol"] == "CCC" and rows()[-1]["would_block"] is True
-print("ok offset-resume-and-would-block")
+assert rows()[-1]["symbol"] == "CCC"
+assert (rows()[-1]["verdict"], rows()[-1]["reason"]) == ("HOLD", "no_edge")
+print("ok offset-resume-and-verdict")
 
 # family mismatch is a what-if block
 add("DDD")
 jev_shadow.run(LOOP, now=1003.0, key="k", post_fn=post(resp(fam="macro")))
-assert rows()[-1]["would_block"] is True
+assert (rows()[-1]["verdict"], rows()[-1]["reason"]) == ("HOLD", "family_binding")
 print("ok family-mismatch")
 
 # half-written line is left for the next pass

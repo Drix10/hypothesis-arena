@@ -1,13 +1,12 @@
 # AGENTS.md: session rules (pi harness) — freeze v3
 
 1. Read `ARCHITECTURE.md` + `plan/00-INDEX.md` before any code change.
-   The freeze-v3 review (`plan/reviews/2026-09-28-v3-rebaseline-critique.md`)
-   explains why the plan looks the way it does.
+   `plan/07-build-roadmap.md` explains why the plan looks the way it does.
 2. `plan/` is source of truth. Code implements plan; it never invents plan.
    `plan/appendix/` records are binding where a doc points to them.
 3. After every completed task: update `TODO.md` (check the box, add
    `[HUMAN]` or `[BLOCKED]` where needed). No "done in chat but not in TODO".
-   History lives in `TODO-ARCHIVE-2026-09-28.md`; never append to it.
+   Finished history lives in git; do not keep an archive file.
 4. Never commit, log, prompt, or paste secrets: no API keys, broker tokens,
    `.env`, signing keys, or stage signatures. A secret exposed anywhere
    (including a chat) is rotated, not reasoned about.

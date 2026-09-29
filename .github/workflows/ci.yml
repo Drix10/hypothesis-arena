@@ -89,6 +89,8 @@ jobs:
           PYTHONWARNINGS=error python3 research/tests/test_gates.py
           PYTHONWARNINGS=error python3 research/tests/test_sip_fetch.py
           PYTHONWARNINGS=error python3 research/tests/test_trend.py
+          PYTHONWARNINGS=error python3 research/tests/test_sector_mom.py
+          PYTHONWARNINGS=error python3 research/tests/test_intraday_mom.py
           PYTHONWARNINGS=error python3 research/tests/test_a_run.py
           PYTHONWARNINGS=error python3 research/tests/test_tier_a.py
           PYTHONWARNINGS=error python3 research/tests/test_insider_data.py
@@ -100,8 +102,8 @@ jobs:
           PYTHONWARNINGS=error python3 research/tests/test_alert_relay.py
       - name: strategy baseline (stdlib only)
         run: PYTHONWARNINGS=error python3 research/tests/test_baseline.py
-      - name: strategy JEV v4 interop (stdlib only)
-        run: python3 research/tests/test_jev_v4.py
+      - name: strategy JEV filter interop (stdlib only)
+        run: python3 research/tests/test_jev_filter.py
       - name: JEV shadow sidecar (stdlib only)
         run: python3 research/tests/test_jev_shadow.py
       - name: strategy candidate contract (pinned pytest)
@@ -136,10 +138,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y g++ libcurl4-openssl-dev
       - name: deterministic kernel gates (incl. live-transport build)
         run: WITH_CURL=1 bash kernel/build.sh
-      - name: C++ v4 interop vectors
+      - name: C++ JEV filter vectors
         run: |
-          g++ -std=c++17 -Wall -Wextra -O2 -o /tmp/test_v4 kernel/tests/test_v4.cpp
-          /tmp/test_v4 kernel/v4
+          g++ -std=c++17 -Wall -Wextra -O2 -o /tmp/test_jev_filter kernel/tests/test_jev_filter.cpp
+          /tmp/test_jev_filter kernel/jev_vectors
       - name: freeze pins
         run: bash scripts/freeze-check.sh
 

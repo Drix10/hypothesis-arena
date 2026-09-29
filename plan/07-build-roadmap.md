@@ -2,7 +2,7 @@
 
 Tracks run in parallel where marked; gates never get skipped. Paper only
 until Phase 5 sign-off. `TODO.md` is the itemized ledger of this doc; the
-freeze-v2 ledger is archived verbatim in `TODO-ARCHIVE-2026-09-28.md`.
+freeze-v2 ledger is in git history.
 
 ## 7.0 Where we are (2026-09-28, verified against the repo)
 
@@ -10,9 +10,9 @@ freeze-v2 ledger is archived verbatim in `TODO-ARCHIVE-2026-09-28.md`.
 |---|---|
 | Phase 0 spec | Freeze v2 signed 2026-09-18. **Freeze v3 rebaseline** written 2026-09-28 under operator instruction; approved by the operator in chat 2026-09-29 (sign-off log). |
 | Phase 1 collector | Built and soaked (133 cycles); §2.7-equivalent boxes in doc 09 §9.4 open. |
-| Phase 2 JEV sidecar | ACCEPTED/FROZEN `50ea369`; question_set_version = v3 frozen; v4 released `da61daa`. |
+| Phase 2 JEV sidecar | ACCEPTED/FROZEN `50ea369`; contract = "jev" (candidate-bound; one contract across sidecar, evaluator and kernel filter). |
 | Phase 2.5 research plane | Six-node graph + five Tier-A adapters + seam built and hosted-green; doc 08 §8.6 exit open. |
-| Phase 3 kernel | P3.1/P3.2/P3.3 frozen; P3.5 slices A–G done; **H1 router/runner/broker/journal built and audited (router 209, runner ~1045, broker 126, drills 120) but `transport = nullptr` — no order has ever left the host.** |
+| Phase 3 kernel | JEV filter built and gated; P3.5 slices A–G done; **H1 router/runner/broker/journal built and audited (router 209, runner ~1045, broker 126, drills 120) but `transport = nullptr` — no order has ever left the host.** |
 | Strategy track | S1 landed (PIT single-stock universe item open); S2 measured NEGATIVE, acceptance open; S3/S4 released; S5 implementation closed, economics open (stub FAIL); S6 released (isolated library); S7-A/B closed; S7-C re-audit #2 fixes at `f0815e7`, closure needs hosted 5/5. |
 | G0 | NOT STARTED. No sleeve has passed any economic gate. |
 
@@ -24,7 +24,7 @@ passed its B-gate AND P3.5 closed.
 
 ## 7.1 Phase R — Rebaseline (docs only; this change)
 
-- [x] Full critique recorded (`reviews/2026-09-28-v3-rebaseline-critique.md`).
+- [x] Full critique recorded (git history).
 - [x] Docs 00–13 + manifest rewritten for freeze v3; implementation
       records moved verbatim to `appendix/`.
 - [x] Operator approved the freeze-v3 text in chat, 2026-09-29 (sign-off log below).
@@ -48,10 +48,10 @@ passed its B-gate AND P3.5 closed.
 - [ ] A6 E2 `earnings_reader_v1`: E2-det A-gate on history; E2-ai paired
       forward shadow design (needs P2 reader tier).
 - [ ] A7 M1 overlay tested on every sleeve that passed A-gate.
-- [ ] A8 S5 re-scoped: the paired always-take vs `jev_v4` test runs on
+- [ ] A8 S5 re-scoped: the paired always-take vs `jev` test runs on
       the candidate streams of sleeves that passed A-gate, with real JEV
-      v4 answers generated only for post-cutoff events. S5 is the gate for
-      `filter = jev_v4`, not a G0 blocker.
+      answers generated only for post-cutoff events. S5 is the gate for
+      `filter = jev`, not a G0 blocker.
 - [ ] A9 S1 closure: the PIT single-stock S&P-500 universe artifact is not
       freely available; S1 closes with ETF and EDGAR-derived universes and
       the limitation recorded (doc 12 §12.1).
@@ -93,8 +93,8 @@ passed its B-gate AND P3.5 closed.
 ## 7.5 Track O — Ops, CI, hygiene (parallel, small)
 
 - [ ] O1 CI runs on every push + `workflow_dispatch`; strategy tests
-      (`test_baseline`, `test_candidate` with pinned pytest, `test_jev_v4`)
-      and `kernel/tests/test_v4.cpp` join CI (S4 governance amendment).
+      (`test_baseline`, `test_candidate` with pinned pytest, `test_jev_filter`)
+      and `kernel/tests/test_jev_filter.cpp` join CI (S4 governance amendment).
 - [ ] O2 Secret scanning: pinned gitleaks job + pre-commit hook.
 - [ ] O3 freeze-check v3 alignment: rename doc 02 file to
       `02-strategy-book.md`, manifest v3 keys verified, root/xxd guards.
@@ -152,12 +152,12 @@ passed its B-gate AND P3.5 closed.
 
 - Phase 0 — spec frozen at freeze v2 (signed `2dc8cbd`, reconciled
   `50d88a7`); X removed from production v1; JEV v3 semantics frozen
-  (question_set_version = v3, 4 questions).
+  (4 questions; now the single candidate-bound `contract = "jev"`).
 - Phase 1 — P1.1 freeze-check, P1.2 collector, P1.3 TRIGGER/CONTEXT
   tagging, P1.4 soak (133 cycles, shortened on evidence), P1.5 ctx reader.
 - Phase 2 — JEV sidecar accepted/frozen `50ea369`.
-- Phase 3 — P3.1 (re-signed `52ccedb`), P3.2, P3.3 (`41f3b66` +
-  `7d83974`), P3.4 = quarantine; P3.5 slices A–G; H1 built (doc 13).
+- Phase 3 — JEV filter (confidence quarantined); P3.5 slices A–G; H1 built
+  (doc 13).
 - Strategy Validation Track S1–S7 — see §7.0 and the archive ledger.
 
 ## Distraction firewall (read when tempted)
@@ -196,7 +196,7 @@ document. The STAGE file is separate: only `scripts/sign-stage.sh` writes it
 Promotion sign-off template (copy per promotion; all lines required):
 
 ```
-PROMOTION: <G0→G1 | G1→G2 | G2→G3 | sleeve <id> to champion | filter jev_v4 on <sleeve>>
+PROMOTION: <G0→G1 | G1→G2 | G2→G3 | sleeve <id> to champion | filter jev on <sleeve>>
 DECIDED BY: <operator, approved in chat>   DATE: <ISO8601>   WINDOW JUDGED: <dates>
 CRITERIA (doc 10 §10.2 / doc 11 §11.3 — every box true, evidence linked):
   [ ] sleeve gate passed (A-gate + B-gate reports, trial-ledger ids)
@@ -214,3 +214,4 @@ MANIFEST HASH: <sha256>
 - Phase 0 freeze v2 signed off. Bucket 1 complete; JEV v3 semantics frozen; X removed from production v1; Phase 1 unblocked. | Drix10 | 2026-09-18
 - Freeze v3 rebaseline authorized by operator instruction ("full permission to rewrite plans and code; plan first") | 2026-09-28 | text committed
 - Freeze v3 text approved | operator, in chat | 2026-09-29
+- Single JEV contract (candidate-bound; v3 sidecar path retired, plain names) | operator, in chat | 2026-09-29

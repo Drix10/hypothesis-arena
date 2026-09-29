@@ -10,7 +10,7 @@
 
 #include <unistd.h>
 
-#include "../jev_validate.hpp"
+#include "../jev_wire.hpp"
 #include "alpaca_paper.hpp"
 #include "http_curl.hpp"
 #include "ws_stream.hpp"

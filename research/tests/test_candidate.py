@@ -3,7 +3,7 @@
 Seam under test: market data -> generator -> immutable Candidate -> JEV.
 Proves JEV can neither originate nor mutate trade economics, and that
 identity is deterministic, collision-free across authoritative fields,
-and cache-safe. No JEV v4 logic here (S4 NOT AUTHORIZED).
+and cache-safe. No JEV logic here (S4 NOT AUTHORIZED).
 """
 import dataclasses
 import os

@@ -48,15 +48,15 @@ Thumbs.db
 
 # C++ build artifacts
 *.exe
+# kernel/build.sh outputs (binaries; sources are .cpp)
+kernel/test_*
+!kernel/test_*.cpp
+kernel/tests/test_*
+!kernel/tests/test_*.cpp
+kernel/g0_*
+kernel/smoke_paper
+kernel/live_drill
 *.o
 *.a
-kernel/test_p31
 
-# S2 evidence: derived reports only (raw bars stay local)
-!data/
-data/*
-!data/s2_out/
-data/s2_out/*
-!data/s2_out/baseline_v1_report.json
-!data/s2_out/baseline_v1_report.md
 *.lock

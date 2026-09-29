@@ -12,7 +12,7 @@ candidate_schema_version: c1
 evaluation_protocol_version: eval_v1
 validation_standard_version: val_v1  # doc 11 §11.0 (trial ledger, statistics, contamination, transferability)
 cost_model_version: cost_v2  # doc 06 §6.0a; wraps paper_fill_v1 (unchanged)
-question_set_version: v3
+jev_contract: jev
 feature_schema_version: f2
 risk_version: R1-R19+v3-amendments  # v3: R1 long-only clause, R18 settled cash, R19 jurisdiction allowlist, R9 PDT repeal row
 exit_profile: exit_profile_v1  # baseline_v1 only; sleeve profiles below
@@ -22,7 +22,7 @@ jev_model: typesafe/jev-1.13
 jev_revision: typesafe/jev-1.13-20260917  # verified live 2026-09-20: exact revision pinned
 jev_provider_name: TypeSafe  # verified live 2026-09-20: provider identity
 jev_provider: TBD_AT_KEY  # BUILD-TIME-REQUIRED: key material never enters the repo
-jev_role: optional-filter  # v3: champion path is always-take unless doc 11 §11.3b admits jev_v4
+jev_role: optional-filter  # v3: champion path is always-take unless doc 11 §11.3b admits jev
 research_models: TBD_AT_BUILD  # BUILD-TIME-REQUIRED: per-role pins incl. knowledge cutoff (doc 08 §8.8)
 venues:
   forex_paper: OANDA-v20-practice  # v3: BLOCKED (India ineligible); retained for the frozen gate only

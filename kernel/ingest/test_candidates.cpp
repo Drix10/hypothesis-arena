@@ -4,7 +4,7 @@
 #include <cstdio>
 #include <string>
 
-#include "../jev_validate.hpp"
+#include "../jev_wire.hpp"
 #include "candidates.hpp"
 
 static int fails = 0, count = 0;

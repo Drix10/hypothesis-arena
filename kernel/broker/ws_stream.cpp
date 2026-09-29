@@ -10,7 +10,7 @@
 #include <cstring>
 #include <random>
 
-#include "../jev_validate.hpp"
+#include "../jev_wire.hpp"
 
 namespace jev {
 namespace broker {

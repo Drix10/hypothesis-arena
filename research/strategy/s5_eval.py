@@ -3,7 +3,7 @@
 Contract (doc 11, eval_v1, s5_prereg.json v2):
 - SAME deterministic candidate stream, paired at CID.
 - ALWAYS_TAKE resolves every realized candidate at frozen economics.
-- JEV_FILTERED takes only v4 PASS_* (+ prereg variant reading); HOLD never fills.
+- JEV_FILTERED takes only filter PASS_* (+ prereg variant reading); HOLD never fills.
 - Censored stays censored; Brier on CLOSED labels only.
 - Resampling: day-cluster bootstrap (cluster-aware by construction) for BOTH
   the percentile CI and the null-centered one-sided test (separate procedures).
@@ -44,7 +44,7 @@ FAMILIES = ("mean_reversion", "momentum")
 # Prereg variant family (names/semantics EXACTLY as s5_prereg.json v2).
 VARIANTS = ("filtered-conv-any", "filtered-enter-gte-80-strong-plus")
 VARIANT_RULE = {
-    "filtered-conv-any": "take iff frozen v4 verdict in PASS_*",
+    "filtered-conv-any": "take iff frozen filter verdict in PASS_*",
     "filtered-enter-gte-80-strong-plus":
         "take iff PASS_* AND enter>=0.8 AND conviction in (strong, max)",
 }
@@ -109,14 +109,14 @@ def stub_answers_provider(model="stub-deterministic-v1",
     pub = ed_pubkey(seed)
 
     def provide(candidate, market, now_unix):
-        from . import jev_v4 as v4
+        from . import jev_filter as jf
         rng = random.Random(int(candidate.cid[:16], 16))
         conv = ("flat", "lean", "strong", "max")[int(candidate.cid, 16) % 4]
         ans = {"enter": rng.random(), "edge_family": candidate.proposed_family,
                "conviction": conv, "latent_risk": rng.random()}
-        payload = v4.make_v4_payload(candidate, market, ans, now_unix,
+        payload = jf.make_payload(candidate, market, ans, now_unix,
                                      now_unix + 60)
-        art = v4.sign_v4(payload, seed)
+        art = jf.sign(payload, seed)
         meta = {"model": model, "revision": revision, "provider": provider}
         return art, meta
 
@@ -157,17 +157,17 @@ def evaluate_stream(items, answers_fn, pubkey, engine, variant,
 
     variant in VARIANTS (prereg names). Deterministic. Every record binds
     the exact frozen inputs needed for replay (candidate meta, two-leg
-    costs, spread multiplier, v4 response_hash+signature, data slice id)."""
-    from . import jev_v4 as v4
+    costs, spread multiplier, artifact response_hash+signature, data slice id)."""
+    from . import jev_filter as jf
     assert variant in VARIANTS, variant
     day_fn = day_fn or (lambda ts: str(ts))
     data_id = data_id or {"slice": "unspecified", "dataset_sha": "unspecified"}
     records = []
     for c, bars_after, market, regime, spread_bps in items:
-        res = v4.resolve_v4_label(c, bars_after, spread_mult=spread_mult,
+        res = jf.resolve_label(c, bars_after, spread_mult=spread_mult,
                                   entry_spread_bps=spread_bps)
         art, meta = answers_fn(c, market, market["snapshot_epoch"])
-        action, reason = v4.evaluate_v4(c, art, market["snapshot_epoch"],
+        action, reason = jf.evaluate(c, art, market["snapshot_epoch"],
                                         pubkey, engine)
         if variant == "filtered-enter-gte-80-strong-plus" and \
                 action.startswith("PASS"):
@@ -679,7 +679,7 @@ R_S5_STATUS = {
                   "persisted HWMs; S5 has daily-close marks only"),
     "R6-vol": ("UNAVAILABLE", "no 480+24h baselines / data-age gates"),
     "R7-corr": ("UNAVAILABLE", "no trailing-30 correlation engine"),
-    "R8-maxgate": ("CHECKED", "frozen v4 table per decision"),
+    "R8-maxgate": ("CHECKED", "frozen decision table per decision"),
     "R9-venue": ("UNAVAILABLE", "no broker adapter / venue calendar"),
     "R10-spend": ("NOT_APPLICABLE", "no AI spend object in S5"),
     "R11-isolation": ("NOT_APPLICABLE", "no research-plane writes in S5"),
@@ -699,7 +699,7 @@ R_SCOPE_NOTE = (
     "S5 CHECKED = exact frozen semantics re-verified on the simulated "
     "taken-trade ledger where the inputs exist (R1 direction/concurrency, "
     "R2 single/total concentration, R3 day/symbol-hour churn, R4 two-order "
-    "flip machine, R8 v4-table gate, R12 structural no-lookahead, R14 "
+    "flip machine, R8 decision-table gate, R12 structural no-lookahead, R14 "
     "disagreement flag, stop-rule frozen exits). Live pending-order, "
     "intraday-HWM, vol-baseline, correlation-engine, venue, spend, and "
     "stage semantics stay UNAVAILABLE/NOT_APPLICABLE (see R_S5_STATUS); "

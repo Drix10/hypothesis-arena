@@ -1,0 +1,16 @@
+{
+  "action": "PASS_BASE",
+  "engine": {
+    "blackout": false,
+    "calib_gate": "pass",
+    "deterministic_veto": false,
+    "disagreement": false,
+    "veto_max": false
+  },
+  "expected_cid": "444035fedff239ddcd6269b72cd536e937321498d0413a778941accd033cf3de",
+  "expected_fhash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "expected_symbol": "AAPL",
+  "now_unix": 1700000000,
+  "pubkey": "ebc198b8b8bfae7723278c3b31629f29de72829797ccc8c2ccce6d9436a4cff2",
+  "reason": "strong"
+}

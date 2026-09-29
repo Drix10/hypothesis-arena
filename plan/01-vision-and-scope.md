@@ -18,7 +18,7 @@ the evidence says AI actually helps:
    releases read by a reader tier that has no code execution and no
    network, producing schema-capped facts that a deterministic resolver
    verifies against canonical records (doc 08 §8.3).
-3. **An optional calibrated filter** (JEV v4) that is admitted to the
+3. **An optional calibrated filter** (JEV filter) that is admitted to the
    champion path only after it proves a positive paired delta against
    always-take (doc 03, doc 11).
 
@@ -122,7 +122,7 @@ distraction firewall holds it out.
 | Layer | Job | Technology |
 |---|---|---|
 | Strategy sleeves | Originate candidates (side is always BUY-to-open or SELL-to-close live) with entry/stop/exit bound pre-decision | Deterministic Python research code → kernel candidate contract c1 (doc 02, doc 04) |
-| Optional filter | Calibrated PASS/HOLD on a candidate | JEV v4 via OpenRouter Decisions API — challenger until proven (doc 03) |
+| Optional filter | Calibrated PASS/HOLD on a candidate | JEV via OpenRouter Decisions API — challenger until proven (doc 03) |
 | Snapshot, risk, sizing, execution | Fast, deterministic, auditable | C++ kernel (docs 04–06, 13) |
 | Evidence extraction | Typed facts from primary documents | Reader-tier LLM + deterministic resolver (doc 08) |
 | Research factory | Hypotheses, pre-registrations, backtest code, reports | Sandboxed agents on trusted local data, trial-ledgered (docs 08, 11) |
@@ -191,7 +191,7 @@ Phase-1 (G0 paper) success is economic AND operational:
   human sign-off. Four stages (G0_PAPER → G1_TINY → G2_SCALED → G3_FULL),
   human-signed, never auto-promoted; demotion automatic and unvetoable.
 - Candidate pipeline (canonical): deterministic sleeve → candidate c1
-  (side/family/entry/stop/exit bound) → optional JEV v4 filter → C++ risk
+  (side/family/entry/stop/exit bound) → optional JEV filter → C++ risk
   engine authorizes size → runner executes. No model output invents
   direction at the execution boundary.
 - AI placement: research factory + reader-tier extraction + optional

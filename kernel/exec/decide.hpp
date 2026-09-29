@@ -6,7 +6,7 @@
 #include <string>
 
 #include "../ingest/candidates.hpp"
-#include "../jev_validate.hpp"
+#include "../jev_wire.hpp"
 #include "../risk/veto.hpp"
 #include "router.hpp"
 

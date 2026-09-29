@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 CANDIDATE_SCHEMA_VERSION = "c1"
 
 # Frozen identity recipe (pipe-joined, exact field order). Do not reword:
-# kernel-side bindings (JEV v4 decision_key) recompute field-for-field.
+# kernel-side bindings (JEV decision_key) recompute field-for-field.
 _ID_FIELDS = ("strategy_version", "symbol", "snapshot_ts_ns", "proposed_side",
               "proposed_family", "entry_px", "stop_px", "tp_px",
               "time_exit_ns", "exit_profile_version", "cost_model_version",

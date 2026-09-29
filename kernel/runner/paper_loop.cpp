@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 #include "../exec/decide.hpp"
-#include "../jev_validate.hpp"
+#include "../jev_wire.hpp"
 #include "../risk/measure.hpp"
 #include "account.hpp"
 #include "bars.hpp"

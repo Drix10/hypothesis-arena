@@ -5,7 +5,7 @@ any probabilistic AI component means what it claims, and change the system
 only when the evidence clears a bar that published LLM-trading work does
 not. Nothing in this doc promotes anything by itself. Every arrow ends at
 a human. Freeze v3 adds §11.0 and §11.3a–b; §§11.1–11.3 are the freeze-v2
-contract, unchanged, and apply wherever a sleeve uses `filter = jev_v4`.
+contract, unchanged, and apply wherever a sleeve uses `filter = jev`.
 
 ## 11.0 The validation standard (v3)
 
@@ -334,7 +334,7 @@ simpler sleeve (fewer parameters, lower turnover).
 
 ## 11.3b Filter / AI-component gate (v3) — paired delta
 
-A filter (JEV v4, an ensemble, a reader-tier feature) enters a champion
+A filter (JEV, an ensemble, a reader-tier feature) enters a champion
 only if, on identical post-cutoff candidates (§11.0c), the filtered policy
 beats always-take net of the filter's own AI cost: one-sided p < 0.05 by
 day-block stationary bootstrap, pre-registered minimum effect met, ≥ 100
@@ -365,7 +365,7 @@ Doc 06 §6.2 writes an auto-field reflection row per closed trade. On top:
       starts before cutoff + 30 d is rejected by the harness.
 - [ ] (v3) A-gate and B-gate report generators; first reports for T1/I1.
 - [ ] Calibration harness scores `enter` and `latent_risk` including
-      counterfactual HOLDs (needed only once a `jev_v4` sleeve exists).
+      counterfactual HOLDs (needed only once a `jev` sleeve exists).
 - [ ] Reliability curves weekly, sliced by regime (same condition).
 - [ ] Controls computed on every window (doc 12).
 - [ ] A challenger that breaches an R-rule is auto-disqualified in test.
@@ -386,5 +386,5 @@ Doc 06 §6.2 writes an auto-field reflection row per closed trade. On top:
   question from filter efficacy (paired delta) and from sleeve performance
   (daily net returns/Sharpe/drawdown). "Beats a control" alone is not
   edge proof: promotion also needs the pre-registered absolute bar.
-- Every JEV answer on a `jev_v4` sleeve is scored, HOLDs included, against
+- Every JEV answer on a `jev` sleeve is scored, HOLDs included, against
   a base-rate baseline; worse than base rate halts that sleeve (R13).

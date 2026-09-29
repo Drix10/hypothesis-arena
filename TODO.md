@@ -1,7 +1,6 @@
 # MiroHedge TODO — freeze v3 ("alpha-first rebaseline", 2026-09-28)
 
-This ledger itemizes `plan/07-build-roadmap.md`. The freeze-v2 ledger is in
-`TODO-ARCHIVE-2026-09-28.md`; read it for history, never append to it.
+This ledger itemizes `plan/07-build-roadmap.md`. History lives in git.
 
 Legend: `[BLOCKED]` waits on another box.
 Each box names its doc 07 id; one box is one commit theme (AGENTS.md rule 7).
@@ -9,16 +8,15 @@ A box is checked only with evidence (commit and test output, or a report path).
 
 ## Current state (verified 2026-09-29)
 
-- Plan: freeze v3 written (docs 00–13, manifest, `plan/appendix/`, critique in
-  `plan/reviews/`); freeze-check PASS.
-- Kernel: P3.1/P3.2/P3.3 FROZEN; P3.5 A-G done; H1 built; R18/R19 veto arms, candidate validator and escaped alerts landed (K4/K6/K7/K11). `transport = nullptr`: no order is ever sent. P3.5 OPEN.
+- Plan: freeze v3 written (docs 00–13, manifest, `plan/appendix/`); freeze-check PASS.
+- Kernel: JEV filter built and gated; P3.5 A-G done; H1 built; R18/R19 veto arms, candidate validator and escaped alerts landed (K4/K6/K7/K11). P3.5 open (live drills).
 - Strategy: `baseline_v1` negative (S2, doc 12 12.7). T1 `trend_etf_v1` ran through the harness on SIP daily bars 2016-2026: FAIL on the 2023-09..2026-08 holdout (A2). S3/S4/S6 released; S5 economics open.
 - S7-C: CLOSED (hosted CI green on the PR head, all six jobs).
 - G0: NOT STARTED. Live ordering: NOT AUTHORIZED.
 
 ## Phase R — rebaseline (docs)
 
-- [x] R1 Critique recorded: `plan/reviews/2026-09-28-v3-rebaseline-critique.md`.
+- [x] R1 Critique recorded (in git history).
 - [x] R2 Docs 00–13 + manifest rewritten; §6.1b, §8.4 internals, X archive
       moved verbatim to `plan/appendix/`; freeze-check PASS.
 - [x] R3 TODO archived + rebuilt; AGENTS/README/ARCHITECTURE aligned.
@@ -29,9 +27,9 @@ A box is checked only with evidence (commit and test output, or a report path).
 - [ ] O6 Rotate every credential shared in chat on 2026-09-28
       (OpenRouter, FRED, BEA, Alpaca paper); re-seed local `.env` only.
 - [x] O4 (hosted run 36470824852 on e833976, all 6 jobs green: kernel, kernel-sanitizer, evidence, plane, stdlib, secrets) S7-C closure: hosted CI green on the head carrying `f0815e7`.
-- [x] O1 (local: test_baseline, test_jev_v4, test_v4 32/32 green; hosted run pending O4) CI: run on every push + `workflow_dispatch`; add `test_baseline`,
+- [x] O1 (local: test_baseline, test_jev_filter, test_jev_filter 32/32 green; hosted run pending O4) CI: run on every push + `workflow_dispatch`; add `test_baseline`,
       `test_candidate` (pytest pinned in a strategy requirements file),
-      `test_jev_v4`, and `kernel/tests/test_v4.cpp` (doc 03 locked decision).
+      `test_jev_filter`, and `kernel/tests/test_jev_filter.cpp` (doc 03 locked decision).
 - [x] O2 (`.gitleaks.toml`, `scripts/pre-commit-secrets.sh`, CI job `secrets`; full history clean over all 558 commits; one false positive in the pre-rename sandbox compose path, now allowlisted) Secret scanning: gitleaks pinned by SHA-256 as a CI job + a
       pre-commit hook (pattern from `anthropics/financial-services`).
 - [x] O3 (freeze-check PASS 189 checks as non-root; kernel gate PASS) freeze-check v3 alignment: rename `plan/02-twitter-alpha-system.md`
@@ -76,10 +74,15 @@ A box is checked only with evidence (commit and test output, or a report path).
   - Result: A-gate FAIL for both variants. Holdout excess Sharpe 0.68 / 0.27 against 1.35 for the passive 60/40; CI lower bound <= 0, DSR and MinTRL fail. Ledger N=17.
 - [ ] A6 E2 `earnings_reader_v1`: E2-det (deterministic SUE drift, SEC financial-statement sets, 3 variants) A-gate run: FAIL for all variants (holdout excess Sharpe -0.34 / +0.28 / -0.20 vs passive 1.33; costs $71k-$137k over the sample; 6.3% of events lack prices). Ledger N=15. Report `research/reports/e2det_pead_v1_a_gate.json`. E2-ai paired forward design [BLOCKED on P2]; no reason to build it while the deterministic baseline is negative.
 - [ ] A7 M1 vol-target overlay tested on every A-gate survivor.
-- [ ] A8 S5 re-scoped as the `jev_v4` filter gate on surviving sleeves'
+- [x] JEV unified to one candidate-bound contract (2026-09-29): sidecar,
+      shadow logger, `jev_filter.py` and `kernel/jev_filter.hpp` share one
+      artifact; no v3/v4 names; 32 vectors agree in Python and C++.
+      Open: retire the kernel's legacy state-based validator, table and
+      p31-p33 suites (test-only surface, no decision path uses them).
+- [ ] A8 S5 re-scoped as the `jev` filter gate on surviving sleeves'
       candidate streams, post-cutoff answers only (not a G0 blocker).
       Shadow logger built 2026-09-29 (`ops/jev_shadow.py`, `test_jev_shadow`,
-      v3 provider, log-only); v4 provider path and enough candidates still open.
+      one candidate-bound contract, log-only); a live provider run and enough candidates are still open.
 - [ ] A9 S1 closure with ETF/EDGAR universes; PIT S&P-500 limitation recorded.
 
 ## Track K — kernel P3.5 remainder (parallel with A)
@@ -94,7 +97,7 @@ A box is checked only with evidence (commit and test output, or a report path).
 - [x] K2 Always-take path (filter policy `none`), bit-identical where the
       filter passes; cannot read an AnswerSet (compile/grep gate).
   - Done: `exec/decide.cpp` = the no-filter path; candidate gate + sizing (doc 03 3.3, `risk/sizing.cpp`) + veto -> OrderIntent; grep gate against AnswerSet.
-  - Done: `FilterPolicy` on the risk snapshot: `none` ignores the disagreement and calibration inputs, `jev_v4` keeps them, and the two are field-identical where the filter passes; 5 veto checks.
+  - Done: `FilterPolicy` on the risk snapshot: `none` ignores the disagreement and calibration inputs, `jev` keeps them, and the two are field-identical where the filter passes; 5 veto checks.
   - Decision: `Decide` always runs `none`.
 - [x] K3 Snapshot v2 + settlement ledger + committed vectors (v1 vectors
       still verified).

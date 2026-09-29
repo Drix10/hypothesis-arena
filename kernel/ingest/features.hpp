@@ -22,7 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
-#include "../jev_validate.hpp"
+#include "../jev_wire.hpp"
 
 namespace jev {
 namespace ingest {

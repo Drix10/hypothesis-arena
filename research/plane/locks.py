@@ -14,7 +14,7 @@
   is the only genuine first init; any other combination involving an
   invalid marker aborts. The marker is healed only when the DB verifies
   and carries a valid token.
-  Supervisor fresh start: delete both files (see PHASE_E_AUDIT.md). A
+  Supervisor fresh start: delete both files . A
   wipe of the whole directory looks like a new deployment (accepted).
 """
 import json

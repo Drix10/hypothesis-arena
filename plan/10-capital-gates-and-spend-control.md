@@ -132,7 +132,7 @@ replay determinism green every week (D1); tracking within the sleeve's
 pre-registered band; AI spend within the G0 cap; kill-switch, reconcile,
 settlement, and isolation drills passed; port-on-promotion vectors green
 (doc 04); jurisdiction gate complete (§10.1a); if the sleeve uses
-`filter = jev_v4`, JEV calibration ≥ base rate over ≥ 200 decisions.
+`filter = jev`, JEV calibration ≥ base rate over ≥ 200 decisions.
 
 **G1 → G2** — 30 consecutive live days at G1; zero R-rule violations;
 realized implementation shortfall within 1.5× `cost_v2`; live-vs-shadow
@@ -150,7 +150,7 @@ drawdown < 5% over the window; ≥ 100 closed trades.
 | Any R-rule violation | Demote one stage + HALT entries + alert |
 | Drawdown > 10% from peak (R5) | Demote to G0_PAPER + flatten via stops + alert |
 | Daily loss limit breached | Entries halted for the session; second breach in 5 sessions → demote |
-| Calibration below baseline by > 0.02 Brier, ≥ 20-outcome minimum (R13, `jev_v4` sleeves) | Entries halted, demote one stage |
+| Calibration below baseline by > 0.02 Brier, ≥ 20-outcome minimum (R13, `jev` sleeves) | Entries halted, demote one stage |
 | Determinism/replay failure (D1) | Demote to G0_PAPER immediately |
 | Journal hash-chain break | Demote to G0_PAPER, HARD kill, forensics before restart |
 | Spend circuit breaker at tier 3 (§10.4) | Entries halted, demote one stage |
@@ -444,7 +444,7 @@ both stop at Tier 3. The factory additionally carries a per-card budget
 declared in its pre-registration; a card that exhausts it stops, and the
 exhaustion is recorded in the trial ledger (a failure is evidence too).
 JEV (`decision`) spend exists only for sleeves configured with
-`filter = jev_v4` and is attributed to that sleeve's cost per trade.
+`filter = jev` and is attributed to that sleeve's cost per trade.
 
 ## 10.5 What "done" means
 

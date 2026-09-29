@@ -21,7 +21,7 @@
 #define DUR_COMMIT(f) fsync(fileno(f))
 #endif
 
-#include "../jev_validate.hpp"  // Sha256Hex
+#include "../jev_wire.hpp"  // Sha256Hex
 
 namespace jev {
 namespace runner {

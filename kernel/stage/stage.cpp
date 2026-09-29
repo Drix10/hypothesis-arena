@@ -3,7 +3,7 @@
 
 #include <cctype>
 
-#include "../jev_validate.hpp"  // Sha256Hex (P3.1 primitive, reused)
+#include "../jev_wire.hpp"  // Sha256Hex (P3.1 primitive, reused)
 
 namespace stage {
 namespace {

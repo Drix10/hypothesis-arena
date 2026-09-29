@@ -444,7 +444,7 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
             v.drift_idx = idx;  // index, never a copied string
         }
     }
-    if (s.filter == FilterPolicy::JEV_V4) {
+    if (s.filter == FilterPolicy::JEV_FILTER) {
         if (s.disagreement) arm("disagreement");
         if (R13FloorTrips(s.brier_delta, s.realized_outcomes))
             arm("r13-calibration");
@@ -469,7 +469,7 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
 
 EngineInputs BuildEngineInputs(const RiskSnapshot& s, const VetoVerdict& v) {
     EngineInputs in;
-    const bool filtered = s.filter == FilterPolicy::JEV_V4;
+    const bool filtered = s.filter == FilterPolicy::JEV_FILTER;
     in.disagreement = filtered && s.disagreement;
     in.event_blackout = EventBlackout(s.impact, s.phase);
     if (!filtered)

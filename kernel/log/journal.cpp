@@ -2,7 +2,7 @@
 // never journals).
 #include "journal.hpp"
 
-#include "../jev_validate.hpp"  // Sha256Hex
+#include "../jev_wire.hpp"  // Sha256Hex
 
 namespace jev {
 namespace journal {

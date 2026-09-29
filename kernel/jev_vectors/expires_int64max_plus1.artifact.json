@@ -1,0 +1,42 @@
+{
+  "payload": {
+    "answers": {
+      "conviction": "strong",
+      "edge_family": "momentum",
+      "enter": 0.9,
+      "latent_risk": 0.1
+    },
+    "candidate": {
+      "cid": "1f768ad8af9ba001080f4cb51eb7a7e2efddc71f878570bed739cf73b36ea10e",
+      "cost_model_version": "paper_fill_v1",
+      "entry_px": "100.0",
+      "exit_profile_version": "exit_profile_v1",
+      "feature_revision": "r1",
+      "proposed_family": "momentum",
+      "proposed_side": "BUY",
+      "snapshot_ts_ns": "1000",
+      "stop_px": "99.0",
+      "strategy_version": "baseline_v1",
+      "symbol": "AAPL",
+      "time_exit_ns": "2000",
+      "tp_px": "102.0"
+    },
+    "cid": "1f768ad8af9ba001080f4cb51eb7a7e2efddc71f878570bed739cf73b36ea10e",
+    "contract": "jev",
+    "created_at": 1700000000,
+    "decision_key": "af04b8c22d9489628797d58a6821558b3395cc1ca3b39fcd8676da4701e0f21f",
+    "expires_at": 9223372036854775808,
+    "feature_snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "model": "typesafe/jev-1.13",
+    "price_s": "100.0",
+    "provider": "TypeSafe",
+    "regime": "trend",
+    "revision": "typesafe/jev-1.13-20260917",
+    "session": "us_open",
+    "snapshot_epoch": 1700000000,
+    "spread_bps_s": "2.0",
+    "symbol": "AAPL"
+  },
+  "response_hash": "67d243ae2ae9e18b60a174eaf07d3104c226bdd6208a19606f10bca8a1e5670d",
+  "signature": "f423a8132b0f033e689ad1c2a75a03904e1ba8a3d36f48989f65a52b73e506aea9b5821260aa1369c6c27f6c18f4ed333e72decf364a846dfdfb228777af8c0b"
+}

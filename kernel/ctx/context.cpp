@@ -3,7 +3,7 @@
 
 #include <cstdio>
 
-#include "../jev_validate.hpp"  // jev::Sha256Hex (P3.1 primitive)
+#include "../jev_wire.hpp"  // jev::Sha256Hex (P3.1 primitive)
 #include "../stage/stage.hpp"   // Slice E stage vocabulary
 
 namespace ctx {

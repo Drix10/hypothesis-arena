@@ -20,7 +20,7 @@
 
 namespace ctx {
 
-// Vocabularies (mirror P3.3/jev_state + doc 09 9.3).
+// Vocabularies (doc 09 9.3).
 inline bool IsRegime(const std::string& s) {
     return s == "trend" || s == "range" || s == "volatile";
 }

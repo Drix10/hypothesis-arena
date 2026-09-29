@@ -32,7 +32,7 @@ jurisdiction allowlist (doc 10 §10.1a, v3) ───┤     │
   and nothing else in this tree.
 - `sidecar/jev.py` (`mirojev`): optional (doc 03 §3.0). Stale/missing
   answers only matter for sleeves whose champion config is
-  `filter = jev_v4`; exits never read them.
+  `filter = jev`; exits never read them.
 - Trust flows one way: research → ctx; strategy → candidate admission →
   risk → exec. Nothing downstream calls upstream; nothing upstream can
   relax a downstream rule.
@@ -90,7 +90,7 @@ jurisdiction allowlist (doc 10 §10.1a, v3) ───┤     │
    `candidate` — an object whose 12 CID-recipe fields (doc 12 / `candidate.py`
    `_ID_FIELDS`, in that order) plus `cid` are ALL JSON strings holding the
    exact Python `str()` bytes the CID was hashed over (same convention as
-   the JEV v4 request, so one recompute rule serves both). The sleeve is
+   the JEV request, so one recompute rule serves both). The sleeve is
    `candidate.strategy_version`; it must appear in the stage manifest's
    approved-sleeve list with its freshness window `window_s`. Checks, first
    failure wins: shape/unknown-key → schema → CID (`sha256("|".join(12))`
@@ -125,7 +125,7 @@ jurisdiction allowlist (doc 10 §10.1a, v3) ───┤     │
    LLM, no network dependency for the decision, file + signal reachable
    in < 5 s. Exits, stops, reconcile survive every level.
 4b. **Always-take path (v3)** — `BuildEngineInputs` gains a versioned
-   filter-policy input (`none | jev_v4`). With `none`, the decision is
+   filter-policy input (`none | jev`). With `none`, the decision is
    row-0 veto + R1–R19 + sizing; no AnswerSet is read, required, or
    fabricated. Proven by: identical verdicts to the filtered path on every
    row where the filter would PASS, and by a compile/grep gate that the
@@ -169,7 +169,7 @@ jurisdiction allowlist (doc 10 §10.1a, v3) ───┤     │
 Python sleeve engine. Before G1 (real capital), the champion sleeve's
 signal logic is re-implemented in C++ inside the kernel and proven
 bit-identical to the Python reference on the full backtest history via
-committed cross-language vectors (the P3.2 precedent). At G1+ the kernel
+committed cross-language vectors (the `jev_vectors/` precedent). At G1+ the kernel
 recomputes the champion's candidates itself; `candidates.jsonl` becomes a
 cross-check (mismatch = HOLD + alert). Direction for real money is then
 decided by C++, as the locked decision requires.

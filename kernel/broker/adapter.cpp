@@ -2,7 +2,7 @@
 // Alpaca adapter methods, which fail closed without one).
 #include "adapter.hpp"
 
-#include "../jev_validate.hpp"  // Sha256Hex (cycle path only)
+#include "../jev_wire.hpp"  // Sha256Hex (cycle path only)
 
 namespace jev {
 namespace broker {

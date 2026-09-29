@@ -73,9 +73,9 @@ or a chat.
 
 ```
 plan/       the spec: 00-INDEX first; appendix/ = frozen records; reviews/ = history
-kernel/     C++ core: validator, decision table, risk veto, sizing, router, runner, broker transport
+kernel/     C++ core: JEV filter, risk veto, sizing, router, runner, broker transport
 research/   strategy/ (backtest harness, strategies), sources/ (data adapters),
-            plane/ (LLM research pipeline), sandbox/ (isolation evidence), tests/
+            plane/ (LLM research pipeline), sandbox/ (worker isolation), tests/
 collector/  Python: signal collection and the JEV sidecar
 ops/        paper-run files: candidate emitter, alert relay, deploy guide
 scripts/    freeze-check.sh, pre-commit-secrets.sh, sign-stage.sh

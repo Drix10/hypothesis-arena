@@ -159,7 +159,7 @@ spend governor's research category (doc 10 §10.4).
 2. **Correlated model failure.** One model misreading a regime hits every
    symbol. Controls: per-symbol evidence, R2 caps, per-regime calibration
    slices, and `latent_risk` scored independently of `enter` (sleeves
-   with `filter = jev_v4` only). No cross-symbol averaging dilutes a HOLD.
+   with `filter = jev` only). No cross-symbol averaging dilutes a HOLD.
 3. **Temporal contamination of LLM outputs (v3).** A model that has seen
    the future in training can "predict" it. Controls: pinned knowledge
    cutoff per model, post-cutoff-only evaluation, forward shadow as the
@@ -373,7 +373,7 @@ Factory rules:
 
 - Roles and pins: `reader` (extraction), `thesis` (hypothesize),
   `verifier` (critique), `factory` (code/pre-registration drafting), and
-  optional `jev_v4`. Each role pins `model_id`, provider, revision,
+  optional `jev`. Each role pins `model_id`, provider, revision,
   **knowledge cutoff date**, temperature, reasoning mode, skill-file hash,
   tool-schema hash, container image digest, dependency lock hash (D3).
   An unpinned call is a build failure.

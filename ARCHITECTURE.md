@@ -4,7 +4,7 @@ AI-assisted systematic fund: US-listed equities and ETFs, cash account, long
 only (freeze v3, 2026-09-28). Forex is research-only (OANDA blocked, RBI LRS
 prohibits forex and margin trading abroad). No crypto.
 
-Status: plan freeze v3 (alpha-first rebaseline), P3.1-P3.3 frozen, P3.5 H1
+Status: plan freeze v3 (alpha-first rebaseline), P3.5 H1
 built with the paper transport verified read-only, two sleeves measured and
 none past an economic gate, G0 not started, paper only.
 
@@ -15,7 +15,7 @@ strategy additions, so `git ls-files` wins where they differ.
 Labels: FROZEN (no change without a human contract-defect ruling; `kernel/`
 implementation and collector production code are byte-identical to the Round 9
 baseline except the additive optional keys in `collector/config.py`, see
-`research/PHASE_E_AUDIT.md` section 4) · ACTIVE (current work surface) ·
+the git history) · ACTIVE (current work surface) ·
 FUTURE (not implemented) · HISTORICAL (read-only audit trail).
 
 ## 1. Root files (7 tracked + 1 ignored companion)
@@ -29,8 +29,7 @@ Tracked: `.env.example`, `.gitattributes`, `.gitignore`, `AGENTS.md`,
   theme; fail closed.
 - `ARCHITECTURE.md` — this file.
 - `README.md` — status table, quick start, repo map.
-- `TODO.md` — the live build ledger (freeze v3). The freeze-v2 history is in
-  `TODO-ARCHIVE-2026-09-28.md`.
+- `TODO.md` — the live build ledger (freeze v3). History lives in git.
 - `.env` / `.env.example` — ACTIVE canonical config. `.env` is
   git-ignored real values; `.env.example` is the tracked template
   (`MIRO_CONTACT` required; provider, broker and BEA keys optional).
@@ -68,8 +67,8 @@ contamination control, doc 12 demotes `baseline_v1` to a negative control.
   reconcile; no FIX in v1.
 - `02-strategy-book.md` — alpha system contract; X-lists tail
   DISABLED in v1 (§2.6).
-- `03-jev-decision-layer.md` — JEV contract: question set v3, 4
-  questions, exit profile v1, case 29.
+- `03-jev-decision-layer.md` — JEV contract: one candidate-bound
+  contract, 4 questions, exit profile v1, case 29.
 - `04-cpp-deterministic-core.md` — kernel contract §4.2 broker-feed
   staleness, §4.5 ingest.
 - `05-risk-and-determinism.md` — R1–R17 (code constants) + §5.1c DAG.
@@ -89,34 +88,22 @@ contamination control, doc 12 demotes `baseline_v1` to a negative control.
 - `11-calibration-and-self-improvement.md` — promotion needs measured
   edge + human sign-off; §11.1a regime/decay.
 - `12-statistical-baseline.md` — `baseline_v1`, the primary edge.
-- `13-cpp-kernel-build.md` — kernel build record; P3.1/P3.2 frozen,
-  P3.3 accepted; §13.7 battle ladder. (File paths inside are
-  HISTORICAL: `kernel/test_p*.cpp` now live in `kernel/tests/`.)
+- `13-cpp-kernel-build.md` — kernel build record; the JEV filter and §13.7 battle ladder.
 - `system-manifest.yaml` — freeze pins (v3/f2/baseline_v1/
   exit_profile_v1/g1, JEV revision/provider). freeze-check enforces it.
 
-## 3. kernel/ (FROZEN implementation; tests co-located, never deleted)
+## 3. kernel/ (tests co-located)
 
-Root (8 files): `build.sh` (the gate: normal/hardened modes, every
-suite below, fuzz, all grep-gates; exit 0 = PASS) ·
-`jev_validate.hpp` (validator; single entry `validate_jev()`) ·
-`jev_state.hpp` (`JEVStateV3`; friendship pinned: exactly KernelState +
-validator) · `kernel_state.hpp` (`KernelState`) ·
-`decision_table.hpp` (typed-input-only table; no raw strings, no
-confidence accessor — both build-gated) · `gen_fixtures.py`,
-`gen_p33.py`, `gen_vectors.py` (offline fixture/vector generators).
+Root: `build.sh` (the gate: normal/hardened/sanitize modes, every suite
+below, all grep-gates; exit 0 = PASS) · `jev_wire.hpp` (strict JSON,
+canonical JSON, SHA-256/512, Ed25519 verify, Python-repr floats) ·
+`jev_filter.hpp` (the candidate-bound answer validator and decision table;
+single entry point for model answers).
 
-- `tests/` (4): `test_p31.cpp` — validator suite (canonical bytes,
-  mutation/key-mismatch failures, UTF-8/nesting/float edges; L-table
-  tail 0x00/0x10). `test_p32.cpp` — interop suite on committed
-  `vectors/` only (never invokes Python — build-gated). `test_p33.cpp`
-  — replay/table suite on committed `p33/` rows only (same rule).
-  `fuzz_p31.cpp` — 20k-iteration fuzzer. Includes use `../` headers;
-  fixtures resolve from the kernel root at run time.
-- `auth/` (7): `pos_authorized.cpp` (healthy control: must compile +
-  exit 0) + `neg_accessor/aggregate/assign/construct/friendleak/mutate`
-  `.cpp` (each must FAIL compilation for its documented reason —
-  the authority boundary is compiler-enforced, build-gated).
+- `tests/`: `test_jev_filter.cpp` — interop suite on the committed
+  `jev_vectors/` only (never invokes Python; build-gated). Also
+  `transport_faults.py`, `ws_faults.py`, `e2e_mock_venue.py`,
+  `soak_mock.py` (mock-venue drills).
 - `ingest/` (4): `features.hpp`/`features.cpp` — f2 validation,
   retention, rate window; zero-malloc (vocabulary grep + `FindAscii`
   discipline). `test_features.cpp` — rejection/boundary/retention/rate
@@ -126,31 +113,14 @@ confidence accessor — both build-gated) · `gen_fixtures.py`,
   widening; must never read model answers — token-gated incl.
   comments). `test_veto.cpp` — veto suite incl. composed veto+table
   rows and case-29 pending-risk isolation.
-- `fixtures/` (36): `valid.json` + `state_canon.json` (good controls);
-  `bad_*.json` (31 malformed-answer mutations: model/revision/schema/
-  provider/qversion/signature/dkey/conviction/family/enter/epoch/date/
-  symbol/top-shape/statehash/prob-key/created/expires/leap/float-edge
-  variants); `conf_bool.json`, `conf_huge.json` (confidence quarantine);
-  `created_unix.txt`, `float_edges.txt` (boundary inputs);
-  `decision_key.txt`, `trusted_key.txt`, `pubkey_mutated.json`
-  (key/signature controls). Consumed by `tests/test_p31.cpp`; produced
-  by `gen_fixtures.py`.
-- `vectors/` (11): P3.2 committed pairs — `v1_*` + `v2_*` families,
-  each `{payload.json, canonical.hex, response_hash.txt}` plus
-  `v1_artifact.json`, `v1_signature.txt`, `v2_signature.txt`,
-  `v1_state_canon.json`, `pubkey.txt`. Contract: sha256(canonical hex)
-  == response hash, byte-equal C++ reproduction, signature scope =
-  payload only. Consumed by `tests/test_p32.cpp`; produced by
-  `gen_vectors.py`.
-- `p33/` (226): `r_000.json`–`r_199.json` (200 committed
-  decision-table rows); `t_*.json` (22 table/boundary cases:
-  blackout, bound E50/L50/E79/E80 (+lean), calib, disagree, exec_high,
-  flat, latent, lean_base, max_downgrade ×2, max_elevated, midband
-  exec/lean, noedge, strong_base, symbol_xxx, veto); `state_vector.json`
-  + `state_vector_canon.hex` + `state_vector_hash.txt` +
-  `state_vector_dkey.txt` (committed state + hash chain). Consumed by
-  `tests/test_p33.cpp` + `risk/test_veto.cpp`; produced by `gen_p33.py`.
-  Presence pinned by freeze-check.
+- `fixtures/`: Alpaca reply fixtures (`alpaca_account.json`,
+  `alpaca_bars_hourly_sip.json`, `alpaca_bracket_reply.json`).
+- `vectors/`: `c1_wire.jsonl` (candidate wire lines), `snapshot_v2_*`
+  and `v2_canonical.hex` (context snapshot vectors).
+- `jev_vectors/` (64): 32 signed answer artifacts with expectations
+  (`<name>.artifact.json` + `<name>.expect.json`), generated by
+  `research/strategy/gen_jev_vectors.py`, asserted identically in Python
+  and C++. Presence and count pinned by freeze-check.
 
 ## 4. collector/ (FROZEN production code + additive config extension;
 tests co-located)
@@ -195,7 +165,7 @@ per source. Nothing in the seam trades.
   `SKIPPED_OPTIONAL_CONFIG`).
 - `classify.py` / `pregrade.py` — TRIGGER/CONTEXT/NULL classification
   + grading. Reads poller output. Writes: classified records.
-- `jev.py` — JEV sidecar v3: pinned revision/provider, Ed25519
+- `jev.py` — JEV sidecar: candidate-bound state, pinned revision/provider, Ed25519
   sign/verify, spend ceiling, retry-once-HOLD; no key → HOLD.
 - `ctx_read.py` — frozen bundle/feature reader (`read_latest`);
   validity owned here exclusively (research `schema.py` never
@@ -306,9 +276,9 @@ Evidence JSON; exit 0 always.
 - `test_seam_graph.py` (7) — tracked production Runner end-to-end
   + restart recovery, plane job (langgraph).
 
-### sandbox/ (13 files + 2 subdirs: deployment evidence machinery)
+### sandbox/ (worker isolation machinery)
 
-Direct children (13 tracked files):
+Direct children:
 
 - `setup-identities.sh` — 4 OS identities + `/srv/mirohedge` tree +
   deny/allow probes (8/8) + repo isolation check (4/4).
@@ -316,22 +286,15 @@ Direct children (13 tracked files):
 - `egress-probe.sh` — allowlist transits / non-allowlist 403s at proxy /
   direct egress unroutable (5/5) + idempotent proxy bring-up.
 - `Dockerfile` — worker image (digest-pinned base).
-- `image-sbom.cyclonedx.json` (194 pkgs) + `image-scan.txt`
-  (3C/14H/13M/40L baseline) — immutable audit evidence.
 - `config-probe.py` — fail-closed constructors (5/5, no mocks).
 - `kill-probe.py` — WALL_S ladder on Linux (4/4).
 - `kill9-resume.sh` + `kill9_worker.py` + `kill9_reconcile.py` +
   `kill9_verify.py` — 40-epoch SIGKILL→resume proof (both branches).
 - `langfuse/docker-compose.yml` — self-hosted attribution stack
   (evidence-only placeholder creds; production replaces).
-- `tier-a-deploy-evidence.json` + `earnings-deploy-evidence.json` —
-  immutable measurement artifacts (not runtime inputs).
 
-### research root (4)
+### research root
 
-- `DEPLOYMENT_EVIDENCE.md` — per-box deployment proof log.
-- `PHASE_E_AUDIT.md` — condensed audit trail (findings, fixes, evidence ids,
-  open items; full text in git history).
 - `lessons/lessons.jsonl` — ACTIVE Tier-D output (12/12 graded).
 - `requirements.txt` — ACTIVE pinned plane deps (`==` only).
 
@@ -354,7 +317,7 @@ Production (P1 frozen path): Tier-A/B source → `collector/collect.py`
 (TTL/heartbeat/keys) → classify → `data/signals/<day>.jsonl` →
 plane `graph.py` (LLM context via `workers.py`, spend-governed,
 checkpointed) → `features.jsonl` + emit bundles → kernel
-`jev_validate` → `risk/veto` → `decision_table` → paper fills
+`risk/veto` → optional `jev_filter` → paper fills
 (doc 06 §6.5). Production (Phase-2.5 seam path, plan/08 §8.3): the
 five accepted adapters → `source_seam.py` harvest (canonical lineage
 via frozen classify into the shared records table) → graph nodes
@@ -382,7 +345,7 @@ mirror (missing ledger raises, never $0).
   modules under `sleeves/`; pre-registrations in `research/prereg/`,
   ledger in `research/ledger/`, gate reports in `research/reports/`;
   `ops/` holds the alert relay.
-- FROZEN: `kernel/` impl (P3.1–P3.3 contracts), collector production code (`config.py`
+- FROZEN: `kernel/` impl, collector production code (`config.py`
   carries the additive `RESEARCH_MODEL_ID` loader key per Addendum 32
   — the only exception), `plan/`, JEV
   contracts, `research/` memos, round addenda, evidence JSON artifacts.

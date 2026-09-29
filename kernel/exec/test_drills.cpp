@@ -6,7 +6,7 @@
 
 #include "../broker/adapter.hpp"
 #include "../broker/alpaca_paper.hpp"
-#include "../jev_validate.hpp"  // Sha256Hex for the test sink only
+#include "../jev_wire.hpp"  // Sha256Hex for the test sink only
 #include "../kill/switch.hpp"   // D+H1: real level evaluation consumed
 #include "../log/journal.hpp"
 #include "../risk/veto.hpp"

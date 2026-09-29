@@ -174,13 +174,13 @@ In all of them: **exits, broker-native stops, and reconcile keep working.**
 | Broker rate limit | 429 | Back off per adapter budget; entries for the cycle dropped, exits prioritized | No |
 | Transport/TLS failure | handshake/cert/HTTP error | Fail closed: no order leaves; broker-native stops protect positions | If > 5 min |
 | Settlement mismatch | ledger vs broker | Entries HOLD; reconcile (R18) | If unresolved in 1 session |
-| JEV / LLM provider outage | timeout, 5xx, malformed | `jev_v4` sleeves: 1 retry → HOLD; S5 streak → SOFT; always-take sleeves unaffected | At S5 alert |
+| JEV / LLM provider outage | timeout, 5xx, malformed | `jev` sleeves: 1 retry → HOLD; S5 streak → SOFT; always-take sleeves unaffected | At S5 alert |
 | Research plane down or stale | features past TTL | Features absent; research-dependent entries HOLD (S6) | If > 6 h |
 | Sleeve engine down | no candidates past window | No new entries for that sleeve; exits unaffected | If > 1 session |
 | Runaway research loop | R15 | per-symbol pause; plane pause on majority-in-window | At pause |
 | Conflicting evidence | `disagreement=true` | HOLD (R14) | No |
 | Spend spike | hourly projection | Tier 1 → 2 → 3 (R10), ending in MEDIUM kill + demote | At tier 3 |
-| Calibration decay (`jev_v4` sleeves) | trailing-200 Brier | Sleeve entries halt, demote (R13) | Yes |
+| Calibration decay (`jev` sleeves) | trailing-200 Brier | Sleeve entries halt, demote (R13) | Yes |
 | Journal chain break | daily verify | HARD kill, forensics before restart | Yes |
 | Stage chain unverifiable | startup / cycle boundary | Fall back to G0_PAPER, alert | Yes |
 

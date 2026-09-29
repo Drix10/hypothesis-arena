@@ -7,7 +7,7 @@
 #include <cstring>
 #include <string>
 
-#include "../jev_validate.hpp"
+#include "../jev_wire.hpp"
 #include "features.hpp"
 
 static int fails = 0;

@@ -21,7 +21,7 @@ cd /mnt/c/Users/ggdri/Downloads/hypothesis-arena/kernel
 WITH_CURL=1 bash build.sh
 ```
 
-It must print `P3.1 GATE (normal): PASS`.
+It must print `KERNEL GATE (normal): PASS`.
 
 ## Keys and loop directory
 
@@ -67,7 +67,7 @@ python3 ops/jev_shadow.py ~/g0
 ```
 
 One pass over new candidates; writes `~/g0/jev_shadow.jsonl` with what JEV
-answered and a hypothetical `would_block`. It never touches the journal,
+answered and the filter verdict it would have given (PASS or HOLD plus reason). It never touches the journal,
 candidates or STAGE. Spend caps still apply. With only the passive sleeve
 this shows the plumbing works, not whether JEV helps.
 

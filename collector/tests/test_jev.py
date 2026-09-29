@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-'''Phase 2 acceptance: v3 semantics, AnswerSet integrity, cache, failures,
+'''Phase 2 acceptance: contract semantics, answer integrity, cache, failures,
 cost, replay with zero network, authority boundary, adversarial cases.
 Run: python3 collector/tests/test_jev.py (no network; post_fn mocked throughout,
 except one live-shape check that never runs here)
@@ -28,13 +28,27 @@ FOREIGN_SEED = bytes.fromhex("2a" * 32)
 FOREIGN_PUB = jev.ed_pubkey(FOREIGN_SEED)
 
 
-def state(**kw):
-    s = {"context_hash": "h", "symbol": "EURUSD", "stage": "G0_PAPER",
-         "question_set_version": "v3", "snapshot_epoch": 1,
-         "indicators": {"regime": "range"}, "portfolio": {"exposure_pct": 0},
-         "event_window": {"phase": "none"}, "risk_flags": {}}
+def state(symbol="EURUSD", snapshot_epoch=1, stage="G0_PAPER", **kw):
+    ids = dict(zip(jev.CID_FIELDS, ["s1", symbol, "1000", "BUY", "momentum",
+                                    "100.0", "99.0", "102.0", "2000", "e1",
+                                    "c1", "r1"]))
+    cand = dict(ids, cid=jev.sha256_hex(symbol))
+    s = jev.state_from_candidate(
+        cand, {"snapshot_epoch": snapshot_epoch, "price_s": "100.0",
+               "spread_bps_s": "2.0", "session": "us_open",
+               "regime": "range"}, stage, "f" * 64)
     s.update(kw)
     return s
+
+
+# Child processes build the same candidate-bound state from one source line.
+def state_src(sym):
+    return ("jev.state_from_candidate(dict(zip(jev.CID_FIELDS, ['s1', %s, "
+            "'1000', 'BUY', 'momentum', '100.0', '99.0', '102.0', '2000', "
+            "'e1', 'c1', 'r1']), cid=jev.sha256_hex(%s)), "
+            "{'snapshot_epoch': 1, 'price_s': '100.0', 'spread_bps_s': '2.0', "
+            "'session': 'us_open', 'regime': 'range'}, 'G0_PAPER', 'f' * 64)"
+            % (sym, sym))
 
 
 def good_resp(cost=0.00001):
@@ -80,7 +94,7 @@ check("ed25519-self-verify", jev.ed_verify(pub, b"hello", jev.ed_sign(seed, b"he
 check("ed25519-tamper-fails",
       not jev.ed_verify(pub, b"hello!", jev.ed_sign(seed, b"hello")))
 
-# 1. exact v3 question order + shape, no extra semantics
+# 1. exact question order + shape, no extra semantics
 qs = jev.build_questions()
 check("four-questions-order",
       list(qs) == ["enter", "edge_family", "conviction", "latent_risk"])
@@ -101,7 +115,7 @@ check("answer-action", row["action"] == "ANSWER"
 check("artifact-signed", jev.verify_answerset(art))
 check("artifact-pins", art["payload"]["revision"] == jev.REVISION
       and art["payload"]["provider"] == jev.PROVIDER
-      and art["payload"]["question_set_version"] == "v3")
+      and art["payload"]["contract"] == jev.CONTRACT)
 check("no-size-fields", not any(k in row for k in
       ("size", "notional", "budget", "leverage", "order", "quantity")))
 
@@ -174,11 +188,11 @@ for name, resp in bad_cases:
 row, art = jev.decide(state(symbol="Y"), now=3000.0, key="k",
                       post_fn=mkpost(good_resp()))
 art2 = json.loads(json.dumps(art))
-art2["payload"]["answers"]["enter"]["noul"] = 0.01
+art2["payload"]["answers"]["enter"] = 0.01
 check("altered-response-fails", not jev.verify_answerset(art2))
 art3 = json.loads(json.dumps(art))
-art3["payload"]["state_hash"] = "0" * 64
-check("altered-statehash-fails", not jev.verify_answerset(art3))
+art3["payload"]["decision_key"] = "0" * 64
+check("altered-decisionkey-fails", not jev.verify_answerset(art3))
 art4 = json.loads(json.dumps(art))
 art4["signature"] = "00" * 64
 check("tampered-sig-fails", not jev.verify_answerset(art4))
@@ -190,7 +204,7 @@ def boom(body, key):
     raise AssertionError("replay must not call provider")
 out = jev.replay(p)
 check("replay-answers", out["action"] == "ANSWER"
-      and out["answers"]["enter"]["noul"] == 0.9 and out["replayed"] is True)
+      and out["answers"]["enter"] == 0.9 and out["replayed"] is True)
 jev_post_orig = jev.post
 jev.post = boom
 try:
@@ -205,7 +219,6 @@ msg_x = jev.canon(foreign).encode()
 bad_art = {"payload": foreign}
 bad_art["response_hash"] = jev.sha256_hex(jev.canon(foreign))
 bad_art["signature"] = jev.ed_sign(seed_x, msg_x).hex()
-bad_art["pubkey"] = pub_x.hex()
 pb = os.path.join(TMP, "bad.json")
 json.dump(bad_art, open(pb, "w"))
 check("replay-foreign-key-hold",
@@ -216,8 +229,7 @@ cfg_bad["revision"] = "typesafe/jev-9.99"
 msg_c = jev.canon(cfg_bad).encode()
 rb = {"payload": cfg_bad,
       "response_hash": jev.sha256_hex(jev.canon(cfg_bad)),
-      "signature": jev.ed_sign(JEV_SEED, msg_c).hex(),
-      "pubkey": JEV_PUB.hex()}
+      "signature": jev.ed_sign(JEV_SEED, msg_c).hex()}
 pc = os.path.join(TMP, "bad2.json")
 json.dump(rb, open(pc, "w"))
 check("replay-wrong-revision-hold",
@@ -274,12 +286,8 @@ check("wrong-provider", a is None and why == "wrong-provider")
 row, art = jev.decide(state(symbol="Q"), now=4300.0, key="k",
                       post_fn=mkpost(good_resp()))
 pl = art["payload"]
-check("artifact-schema",
-      set(pl) == {"schema_version", "question_set_version", "model",
-                  "revision", "provider", "symbol", "snapshot_epoch",
-                  "state_hash", "decision_key", "created_at", "expires_at",
-                  "answers"}
-      and pl["symbol"] == "Q" and pl["expires_at"] > 4300.0)
+check("artifact-schema", set(pl) == jev.PAYLOAD_KEYS
+      and pl["symbol"] == "Q" and pl["expires_at"] == pl["created_at"] + 60)
 
 # 11e. state binding explicit
 check("bind-check-true", jev.bind_check(art, state(symbol="Q")) is True)
@@ -457,12 +465,12 @@ check("no-silent-keygen", not os.path.exists(jev.KEY_PATH))
 jev.KEY_PATH = old_key
 
 # 17. B11 strict state admission
-for extra, name in [({"indicators": [1]}, "indicators-list"),
+for extra, name in [({"cid": ""}, "empty-cid"),
                     ({"snapshot_epoch": True}, "epoch-bool"),
                     ({"snapshot_epoch": -1}, "epoch-neg"),
-                    ({"spread_bps": "wide"}, "spread-str"),
-                    ({"features": [{"feature_id": 7}]}, "feature-id-int"),
-                    ({"context_hash": ""}, "empty-hash")]:
+                    ({"price_s": 100.0}, "price-not-string"),
+                    ({"feature_snapshot_hash": ""}, "empty-feature-hash"),
+                    ({"contract": "other"}, "wrong-contract")]:
     row, _ = jev.decide(state(symbol="XS", **extra), now=5500.0, key="k",
                          post_fn=mkpost(good_resp()))
     check("admit-" + name, row["action"] == "HOLD")
@@ -547,9 +555,9 @@ check("conf-numeric",
 
 # 23. recursive state admission: nested NaN/Infinity/non-JSON rejected
 import math as _m2
-for extra, name in [({"indicators": {"deep": {"v": _m2.nan}}}, "nested-nan"),
-                    ({"indicators": {"deep": [_m2.inf]}}, "nested-inf"),
-                    ({"event_window": {"x": {"y": 1}}}, "nested-ok-shape")]:
+for extra, name in [({"meta": {"deep": {"v": _m2.nan}}}, "nested-nan"),
+                    ({"meta": {"deep": [_m2.inf]}}, "nested-inf"),
+                    ({"meta": {"x": {"y": 1}}}, "nested-ok-shape")]:
     row, _ = jev.decide(state(symbol="XN2", **extra), now=5800.0, key="k",
                         post_fn=mkpost(good_resp()))
     if name == "nested-ok-shape":
@@ -645,7 +653,7 @@ _mutate(lambda c: c["artifact"]["payload"].update(expires_at=999999.0))
 _r, _cl = _fresh_decide()
 check("cache-expiry-incoherent", _r["action"] == "ANSWER"
       and len(_cl) == 1)
-_mutate(lambda c: c["artifact"].pop("pubkey"))
+_mutate(lambda c: c["artifact"].update(pubkey="00"))
 _r, _cl = _fresh_decide()
 check("cache-artifact-keys", _r["action"] == "ANSWER" and len(_cl) == 1)
 
@@ -697,9 +705,7 @@ _child_lines = [
     "'usage': {'cost': 0.01}}",
     "def post_fn(body, key):",
     "    time.sleep(0.5); return (resp, None)",
-    "st = {'context_hash': 'h', 'symbol': sys.argv[1], ",
-    "'stage': 'G0_PAPER', 'question_set_version': 'v3', ",
-    "'snapshot_epoch': 1}",
+    "st = " + state_src("sys.argv[1]"),
     "row, _ = jev.decide(st, now=time.time(), key='k', post_fn=post_fn)",
     "print(json.dumps({'action': row['action'], ",
     "'reason': row.get('reason')}))",
@@ -854,9 +860,7 @@ _sf_lines = [
     "        time.sleep(0.02)",
     "    open(%r, 'a').write('call\\n')" % _sf_count,
     "    return (resp, None)",
-    "st = {'context_hash': 'sf', 'symbol': 'SF', ",
-    "'stage': 'G0_PAPER', 'question_set_version': 'v3', ",
-    "'snapshot_epoch': 1}",
+    "st = " + state_src("'SF'"),
     "row, _ = jev.decide(st, now=time.time(), key='k', post_fn=post_fn)",
     "print(json.dumps({'action': row['action']}))",
 ]
@@ -915,7 +919,7 @@ _rp = os.path.join(TMP, "replay_ok.json")
 json.dump(_a, open(_rp, "w"))
 check("replay-ok", jev.replay(_rp)["action"] == "ANSWER")
 _mut = json.loads(json.dumps(_a))
-del _mut["payload"]["state_hash"]  # signed-but-malformed artifact
+del _mut["payload"]["decision_key"]  # signed-but-malformed artifact
 _mp = os.path.join(TMP, "replay_nosh.json")
 json.dump(_mut, open(_mp, "w"))
 _out = jev.replay(_mp)

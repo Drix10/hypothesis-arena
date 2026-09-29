@@ -2,7 +2,7 @@
 
 Moved VERBATIM from doc 06 §6.1b in the freeze-v3 rebaseline (2026-09-28).
 This is the H1 implementation contract as accepted through the audit
-rounds recorded in `TODO-ARCHIVE-2026-09-28.md` (Addendums 108–131).
+audit rounds (Addendums 108–131, in git history).
 Doc 06 keeps the one-paragraph contract; this file keeps every rule.
 Nothing here was edited; a change to any rule is a doc edit + version
 bump + fresh paper window, exactly as before the move.

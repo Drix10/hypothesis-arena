@@ -2,7 +2,7 @@
 //
 // Pure Snapshot -> HOLD/PROCEED + frozen reason. No I/O, no RNG, no model
 // reads: this file never touches a JEV AnswerSet (isolation is grep-gated in
-// build.sh; the 3.2 table in decision_table.hpp is the only path by which
+// build.sh; the 3.2 table in jev_filter.hpp is the only path by which
 // model answers influence size). Same snapshot -> bit-identical verdict.
 //
 // Money is int64 cents with exact integer comparisons (__int128 products);
@@ -27,7 +27,7 @@
 #include <string>
 #include <type_traits>
 #include <vector>
-#include "../decision_table.hpp"
+#include "engine_inputs.hpp"
 
 namespace jev {
 namespace risk {
@@ -39,7 +39,7 @@ enum class IntentKind { ENTRY, EXIT };  // exits bypass the veto (doc 10 §10.3)
 enum class AssetClass { FOREX, STOCK };
 enum class AccountType { MARGIN, CASH };
 enum class CalibState { PASS, INSUFFICIENT, BREACH };
-enum class FilterPolicy { JEV_V4, NONE };
+enum class FilterPolicy { JEV_FILTER, NONE };
 enum class Impact { NONE, LOW, MEDIUM, HIGH, BINARY };
 enum class Phase { NONE, PRE, BLACKOUT, POST };
 enum class Side { LONG, SHORT };
@@ -158,10 +158,10 @@ struct RiskSnapshot {
     int64_t settled_cash_cents = 0;    // R18: settled cash before pending buys
     bool r18_unsettled_dependency = false;  // ledger: good-faith/free-riding
     bool instrument_allowed = false;   // R19: on the signed allowlist
-    // Sleeve filter policy (doc 03): jev_v4 consults the AnswerSet-derived
+    // Sleeve filter policy (doc 03): jev_filter consults the AnswerSet-derived
     // disagreement and calibration inputs; none never does, whatever the
     // snapshot carries. Default keeps every pre-v3 verdict bit-identical.
-    FilterPolicy filter = FilterPolicy::JEV_V4;
+    FilterPolicy filter = FilterPolicy::JEV_FILTER;
 };
 
 // Verdict: PROCEED or HOLD with a frozen reason code. reasons_all keeps every

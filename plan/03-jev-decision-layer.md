@@ -27,30 +27,34 @@ Therefore:
   candidate c1 → veto (row 0 + R1–R19) → size → exec, no AnswerSet.
   The S5 paired design already measures always-take vs filtered.
 - A sleeve's champion configuration names its filter policy explicitly:
-  `filter = none | jev_v4`. `jev_v4` is admitted only after the doc 11
+  `filter = none | jev`. `jev` is admitted only after the doc 11
   paired-delta gate (filtered minus always-take, same candidates, net of
   JEV cost) passes with a pre-registered minimum effect.
-- Challenger research may test `jev_v4_ensemble` (N pinned models,
-  aggregated deterministically) as a new question_set/version with its
-  own cost tag; it never replaces v4 by edit.
-- Everything below (v3 semantics, the table, the AnswerSet boundary
-  artifact, caching, spend safety, the retirement runbook) is unchanged
-  and frozen. v3 stays replay-only history; v4 (`research/strategy/
-  jev_v4.py`, `kernel/jev_v4.hpp`, 32 cross-language vectors, released at
-  `da61daa`) is the live contract whenever a filter is used.
+- Challenger research may test a `jev` ensemble (N pinned models,
+  aggregated deterministically) under its own contract tag and cost tag;
+  it never replaces the pinned contract by edit.
+- There is one contract, and it is candidate-bound: JEV evaluates an
+  already-built candidate and never originates side, family or economics.
+  It is implemented once per layer: the sidecar (`collector/jev.py`), the
+  research evaluator (`research/strategy/jev_filter.py`) and the kernel
+  (`kernel/jev_filter.hpp`), tied together by 32 committed cross-language
+  vectors (`kernel/jev_vectors/`). The earlier state-based artifact is
+  retired in the sidecar; the kernel's legacy validator for it is test-only
+  surface and is not consulted by any decision path.
 
-## 3.1 The single call shape (locked, v3)
+## 3.1 The single call shape (locked)
 
-One Decisions call per trading cycle, 4 questions batched, state = frozen
-context JSON (from C++ snapshot, serialized by the sidecar).
+One Decisions call per candidate, 4 questions batched, state = the
+candidate (exact CID strings) plus its market snapshot, serialized by the
+sidecar.
 
-**Still exactly four questions — but v3 changes what two of them mean.** v2's
-`analyst` (jim/ray/karen/quant personas) asked JEV to choose between evidence
-producers that do not exist as separate producers, and its probabilities were
-then misused as trade-success probabilities. v2's `veto` asked the model to
-recompute what deterministic C++ already knows. Both semantics are retired.
-`question_set_version = v3`; the v2 cases in §3.7 remain valid as table-logic
-tests and were re-run, plus new v3 semantic cases.
+**Exactly four questions.** `edge_family` replaced the retired analyst
+personas (which asked JEV to choose between evidence producers that do not
+exist as separate producers, and whose probabilities were misused as
+trade-success probabilities); `latent_risk` replaced the retired veto
+question (which asked the model to recompute what deterministic C++ already
+knows). The contract tag inside every signed payload and decision key is
+`contract = "jev"`.
 
 - `enter` (noul): "Given this context, take this opportunity now?"
   - criteria.true: "Edge + timing align; risk within limits"
@@ -76,7 +80,7 @@ Response fields used: `answers.enter.noul`, `answers.edge_family.choice`
 (+`probabilities`, family-fit only), `answers.conviction.score`,
 `answers.latent_risk.noul`.
 
-## 3.2 Decision table (locked v3 — code implements exactly this)
+## 3.2 Decision table (locked — code implements exactly this)
 
 Row 0 is the deterministic engine, not JEV. JEV rows follow; the first HOLD
 wins and is the logged reason.
@@ -107,7 +111,7 @@ mid-band row; `<0.5` = HOLD; exactly `0.5` belongs to mid-band. Sizes are
 computed by the §3.3 hierarchy, capped by R2 and the stage multiplier.
 Tune only with logged data, never intraday.
 
-## 3.3 Sizing: risk budget first (locked v3)
+## 3.3 Sizing: risk budget first (locked)
 
 Notional percentages do not size positions; risk does. Two equal notionals
 with different stop distances are different trades, and the engine treats
@@ -153,85 +157,61 @@ from the validated IANA/exchange calendar, never a hard-coded clock time
 (which is wrong on early closes). Forex max 24 h. Profile changes are versioned
 (`exit_profile_v2`…) and need the doc-11 promotion path.
 
-## 3.4 State contract v3 (what the sidecar sends)
+## 3.4 State contract (what the sidecar sends)
 
-JEV is a clean-room decision model: it receives validated structured evidence,
-never raw external text. No signal texts, no thesis/critique prose cross into
-the payload — those live in the research digest (doc 08) for human and
-critique-node reading only. Schema validation proves shape, not truth (doc 08
-§8.5); truth comes from evidence levels below.
+JEV is a clean-room decision model: it receives one already-built candidate
+and its market snapshot, never raw external text and never anything it could
+turn into a different trade. No signal texts, no thesis/critique prose cross
+into the payload; those live in the research digest (doc 08). Schema
+validation proves shape, not truth (doc 08 §8.5).
 
 ```json
 {
-  "context_hash": "sha256 of canonical context",
-  "symbol": "EURUSD",
-  "price": 0, "spread_bps": 0, "session": "asia|london|new_york|us_open|closed",
-  "indicators": {"rsi": 0, "zscore": 0, "atr": 0, "regime": "trend|range|volatile"},
-  "features": [{"kind": "filing_event", "symbols": ["AAPL"],
-                "value": {"type": "enum", "v": "8-K:item-2.02"},
-                "effect": "bullish|bearish|risk_up|risk_down|neutral|unknown",
-                "evidence": "source|derived|inference",
-                "confidence_bucket": "low|medium|high",
-                "age_s": 240, "source_id": "edgar_submissions"}],
-  "source_status": {"edgar_submissions": "healthy|stale|failed|not_scheduled|unavailable|na"},
-  "signal_buckets": {"trigger_6h": 3, "context_6h": 12},
-  "portfolio": {"equity": 0, "exposure_pct": 0, "pending_exposure_pct": 0,
-                 "open_positions": 0, "buying_power": 0},
-  "disagreement": false,
-  "event_window": {"blackout": false, "impact": "none|low|medium|high|binary",
-                     "phase": "none|pre|blackout|post"},
-  "calibration": {"enter_brier_200": 0.0,
-    "vs_baseline": "better|equal|worse|insufficient",
-    "gate": "pass|insufficient|breach"},
+  "contract": "jev",
   "stage": "G0_PAPER|G1_TINY|G2_SCALED|G3_FULL",
-  "research_revision": "epoch/bundle id",
-  "risk_flags": {"deterministic_veto": false, "var_breach": false, "corr_breach": false}
+  "cid": "sha256 of the twelve identity fields",
+  "candidate": {"strategy_version": "...", "symbol": "VTI",
+                "snapshot_ts_ns": "...", "proposed_side": "BUY",
+                "proposed_family": "momentum", "entry_px": "100.00",
+                "stop_px": "95.00", "tp_px": "110.00", "time_exit_ns": "...",
+                "exit_profile_version": "...", "cost_model_version": "...",
+                "feature_revision": "...", "cid": "..."},
+  "symbol": "VTI",
+  "feature_snapshot_hash": "1 to 256 chars, bound but not part of the cid",
+  "snapshot_epoch": 1700000000,
+  "price_s": "100.00", "spread_bps_s": "2.0",
+  "session": "us_open", "regime": "trend"
 }
 ```
 
-State rules (locked v3):
-- `features`: max 16 in payload (snapshot carries 64; newest TRIGGER/CONTEXT-
-  eligible first). Enums, bools, counts, buckets only — no model floats.
-- `effect` comes from a deterministic interpretation table per kind, never from
-  model invention. `disagreement` is computed by C++: opposite TRIGGER effects
-  (bullish vs bearish, or risk_up clash) on one symbol → true (R14).
-- `evidence`: `source` = deterministic parser over a primary source (only these
-  are TRIGGER-eligible); `derived` = deterministic transform of source facts;
-  `inference` = model-produced, CONTEXT-only until a measured track record
-  promotes the producing rule, never the individual claim.
-- `confidence_bucket` is computed from provenance (source reliability ×
-  timestamp quality × parser confidence × corroboration), never self-reported.
-- `source_status` replaces the old absent-list: `failed`/`stale` (source down),
-  `not_scheduled` (nothing expected — not a negative), `na` (irrelevant here).
-- `event_window`: C++ maps (impact, phase) → `blackout` per the tier table
-  (BINARY: pre+blackout; HIGH: blackout ± post; MEDIUM: entries need strong;
-  LOW: no constraint). The table decides; JEV only sees the result.
-  Frozen kernel reading (P3.5 Slice B): MEDIUM with an active phase HOLDs
-  unconditionally at the veto — the frozen decision table cannot express
-  "strong required", so the veto over-approximates fail-closed. Refining
-  this needs a table-contract amendment, never a silent behavior change.
-- No numeric sentiment score, no raw texts, no prose. If scored sentiment is
-  ever wanted, it arrives as a new versioned question, not a smuggled float.
+State rules (locked):
+- Every economic value travels as the exact string the cid was hashed over;
+  C++ hashes the strings and parses them to doubles only for coherence
+  checks (BUY needs stop < entry < TP, SELL the reverse). Floats are never
+  re-rendered on the identity path.
+- `stage` selects the spend cap and is not part of the decision key.
+- Market fields the caller cannot measure are sent as the literal string
+  `"unknown"`, never guessed. The shadow logger (`ops/jev_shadow.py`) does
+  this for spread, session and regime.
+- `edge_family` in the answer must equal the candidate's `proposed_family`:
+  family-fit cannot substitute a different strategy.
+- A state carrying a non-finite number, a non-string market field or a cid
+  that does not match its candidate fields is refused before any call.
 
-## 3.5 Caching, failure, determinism (locked v3)
+## 3.5 Caching, failure, determinism (locked)
 
 Two layers — research is cached, decisions are re-issued. A slow contextual
 key alone can bless a stale answer for a moved market (same regime bucket,
 different price/spread/z-score), so the answer is bound to a decision
 fingerprint instead:
 
-- `research_key` = `symbol ‖ regime ‖ research_revision ‖ feature-ID set ‖
-  question_set_version`. TTL 5 min. Busts on any new contradicting feature.
-- `decision_key` = sha256_hex of `|`-joined (exactly, frozen sidecar recipe):
-  `symbol | snapshot_epoch | price_return_bucket | spread_bps | atr_bucket |
-  zscore | regime | event phase | exposure_pct | feature_revision |
-  research_revision | question_set_version`, where `spread_bps`, `zscore`,
-  and `exposure_pct` enter RAW (not bucketed — the "bucket" wording in
-drafts was wrong), `feature_revision = sha256_hex(comma-joined sorted
-  feature-ID set)`, and the join delimiter is the single ASCII pipe `|`
-  (feature_revision's inner delimiter is the comma). Deterministic and
-distinct from the research-epoch `research_revision`. Do not reword this
-  recipe: the C++ kernel recomputes it field-for-field (P3.1 check 21).
+- `decision_key` = sha256_hex of the `|`-joined exact strings
+  `cid | symbol | snapshot_epoch | price_s | spread_bps_s | session |
+  regime | feature_snapshot_hash | contract`. `cid` binds all twelve
+  candidate identity fields (side, entry, stop, TP, time exit, sleeve,
+  cost model and so on), so one candidate at one market snapshot buys at
+  most one provider call. The C++ kernel and the Python evaluator recompute
+  this field-for-field; do not reword it.
 - A cached answer is usable only if the decision_key is still compatible AND
   answer age ≤ 60 s AND no protected state (stage, HALT, R-flags) changed.
   Otherwise the sidecar re-issues the call — JEV answers are cheap, stale
@@ -276,7 +256,7 @@ distinct from the research-epoch `research_revision`. Do not reword this
   An untagged call is a build failure. Failed provider attempts are logged
   with `usd: unknown` — an explicitly unattributed attempt, never silent zero.
 - Every answer is scored against realized outcomes, HOLDs included, per doc 11
-  §11.1. Calibration semantics (P3.3-E, locked): `vs_baseline`
+  §11.1. Calibration semantics (locked): `vs_baseline`
   (better|equal|worse|insufficient) is a descriptive comparison;
   `gate` (pass|insufficient|breach) is the deterministic control, where
   breach = worse by more than the 0.02 R13 margin over ≥20 realized outcomes.
@@ -285,9 +265,9 @@ distinct from the research-epoch `research_revision`. Do not reword this
 - Redaction: logged state rows carry structured evidence only (no raw texts,
   no prose) and never API keys or tokens. Verified by grep before any log
   leaves the machine.
-- `question_set_version` pinned in code. **Now `v3`** (analyst→edge_family,
-  veto→latent_risk, clean-room state). Any criteria change bumps version,
-  invalidates cache, logged in journal.
+- `contract` pinned in code (`collector/jev.py` `CONTRACT`). Any criteria
+  change means a new contract tag, invalidates cache, and is logged in the
+  journal.
 - Every cycle logs: context_hash, answers, probabilities, thresholds applied,
   final action. Replay test re-applies §3.2 to logged rows.
 
@@ -297,54 +277,55 @@ what it can prove. **Decision determinism is guaranteed:** same logged
 Snapshot + same logged AnswerSet + same code/version → identical risk/decision
 result, always. **Model repeatability is measured:** same state → same answer
 rate is tracked per §11.1, never asserted. Logged per call: model ID, model
-revision, provider, question_set_version, prompt hash, state hash, response
+revision, provider, contract, prompt hash, decision key, response
 hash. Replay never calls the remote model.
 
 Answer authentication: the sidecar runs as a dedicated `mirojev` user (doc 08
 §8.2) and Ed25519-signs every answer artifact. The single authoritative
 AnswerSet schema (reconciling §3.5's field list with the implementation):
-`schema_version | question_set_version | model | revision | provider |
-symbol | snapshot_epoch | state_hash | decision_key | created_at |
-expires_at (= created + 60 s) | answers`. `state_hash` is the canonical-state
-name for §3.5's `snapshot_hash` — same value, one term. Expiry is signed into
-the artifact so C++ verifies freshness without consulting Python's cache. C++ verifies before trusting; a bad signature is a HOLD +
-alert, and a forged `answers.json` buys an attacker nothing past the
-still-authoritative C++ risk layer.
+`contract | model | revision | provider | cid | candidate | symbol |
+feature_snapshot_hash | snapshot_epoch | price_s | spread_bps_s | session |
+regime | decision_key | created_at | expires_at (= created + 60 s) | answers`.
+`created_at` and `expires_at` are integer unix seconds; `answers` are flat
+(`enter` and `latent_risk` floats in [0,1], `edge_family`, `conviction`).
+Expiry is signed into the artifact so C++ verifies freshness without
+consulting Python's cache. C++ verifies before trusting; a bad signature is
+a HOLD + alert, and a forged `answers.json` buys an attacker nothing past
+the still-authoritative C++ risk layer.
 
-## 3.5a JEVAnswerSetV3 boundary artifact (frozen — the C++ contract)
+## 3.5a Answer boundary artifact (frozen — the C++ contract)
 
 Python owns slowness (HTTP, retries, cache, signatures, cost); C++ owns
 decisions. They meet only at this artifact. The adapter answers "what did
 the frozen dependency say"; it never answers "how much should we trade".
 
 ```
-JEVAnswerSetV3: schema_version | question_set_version=v3 |
-  model | revision | provider | symbol | snapshot_epoch |
-  state_hash | decision_key | created_at | expires_at (=created+60s) |
-  answers | response_hash | signature
+answer artifact: { payload, response_hash, signature }
+payload: contract | model | revision | provider | cid | candidate |
+  symbol | feature_snapshot_hash | snapshot_epoch | price_s |
+  spread_bps_s | session | regime | decision_key | created_at |
+  expires_at (=created+60s) | answers
 ```
 
-Frozen hash distinction (`state_hash` vs `context_hash`): `context_hash`
-(kernel-owned, doc 04 `ctx/`) is the SHA-256 of the canonical frozen
-Snapshot. `state_hash` is the SHA-256 of `canon()` over the FULL JEV
-request state object — which embeds `context_hash` as one field alongside
-the question set, indicators, portfolio view, and feature list. Different
-inputs, different digests, different verifiers: the kernel checks the
-Snapshot against `context_hash` and the exact bytes it sent to JEV against
-`state_hash`. Either mismatch is HOLD (wrong snapshot vs wrong question
-— the engine must not conflate them). Python computes `state_hash`; only
-the kernel mints `context_hash`, epochs, and the executable universe.
+`response_hash` is the SHA-256 of `canon(payload)` and `signature` is
+Ed25519 over the same bytes. The artifact carries no public key: the
+verifier holds the trust anchor. Kernel-owned values (expected cid, symbol
+and feature hash) come from the engine, never from the artifact; a mismatch
+in any of them, or in the recomputed `decision_key`, is a HOLD.
 
 C++ semantics for every malformed/stale answer (locked — each row is HOLD):
 
 ```
-missing answer          → HOLD (jev_absent)
-bad enum / shape        → HOLD (jev_malformed)
-bad signature           → HOLD (jev_unauthenticated) + alert
-wrong revision/provider → HOLD (jev_contract_mismatch)
-wrong state hash        → HOLD (jev_stale_state)
-expired answer (>60 s)  → HOLD (jev_expired)
-evidence == inference   → CONTEXT only, never trigger path
+missing / unparsable    → HOLD (absent)
+bad enum / shape / type → HOLD (malformed)
+bad signature           → HOLD (unauthenticated) + alert
+wrong contract          → HOLD (contract_mismatch)
+wrong candidate id      → HOLD (cid_mismatch)
+economics / family /
+feature / symbol drift  → HOLD (economics_binding | family_binding |
+                                feature_binding | symbol_binding)
+wrong decision key      → HOLD (decision_binding)
+expired answer (>60 s)  → HOLD (expired)
 edge_family == execution→ cannot authorize risk (table row 6)
 latent_risk > 0.5       → HOLD (additive)
 ```
@@ -357,10 +338,10 @@ disappears tomorrow.
 ## 3.5b Model retirement runbook (S7-B, governance — no JEV semantic change)
 
 A deployed JEV configuration is identified EXACTLY by the tuple
-`model | revision | provider | question_set_version`, matching the
+`model | revision | provider | contract`, matching the
 frozen names in `collector/jev.py` (`MODEL`, `REVISION`, `PROVIDER`,
-`QVERSION`), the AnswerSet payload keys (`model`, `revision`,
-`provider`, `question_set_version`), and `plan/system-manifest.yaml`
+`CONTRACT`), the answer payload keys (`model`, `revision`,
+`provider`, `contract`), and `plan/system-manifest.yaml`
 (`jev_model`, `jev_revision`, `jev_provider_name`). The tuple is
 immutable per deployment: changing any element retires one identity
 and introduces a different one. Retirement and replacement are human
@@ -408,18 +389,17 @@ handling: doc 10 §10.4.3).
 ## 3.6 What "done" means
 
 - [x] `jev.py` sidecar: stdin state → 1 batched call → stdout answers + log row.
-- [x] Threshold/table unit-tested with hand-worked cases (§3.7: 20 v2 cases
-      re-run green under v3 + 8 new v3 semantic cases, 2026-09-18).
+- [x] Threshold/table unit-tested with hand-worked cases (§3.7: 28 hand-worked
+      cases, 2026-09-18).
 - [x] Cache + failure-path tests (timeout, 500, malformed → HOLD; stale
       decision_key → re-issue).
 - [x] Replay of recorded AnswerSets with zero provider calls; decision
       determinism via signed artifacts (same Snapshot + AnswerSet → same input).
       (200-state distribution check deferred to paper window with live states.)
 
-## 3.7 Hand-worked cases (v2 table-logic re-run + v3 semantics, 2026-09-18)
+## 3.7 Hand-worked cases (2026-09-18)
 
-Cases 1–20 (v2) re-run green under the v3 table with renamed fields
-(`analyst→edge_family`, `veto→latent_risk`); boundary pins 17–20 unchanged.
+Cases 1–20 are the table-logic cases; boundary pins 17–20 are unchanged.
 Notation: E = enter, F = edge_family, C = conviction, L = latent_risk.
 
 | # | E | F | C | Flags | Expected |
@@ -449,34 +429,32 @@ the failure is observable as HOLD with the coded deterministic reason.
 No new question, no version change, no field reinterpretation. Proven in
 two halves: the Slice-B composed suite detects a real pending-risk
 breach via EvaluateVeto, maps it via BuildEngineInputs, and blocks the
-optimistic artifact; the P3.3 table suite proves a vetoed state
+optimistic artifact; the filter vectors prove a vetoed state
 authorizes nothing regardless of answers.
 
-v3 rule proven by 24/25: conviction max is necessary but never sufficient —
+Rule proven by cases 24/25: conviction max is necessary but never sufficient —
 it nominates, the engine's independently validated conditions authorize, and
 the §3.3 hierarchy owns size. Family-fit probabilities carry zero sizing
 weight, ever.
 
 ## Locked decisions
 
-- Exactly these 4 questions in v3 (enter / edge_family / conviction /
-  latent_risk). New questions need a version bump + fresh hand-worked cases.
+- Exactly these 4 questions (enter / edge_family / conviction /
+  latent_risk). New questions need a new contract tag + fresh hand-worked
+  cases.
 - Research output enters as typed structured evidence only. No raw texts, no
   prose in JEV state; prose lives in the research digest (doc 08).
 - Thresholds changed only between test windows, never live.
 - JEV never sizes directly; it scores, the table gates, the risk engine sizes.
-- JEV v3 is HISTORICAL once v4 lands: v3 semantics are frozen, v3 fixtures stay
-  replay-only, v3 is never mutated in place. The live contract becomes
-  question_set_version = v4, candidate-bound: the side/family/entry/stop/TP/
-  time-exit are INPUTS JEV evaluates, never OUTPUTS it invents. The v4 label
-  must match the actual candidate economics (entry/stop/TP/time-exit/costs/
-  horizon as one event), not a detached ±R race.
+- The contract is candidate-bound: the side/family/entry/stop/TP/time-exit
+  are INPUTS JEV evaluates, never OUTPUTS it invents. The label must match
+  the actual candidate economics (entry/stop/TP/time-exit/costs/horizon as
+  one event), not a detached ±R race.
 - (freeze v3) JEV is optional. The champion path is always-take unless a
-  sleeve's pre-registered paired-delta gate admits `filter = jev_v4`
+  sleeve's pre-registered paired-delta gate admits `filter = jev`
   (§3.0, doc 11). No kernel path may require an AnswerSet to exit, and no
   champion may require one to enter unless that gate passed.
-- (freeze v3) Live candidates are long-only: v4 `side` is BUY-to-open or
+- (freeze v3) Live candidates are long-only: `side` is BUY-to-open or
   SELL-to-close; SELL-to-open candidates exist only in shadow research.
-- (freeze v3) v4 artifacts must carry model/revision/provider metadata
-  before any production use (S4 follow-on), and the v4 C++ gate enters
-  `kernel/build.sh` + CI through a plan amendment (S4 governance note).
+- Artifacts carry model/revision/provider metadata (signed into the
+  payload), and the C++ filter gate runs in `kernel/build.sh` and CI.

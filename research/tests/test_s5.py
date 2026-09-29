@@ -299,16 +299,16 @@ def test_14_holdout_boundary_and_purge():
 def strong_provider():
     """Fixed strong answers, own key (adversarial determinism, not JEV)."""
     from collector.jev import ed_pubkey
-    from research.strategy import jev_v4 as v4
+    from research.strategy import jev_filter as jf
     seed = bytes.fromhex("cd" * 32)
     pub = ed_pubkey(seed)
 
     def provide(candidate, market, now_unix):
         ans = {"enter": 0.95, "edge_family": candidate.proposed_family,
                "conviction": "max", "latent_risk": 0.01}
-        payload = v4.make_v4_payload(candidate, market, ans, now_unix,
+        payload = jf.make_payload(candidate, market, ans, now_unix,
                                      now_unix + 60)
-        art = v4.sign_v4(payload, seed)
+        art = jf.sign(payload, seed)
         return art, {"model": "test-strong", "revision": "t1",
                      "provider": "test"}
     return provide, pub
@@ -1289,7 +1289,7 @@ def test_36_r_scope_audited():
                "R1-same-direction": "R1-direction",
                "R2-single": "R2-single", "R2-total": "R2-total",
                "R3-churn": "R3-day", "R4-fliplock": "r4_completions",
-               "R8-maxgate": "evaluate_v4",
+               "R8-maxgate": "evaluate",
                "R12-lookahead": "bars_after",
                "R14-disagree": "disagreement",
                "stop-rule": "exits-first"}
@@ -1299,7 +1299,7 @@ def test_36_r_scope_audited():
         assert marker in src_all, rule
     assert "r4_completions" in _insp.getsource(s5.verify_r_monitor)
     assert "MAX_POSITIONS" in _insp.getsource(s5.portfolio_curve)
-    assert "evaluate_v4" in _insp.getsource(s5.evaluate_stream)
+    assert "evaluate" in _insp.getsource(s5.evaluate_stream)
     for pend in ("R1-pending", "R2-pending", "R5-halt", "R6-vol",
                  "R7-corr", "R9-venue"):
         assert pend in s5.R_UNAVAILABLE, pend

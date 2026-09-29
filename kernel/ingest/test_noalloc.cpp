@@ -13,7 +13,7 @@
 #include <cstdio>
 #include <cstring>
 
-#include "../jev_validate.hpp"
+#include "../jev_wire.hpp"
 #include "features.hpp"
 
 extern "C" {

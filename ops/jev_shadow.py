@@ -1,5 +1,5 @@
-"""JEV shadow mode: asks JEV about each paper candidate and only LOGS the
-answer. It never blocks, sizes or orders anything.
+"""JEV shadow mode: asks JEV about each paper candidate and only LOGS what
+the filter would have done. It never blocks, sizes or orders anything.
 
     python3 ops/jev_shadow.py <loop_dir>          # one pass, then exit
 
@@ -8,57 +8,63 @@ Writes <loop_dir>/jev_shadow.jsonl   (one row per candidate)
        <loop_dir>/jev_shadow.offset  (byte offset already processed)
 It does not touch the journal, candidates, approved.json or STAGE. Provider
 calls go through collector.jev.decide, so the spend governor, cache and
-signing apply unchanged. No key means a logged HOLD row, never a guess.
+signing apply unchanged; the signed answer is then run through the same
+filter the kernel would use. No key means a logged HOLD row, never a guess.
 
-Scope: the frozen provider speaks the v3 question set, so this proves the
-plumbing and records what JEV would have said (would_block is hypothetical).
-It is not v4 evidence and not a promotion input on its own."""
+Market fields the emitter does not have (spread, session, regime) are
+recorded as "unknown" rather than invented; calibration is "insufficient",
+so nothing is ever elevated."""
 import json
 import os
 import sys
 import time
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from collector import jev
+from research.strategy import jev_filter
 
 SHADOW = "jev_shadow.jsonl"
 OFFSET = "jev_shadow.offset"
+STAGE = "G0_PAPER"
+ENGINE = {"deterministic_veto": False, "disagreement": False,
+          "blackout": False, "calib_gate": "insufficient", "veto_max": False}
 
 
-def build_state(cand, now):
-    """v3 state bound to the candidate: context_hash is the cid."""
-    return {"context_hash": cand["cid"], "symbol": cand["symbol"],
-            "stage": "G0_PAPER", "question_set_version": "v3",
-            "snapshot_epoch": int(int(cand["snapshot_ts_ns"]) // 10**9),
-            "indicators": {"regime": "unknown",
-                           "proposed_side": cand["proposed_side"],
-                           "proposed_family": cand["proposed_family"],
-                           "entry_px": cand["entry_px"],
-                           "stop_px": cand["stop_px"],
-                           "tp_px": cand["tp_px"]},
-            "portfolio": {}, "event_window": {}, "risk_flags": {}}
+def build_state(cand):
+    market = {"snapshot_epoch": int(cand["snapshot_ts_ns"]) // 10**9,
+              "price_s": cand["entry_px"], "spread_bps_s": "unknown",
+              "session": "unknown", "regime": "unknown"}
+    return jev.state_from_candidate(cand, market, STAGE,
+                                    cand["feature_revision"])
 
 
-def summarize(cand, row):
-    """Flatten the sidecar row; would_block is a what-if, never applied."""
+def as_candidate(cand, state):
+    """The wire candidate as the filter's evaluator expects it."""
+    return SimpleNamespace(
+        cid=cand["cid"], symbol=cand["symbol"],
+        feature_snapshot_hash=state["feature_snapshot_hash"],
+        proposed_side=cand["proposed_side"],
+        proposed_family=cand["proposed_family"],
+        entry_px=float(cand["entry_px"]), stop_px=float(cand["stop_px"]),
+        tp_px=float(cand["tp_px"]))
+
+
+def summarize(cand, state, row, art, now):
     out = {"cid": cand["cid"], "symbol": cand["symbol"],
            "action": row.get("action"), "shadow": True}
-    a = row.get("answers")
-    if isinstance(a, dict):
-        try:
-            enter = a["enter"]["noul"]
-            risk = a["latent_risk"]["noul"]
-            fam = a["edge_family"]["choice"]
-            out.update(enter=enter, latent_risk=risk, edge_family=fam,
-                       conviction=a["conviction"]["score"],
-                       would_block=bool(enter < 0.5 or risk > 0.5
-                                        or fam != cand["proposed_family"]))
-        except (KeyError, TypeError):
-            out["action"] = "HOLD"
-            out["reason"] = "answers-shape"
-    else:
-        out["reason"] = row.get("reason") or row.get("hold_reason")
+    if art is None:
+        out["verdict"] = "HOLD"
+        out["reason"] = row.get("reason")
+        return out
+    a = art["payload"]["answers"]
+    verdict, why = jev_filter.evaluate(
+        as_candidate(cand, state), art, int(now), jev.load_pubkey(),
+        dict(ENGINE))
+    out.update(verdict=verdict, reason=why, enter=a["enter"],
+               latent_risk=a["latent_risk"], edge_family=a["edge_family"],
+               conviction=a["conviction"])
     return out
 
 
@@ -82,13 +88,13 @@ def run(loop_dir, now=None, key=None, post_fn=None):
     for raw in data[:end].splitlines():
         try:
             cand = json.loads(raw)["candidate"]
-            state = build_state(cand, now)
+            state = build_state(cand)
         except (ValueError, KeyError, TypeError):
             rec = {"action": "SKIP", "reason": "bad-candidate-line",
                    "shadow": True}
         else:
-            row, _ = jev.decide(state, now=now, key=key, post_fn=post_fn)
-            rec = summarize(cand, row)
+            row, art = jev.decide(state, now=now, key=key, post_fn=post_fn)
+            rec = summarize(cand, state, row, art, now)
         rec["at"] = now
         with open(os.path.join(loop_dir, SHADOW), "a") as f:
             f.write(json.dumps(rec, sort_keys=True) + "\n")

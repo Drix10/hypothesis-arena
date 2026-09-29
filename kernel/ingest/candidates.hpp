@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-#include "../jev_validate.hpp"
+#include "../jev_wire.hpp"
 
 namespace jev {
 namespace ingest {

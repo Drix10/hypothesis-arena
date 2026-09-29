@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-'''Phase 2 JEV sidecar: stdin state -> batched v3 call -> signed AnswerSet.
+'''Phase 2 JEV sidecar: stdin candidate state -> batched call -> signed answer artifact.
 Priority order: correctness, provenance, failure containment, replayability,
 cost, latency (the fast path starts after the artifact crosses into C++).
 
@@ -27,7 +27,7 @@ MODEL = "typesafe/jev-1.13"
 REVISION = "typesafe/jev-1.13-20260917"
 PROVIDER = "TypeSafe"
 ENDPOINT = "https://openrouter.ai/api/alpha/decisions"
-QVERSION = "v3"
+CONTRACT = "jev"  # domain tag inside every signed payload and decision key
 TIMEOUT_S = 10
 RETRY_DELAY_S = 5.0
 ANSWER_MAX_AGE_S = 60
@@ -313,49 +313,67 @@ def _finite_json(obj, depth=0):
     return False
 
 
+# Frozen c1 identity recipe: the exact strings the candidate id hashes.
+CID_FIELDS = ("strategy_version", "symbol", "snapshot_ts_ns", "proposed_side",
+              "proposed_family", "entry_px", "stop_px", "tp_px",
+              "time_exit_ns", "exit_profile_version", "cost_model_version",
+              "feature_revision")
+# decision_key recipe: pipe-joined exact strings, C++ recomputes field for field.
+DKEY_ORDER = ("cid", "symbol", "snapshot_epoch", "price_s", "spread_bps_s",
+              "session", "regime", "feature_snapshot_hash", "contract")
+MARKET_STR_FIELDS = ("price_s", "spread_bps_s", "session", "regime")
+
+
+def _is_int(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
 def validate_state(state):
+    """A decision state is one already-built candidate plus its market
+    snapshot. JEV evaluates it; it never originates side or economics."""
     if not isinstance(state, dict):
         return False, "state-not-object"
-    for k in ("context_hash", "symbol", "stage"):
+    for k in ("cid", "candidate", "symbol", "stage", "snapshot_epoch",
+              "feature_snapshot_hash") + MARKET_STR_FIELDS:
         if k not in state:
             return False, "state-missing:" + k
-    if not isinstance(state.get("context_hash"), str) or \
-            not state["context_hash"]:
-        return False, "state-context_hash"
-    if not isinstance(state.get("symbol"), str) or not state["symbol"]:
-        return False, "state-symbol"
     if state.get("stage") not in STAGES:
         return False, "invalid-stage"
-    if state.get("question_set_version", QVERSION) != QVERSION:
-        return False, "state-qversion"
-    ep = state.get("snapshot_epoch", "?")
-    if ep != "?" and (isinstance(ep, bool) or not isinstance(ep, int)
-                        or ep < 0):
+    if state.get("contract", CONTRACT) != CONTRACT:
+        return False, "state-contract"
+    if not isinstance(state["cid"], str) or not state["cid"]:
+        return False, "state-cid"
+    if not isinstance(state["symbol"], str) or not state["symbol"]:
+        return False, "state-symbol"
+    c = state["candidate"]
+    if not isinstance(c, dict) or c.get("cid") != state["cid"] or \
+            c.get("symbol") != state["symbol"]:
+        return False, "state-candidate"
+    if any(not isinstance(c.get(f), str) or not c[f] for f in CID_FIELDS):
+        return False, "state-candidate"
+    h = state["feature_snapshot_hash"]
+    if not isinstance(h, str) or not 1 <= len(h) <= 256:
+        return False, "state-feature-hash"
+    if not _is_int(state["snapshot_epoch"]) or state["snapshot_epoch"] < 0:
         return False, "state-epoch"
-    for k in ("indicators", "portfolio", "event_window"):
-        if k in state and not isinstance(state[k], dict):
-            return False, "state-" + k
-    if "features" in state and not isinstance(state["features"], list):
-        return False, "state-features"
-    if "features" in state:
-        for f in state["features"]:
-            if isinstance(f, dict) and "feature_id" in f and \
-                    not isinstance(f["feature_id"], str):
-                # decision_key() would raise sorting mixed types: refuse
-                # admission instead of crashing mid-cycle (B11).
-                return False, "state-feature-id"
-    if "research_revision" in state and \
-            not isinstance(state["research_revision"], str):
-        return False, "state-research_revision"
-    if "spread_bps" in state and \
-            (isinstance(state["spread_bps"], bool) or
-             not isinstance(state["spread_bps"], (int, float))):
-        return False, "state-spread"
+    if any(not isinstance(state[f], str) for f in MARKET_STR_FIELDS):
+        return False, "state-market"
     if "cycle_id" in state and not isinstance(state["cycle_id"], str):
         return False, "state-cycle_id"
     if not _finite_json(state):
         return False, "state-nonfinite"
     return True, "ok"
+
+
+def state_from_candidate(cand, market, stage, feature_snapshot_hash):
+    """cand: the 12 CID fields as exact strings plus cid. market:
+    snapshot_epoch (int) and price_s, spread_bps_s, session, regime (str)."""
+    return {"contract": CONTRACT, "stage": stage, "cid": cand["cid"],
+            "candidate": {f: cand[f] for f in CID_FIELDS + ("cid",)},
+            "symbol": cand["symbol"],
+            "feature_snapshot_hash": feature_snapshot_hash,
+            "snapshot_epoch": market["snapshot_epoch"],
+            **{f: market[f] for f in MARKET_STR_FIELDS}}
 
 
 def build_request(state):
@@ -436,16 +454,15 @@ def validate_response(resp):
 
 
 def sign_answerset(payload):
-    seed, pub = load_keypair()  # raises KeyMaterialError: caller HOLDs
+    seed, _pub = load_keypair()  # raises KeyMaterialError: caller HOLDs
     msg = canon(payload).encode()
     return {"payload": payload, "response_hash": sha256_hex(canon(payload)),
-            "signature": ed_sign(seed, msg).hex(), "pubkey": pub.hex()}
+            "signature": ed_sign(seed, msg).hex()}
 
 
 def verify_answerset(artifact):
     """Crypto verification against the CONFIGURED trust anchor (B5).
-    artifact["pubkey"] is informational metadata only: a foreign keypair
-    with a matching self-attested pubkey field never verifies."""
+    The artifact carries no key of its own: a foreign keypair never verifies."""
     try:
         msg = canon(artifact["payload"]).encode()
         sig = bytes.fromhex(artifact["signature"])
@@ -460,100 +477,90 @@ def verify_answerset(artifact):
 
 
 # ---- cache ----
-def feature_ids(state):
-    feats = state.get("features", [])
-    return sorted(f.get("feature_id", "?") for f in feats
-                  if isinstance(f, dict))
-
-
-def feature_revision(state):
-    return sha256_hex(",".join(feature_ids(state)))
-
-
-def research_key(state):
-    return "|".join([state.get("symbol", "?"),
-                     str(state.get("indicators", {}).get("regime", "?")),
-                     str(state.get("research_revision", "?")),
-                     ",".join(feature_ids(state)), QVERSION])
-
-
 def decision_key(state):
-    ind = state.get("indicators", {})
-    pf = state.get("portfolio", {})
-    ew = state.get("event_window", {})
-    parts = [state.get("symbol", "?"), str(state.get("snapshot_epoch", "?")),
-             str(ind.get("price_return_bucket", "?")),
-             str(state.get("spread_bps", "?")),
-             str(ind.get("atr_bucket", "?")), str(ind.get("zscore", "?")),
-             str(ind.get("regime", "?")), str(ew.get("phase", "?")),
-             str(pf.get("exposure_pct", "?")), feature_revision(state),
-             str(state.get("research_revision", "?")), QVERSION]
-    return sha256_hex("|".join(parts))
+    s = dict(state, contract=CONTRACT)
+    return sha256_hex("|".join(str(s[f]) for f in DKEY_ORDER))
 
 
 def protected_state(state):
-    return {"stage": state.get("stage"),
-            "risk_flags": state.get("risk_flags", {}),
-            "event_blackout": state.get("event_window", {}).get("blackout")}
+    return {"stage": state.get("stage")}
+
+
+def flat_answers(clean):
+    """Provider answers (typed) -> the flat answers the artifact signs."""
+    return {"enter": float(clean["enter"]["noul"]),
+            "edge_family": clean["edge_family"]["choice"],
+            "conviction": clean["conviction"]["score"],
+            "latent_risk": float(clean["latent_risk"]["noul"])}
+
+
+def _valid_flat_answers(a):
+    if not isinstance(a, dict) or set(a) != {"enter", "edge_family",
+                                             "conviction", "latent_risk"}:
+        return False
+    for k in ("enter", "latent_risk"):
+        if type(a[k]) is not float or not 0.0 <= a[k] <= 1.0:
+            return False
+    return a["edge_family"] in FAMILIES and a["conviction"] in CONVICTIONS
+
+
+def make_payload(state, answers, created_at):
+    """The signed body: one candidate, its market snapshot, flat answers."""
+    return {"contract": CONTRACT, "model": MODEL, "revision": REVISION,
+            "provider": PROVIDER, "cid": state["cid"],
+            "candidate": state["candidate"], "symbol": state["symbol"],
+            "feature_snapshot_hash": state["feature_snapshot_hash"],
+            "snapshot_epoch": state["snapshot_epoch"],
+            **{f: state[f] for f in MARKET_STR_FIELDS},
+            "decision_key": decision_key(state),
+            "created_at": created_at,
+            "expires_at": created_at + ANSWER_MAX_AGE_S,
+            "answers": answers}
+
+
+PAYLOAD_KEYS = frozenset({"contract", "model", "revision", "provider", "cid", "candidate", "symbol",
+                          "feature_snapshot_hash", "snapshot_epoch",
+                          "price_s", "spread_bps_s", "session", "regime",
+                          "decision_key", "created_at", "expires_at",
+                          "answers"})
 
 
 def _validate_answerset_artifact(art, live_now=None):
-    """Shared AnswerSet contract for LIVE cache admission and REPLAY.
-    Returns (payload-or-None, reason). Shape, pins, answers, timestamp
-    coherence, and configured-key signature are enforced in BOTH modes;
-    live_now (epoch) additionally requires the artifact unexpired and
-    freshly created. REPLAY (live_now=None) is forensics: it reads the
-    past, so liveness is not required — everything else is. Reason strings
-    reuse replay's vocabulary so both paths report the same contract."""
+    """Shared artifact contract for LIVE cache admission and REPLAY.
+    Returns (payload-or-None, reason). Shape, contract, answers, timestamp
+    coherence and configured-key signature are enforced in BOTH modes;
+    live_now (epoch) additionally requires the artifact unexpired and not
+    future-dated. REPLAY (live_now=None) is forensics: it reads the past."""
     try:
-        if not isinstance(art, dict):
-            return None, "replay-shape"
-        if set(art) != {"payload", "response_hash", "signature",
-                         "pubkey"}:
+        if not isinstance(art, dict) or \
+                set(art) != {"payload", "response_hash", "signature"}:
             return None, "replay-shape"
         p = art.get("payload")
-        if not isinstance(p, dict):
+        if not isinstance(p, dict) or set(p) != PAYLOAD_KEYS:
             return None, "replay-shape"
-        if set(p) != {"schema_version", "question_set_version", "model",
-                       "revision", "provider", "symbol",
-                       "snapshot_epoch", "state_hash", "decision_key",
-                       "created_at", "expires_at", "answers"}:
-            return None, "replay-shape"
-        # Verify the signature before checking pins, so a foreign key with a
-        # rewritten revision fails as signature-failure, not a pin mismatch.
+        # Signature first, so a foreign key fails as signature-failure.
         if not verify_answerset(art):
             return None, "signature-failure"
-        if p.get("schema_version") != "answerset_v1":
-            return None, "wrong-schema"
-        if p.get("question_set_version") != QVERSION:
-            return None, "wrong-qversion"
+        if p.get("contract") != CONTRACT:
+            return None, "wrong-contract"
         if p.get("model") != MODEL:
             return None, "wrong-model"
         if p.get("revision") != REVISION:
             return None, "wrong-revision"
         if p.get("provider") != PROVIDER:
             return None, "wrong-provider"
-        try:
-            created = datetime.fromisoformat(p["created_at"])
-        except (ValueError, TypeError):
+        created, exp = p["created_at"], p["expires_at"]
+        if not _is_int(created) or not _is_int(exp):
             return None, "replay-shape"
-        if created.tzinfo is None:
-            return None, "replay-shape"
-        exp = p["expires_at"]
-        if type(exp) not in (int, float) or not math.isfinite(exp):
-            return None, "replay-shape"
-        if exp != created.timestamp() + ANSWER_MAX_AGE_S:
+        if exp != created + ANSWER_MAX_AGE_S:
             return None, "replay-shape"  # incoherent lifetime
         if live_now is not None:
             if exp <= live_now:
                 return None, "artifact-expired"
-            if created.timestamp() > live_now + CLOCK_SKEW_S:
+            if created > live_now + CLOCK_SKEW_S:
                 return None, "artifact-future"
-        clean, why = validate_response({"model": REVISION,
-                                        "provider": PROVIDER,
-                                        "answers": p.get("answers")})
-        if clean is None:
-            return None, why
+        if not _valid_flat_answers(p.get("answers")):
+            return None, "answers-shape"
         return p, "ok"
     except Exception:
         return None, "replay-shape"  # malformed never crashes the cycle
@@ -569,12 +576,9 @@ def validate_cached_artifact(state, c, now):
     stay cache-specific."""
     if not isinstance(c, dict):
         return None
-    if set(c) != {"research_key", "decision_key", "protected",
-                   "artifact", "at"}:
+    if set(c) != {"decision_key", "protected", "artifact", "at"}:
         return None
     try:
-        if c.get("research_key") != research_key(state):
-            return None
         if c.get("decision_key") != decision_key(state):
             return None
         if c.get("protected") != protected_state(state):
@@ -590,10 +594,6 @@ def validate_cached_artifact(state, c, now):
         p, _ = _validate_answerset_artifact(art, live_now=now)
         if p is None:
             return None
-        if p.get("symbol") != state.get("symbol"):
-            return None
-        if p.get("snapshot_epoch") != state.get("snapshot_epoch"):
-            return None
         if not bind_check(art, state):
             return None
         return art
@@ -604,7 +604,7 @@ def validate_cached_artifact(state, c, now):
 def cache_get(state, now):
     try:
         with open(os.path.join(
-                CACHE_DIR, sha256_hex(research_key(state)) + ".json"),
+                CACHE_DIR, sha256_hex(decision_key(state)) + ".json"),
                 encoding="utf-8") as fh:
             c = json.load(fh)
     except (OSError, ValueError):
@@ -617,11 +617,10 @@ def cache_get(state, now):
 
 def cache_put(state, artifact, now):
     os.makedirs(CACHE_DIR, exist_ok=True)
-    c = {"research_key": research_key(state),
-         "decision_key": decision_key(state),
+    c = {"decision_key": decision_key(state),
          "protected": protected_state(state),
          "artifact": artifact, "at": now}
-    p = os.path.join(CACHE_DIR, sha256_hex(research_key(state)) + ".json")
+    p = os.path.join(CACHE_DIR, sha256_hex(decision_key(state)) + ".json")
     tmp = p + f".tmp-{os.getpid()}"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(c, fh)
@@ -1090,7 +1089,7 @@ def hold_row(state, reason, cost=0.0, cached=False, now=None):
     at = datetime.fromtimestamp(now if now is not None else time.time(),
                                 timezone.utc).isoformat()
     return {"action": "HOLD", "reason": reason, "symbol": state.get("symbol"),
-            "context_hash": state.get("context_hash"), "cost": cost,
+            "cid": state.get("cid"), "cost": cost,
             "cached": cached, "at": at}
 
 
@@ -1303,18 +1302,9 @@ def decide(state, now=None, key=None, post_fn=None):
                 # answered this state while we waited. Serve their artifact.
                 return gate[1], gate[2]
             answers, usage, spent = gate[1], gate[2], gate[3]
+            created_i = int(now)
             created = datetime.fromtimestamp(now, timezone.utc).isoformat()
-            payload = {"schema_version": "answerset_v1",
-                       "question_set_version": QVERSION, "model": MODEL,
-                       "revision": REVISION, "provider": PROVIDER,
-                       "symbol": state.get("symbol"),
-                       "snapshot_epoch": state.get("snapshot_epoch"),
-                       "state_hash": sha256_hex(canon(state)),
-                       "decision_key": decision_key(state),
-                       "created_at": created,
-                       "expires_at": (datetime.fromisoformat(created)
-                                      .timestamp() + ANSWER_MAX_AGE_S),
-                       "answers": answers}
+            payload = make_payload(state, flat_answers(answers), created_i)
             try:
                 artifact = sign_answerset(payload)
             except KeyMaterialError as e:
@@ -1340,7 +1330,7 @@ def decide(state, now=None, key=None, post_fn=None):
         log_row(row)
         return row, None
     row = {"action": "ANSWER", "answers": answers, "symbol": state.get("symbol"),
-           "context_hash": state.get("context_hash"), "cached": False,
+           "cid": state.get("cid"), "cached": False,
            "calls_day_total": spent["calls"],
            "calls_alert": spent["calls"] >= DAILY_CALL_ALERT,
            "spend_30d_usd": spend_30d(now)[0],
@@ -1353,23 +1343,24 @@ def decide(state, now=None, key=None, post_fn=None):
 
 
 def bind_check(artifact, state):
-    """Explicit state binding at the artifact boundary: the AnswerSet is
-    only valid FOR this exact canonical state. C++ performs this comparison
-    before trusting anything inside."""
+    """Explicit state binding at the artifact boundary: the answers are only
+    valid FOR this exact candidate and market snapshot. C++ performs the same
+    comparison before trusting anything inside."""
     try:
         p = artifact["payload"]
     except (KeyError, TypeError):
         return False
-    return (p.get("state_hash") == sha256_hex(canon(state))
-            and p.get("decision_key") == decision_key(state))
+    return (p.get("decision_key") == decision_key(state) and
+            all(p.get(k) == state.get(k) for k in
+                ("cid", "candidate", "symbol", "feature_snapshot_hash",
+                 "snapshot_epoch") + MARKET_STR_FIELDS))
 
 
 def replay(artifact_path):
-    '''Zero-network replay: full-contract verification + downstream input.
-    Enforces the SAME artifact contract as LIVE cache admission via
-    _validate_answerset_artifact (REPLAY mode: shape/pins/answers/
-    signature/coherence, no liveness or state binding — forensics reads
-    the past). Every malformation is a structured HOLD, never KeyError.'''
+    '''Zero-network replay: full-contract verification of a stored artifact
+    (shape, contract, answers, signature, lifetime; no liveness or state
+    binding, since forensics reads the past). Every malformation is a
+    structured HOLD, never KeyError.'''
     try:
         with open(artifact_path, encoding="utf-8") as fh:
             artifact = json.load(fh)
@@ -1378,12 +1369,8 @@ def replay(artifact_path):
     p, why = _validate_answerset_artifact(artifact)
     if p is None:
         return {"action": "HOLD", "reason": why}
-    clean, why = validate_response({"model": REVISION, "provider": PROVIDER,
-                                    "answers": p.get("answers")})
-    if clean is None:  # unreachable (validator proved answers), kept explicit
-        return {"action": "HOLD", "reason": why}
-    return {"action": "ANSWER", "answers": clean,
-            "state_hash": p["state_hash"], "replayed": True}
+    return {"action": "ANSWER", "answers": p["answers"],
+            "decision_key": p["decision_key"], "replayed": True}
 
 
 def main():

@@ -6,8 +6,7 @@ One folder. Everything lives here. If it is not in here, we do not build it.
 safety machine around an unproven edge. Freeze v3 keeps every safety
 contract and re-points the work at three things the v2 plan lacked:
 a legally tradable scope for the actual operator, a measurable alpha
-pipeline, and the shortest honest path into the paper loop. The review
-that motivated every change is `reviews/2026-09-28-v3-rebaseline-critique.md`.
+pipeline, and the shortest honest path into the paper loop.
 
 ## Files (read in order)
 
@@ -15,8 +14,8 @@ that motivated every change is `reviews/2026-09-28-v3-rebaseline-critique.md`.
    jurisdiction, venue, latency tiers (why this is not HFT and what is).
 2. `02-strategy-book.md` — **Strategy book: alpha sleeves** (renamed
    from `02-twitter-alpha-system.md`; the X-lists archive moved to `appendix/02-x-lists-archive.md`).
-3. `03-jev-decision-layer.md` — JEV v3 (frozen, historical) + v4
-   candidate-bound contract; JEV is an optional challenger-grade filter.
+3. `03-jev-decision-layer.md` — JEV: the single candidate-bound
+   contract; JEV is an optional challenger-grade filter.
 4. `04-cpp-deterministic-core.md` — the C++ kernel: processes, modules,
    data flow, latency budget, always-take path, cash-account ledger.
 5. `05-risk-and-determinism.md` — R1–R19 hard rules, measurement
@@ -38,7 +37,7 @@ that motivated every change is `reviews/2026-09-28-v3-rebaseline-critique.md`.
 
 Also: `system-manifest.yaml` (fingerprint code verifies against),
 `appendix/` (implementation records moved verbatim, still frozen),
-`reviews/` (historical review records; never authority).
+`reviews/` (result reviews; never authority).
 
 ## Rules of this folder
 
@@ -75,8 +74,8 @@ Also: `system-manifest.yaml` (fingerprint code verifies against),
   output uses only data after that model's pinned knowledge cutoff plus
   an embargo (doc 11). Data timestamps are guarded by R12; model memory is
   guarded by this rule.
-- JEV (`typesafe/jev-1.13`, pinned, never floating) v3 is frozen history;
-  v4 is candidate-bound. JEV is not required on the champion path.
+- JEV (`typesafe/jev-1.13`, pinned, never floating) one contract,
+  candidate-bound. JEV is not required on the champion path.
 - R1–R19 are code constants. Any change = doc edit + version bump +
   fresh paper window.
 - Research writes `features.jsonl` only (R11, OS-enforced). No broker keys,

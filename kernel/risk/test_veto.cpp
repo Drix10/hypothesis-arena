@@ -7,9 +7,8 @@
 #include <cstring>
 #include <string>
 
-#include "../decision_table.hpp"
-#include "../jev_validate.hpp"
-#include "../kernel_state.hpp"
+#include "../jev_filter.hpp"
+#include "../jev_wire.hpp"
 #include "veto.hpp"
 
 static int fails = 0;
@@ -966,67 +965,56 @@ int main(int argc, char** argv) {
                   !in.deterministic_veto);
     }
 
-    // ---- composed rows: frozen table as a tool (argv: p33dir fxdir) ----
-    if (argc == 3) {
+    // ---- composed rows: veto -> engine inputs -> filter (argv: vectors dir) ----
+    if (argc == 2) {
         std::string dir = argv[1];
-        std::string fxdir = argv[2];
-        std::string kh = read_all((fxdir + "/trusted_key.txt").c_str());
-        std::array<uint8_t, 32> key{};
-        {
-            std::string hex;
-            for (char c : kh)
-                if (c != '\n' && c != '\r' && c != ' ' && c != '\t') hex += c;
-            if (hex.size() != 64) {
-                printf("FAIL key-load\n");
-                return 1;
-            }
-            for (size_t i = 0; i < 32; i++)
-                key[i] = (uint8_t)strtoul(hex.substr(i * 2, 2).c_str(),
-                                          nullptr, 16);
-        }
-        // validation_bytes: strip the embedded "state" (top-level keys).
-        auto validation_bytes = [](const std::string& raw) {
-            JVal art;
-            std::string err;
-            if (!ParseJson(raw, art, err)) return std::string();
-            for (auto it = art.o.begin(); it != art.o.end(); ++it)
-                if (U32ToUtf8(it->first) == "state") {
-                    art.o.erase(it);
-                    break;
-                }
-            return CanonJson(art);
+        struct Vec {
+            std::string artifact, cid, sym, fh;
+            uint8_t pub[32];
+            int64_t now = 0;
+            bool ok = false;
         };
-        std::string raw = read_all((dir + "/t_veto.json").c_str());
-        JVal art;
-        std::string err;
-        CHECK("c-parses", ParseJson(raw, art, err));
-        const JVal* state = ObjGet(art, "state");
-        JEVStateV3 st;
-        std::string dwhy;
-        CHECK("c-state", state && state->t == JVal::T::OBJ &&
-                             JEVStateV3::FromJVal(*state, st, dwhy));
-        KernelState kern;
-        std::string kwhy;
-        CHECK("c-kernel",
-              KernelState::Create({"EURUSD"}, kwhy, kern));
-        ValidationRequest q =
-            kern.request_for(validation_bytes(raw), key, st.Serialize(),
-                             "EURUSD", 0.0, Mode::REPLAY);
-        ValidationResult r = validate_jev(q);
-        CHECK("c-valid", r.ok());
-        if (r.ok()) {
-            // enter 0.9 / latent 0.1 / strong / momentum + clean snapshot
-            // with calib PASS => BASE base-1R (strong nominates nothing).
+        auto load = [&](const char* name) {
+            Vec v;
+            v.artifact = read_all((dir + "/" + name + ".artifact.json").c_str());
+            std::string raw = read_all((dir + "/" + name + ".expect.json").c_str());
+            JVal e;
+            std::string err;
+            if (!ParseJson(raw, e, err)) return v;
+            auto s = [&](const char* k) {
+                const JVal* p = ObjGet(e, k);
+                return p && p->t == JVal::T::STR ? U32ToUtf8(p->s)
+                                                 : std::string();
+            };
+            v.cid = s("expected_cid");
+            v.sym = s("expected_symbol");
+            v.fh = s("expected_fhash");
+            std::string ph = s("pubkey");
+            const JVal* n = ObjGet(e, "now_unix");
+            if (ph.size() != 64 || !n || n->t != JVal::T::NUM) return v;
+            for (size_t i = 0; i < 32; i++)
+                v.pub[i] = (uint8_t)strtoul(ph.substr(i * 2, 2).c_str(),
+                                            nullptr, 16);
+            v.now = strtoll(n->num.c_str(), nullptr, 10);
+            v.ok = !v.artifact.empty() && v.cid.size() == 64;
+            return v;
+        };
+        auto verdict = [&](const Vec& v, const EngineInputs& in) {
+            return jev_filter::Validate(v.artifact, v.cid, v.sym, v.fh, v.pub,
+                                        v.now, jev_filter::EngineFrom(in));
+        };
+        Vec base = load("valid_pass");
+        Vec maxe = load("max_elevated");
+        CHECK("c-loaded", base.ok && maxe.ok);
+        if (base.ok && maxe.ok) {
+            // strong-conviction answer + clean snapshot => PASS_BASE.
             RiskSnapshot s = Clean();
             s.calib = CalibState::PASS;
             VetoVerdict v = EvaluateVeto(s);
             CHECK("c-veto-proceed", v.proceed);
-            EngineInputs in = BuildEngineInputs(s, v);
-            Decision d = EvaluateDecision(*r.get(), in);
-            CHECK("c-table-base",
-                  d.budget == Decision::Budget::BASE_1R &&
-                      d.action == "BASE" && d.reason == "base-1R");
-            // same answers, R1-count breach => engine-veto:other-breach.
+            auto r = verdict(base, BuildEngineInputs(s, v));
+            CHECK("c-table-base", r.pass && r.action == "PASS_BASE");
+            // same answers, R1-count breach => the engine vetoes.
             RiskSnapshot s2 = Clean();
             s2.calib = CalibState::PASS;
             AddOpen(s2, "A", Side::LONG, 100000LL);
@@ -1034,79 +1022,49 @@ int main(int argc, char** argv) {
             AddOpen(s2, "C", Side::LONG, 100000LL);
             VetoVerdict v2 = EvaluateVeto(s2);
             CHECK("c-veto-hold", !v2.proceed);
-            EngineInputs in2 = BuildEngineInputs(s2, v2);
-            Decision d2 = EvaluateDecision(*r.get(), in2);
+            auto r2 = verdict(base, BuildEngineInputs(s2, v2));
             CHECK("c-table-veto",
-                  d2.budget == Decision::Budget::HOLD &&
-                      d2.reason == "engine-veto:other-breach");
-            // MEDIUM impact + active phase HOLDs at the veto even for
-            // this strong-conviction artifact: the documented fail-closed
-            // over-approximation of "entries need strong" (the frozen
-            // table cannot express it; refining needs a table amendment).
+                  !r2.pass && r2.action == "HOLD" && r2.reason == "engine");
+            // MEDIUM impact + active phase HOLDs at the veto: the
+            // documented fail-closed over-approximation of "entries need
+            // strong" (the frozen table cannot express it).
             RiskSnapshot s3 = Clean();
             s3.calib = CalibState::PASS;
             s3.impact = Impact::MEDIUM;
             s3.phase = Phase::PRE;
             VetoVerdict v3 = EvaluateVeto(s3);
             CHECK("c-medium-hold",
-                  !v3.proceed &&
-                      std::string(v3.reason) == "event-medium");
+                  !v3.proceed && std::string(v3.reason) == "event-medium");
             // Case 29 (doc 03 §3.7): joint JEV error, end to end.
-            // t_max_elevated is the adversarial optimistic answer proxy
-            // (E .93 / macro / max / L .1, calib pass — not a claim that
-            // the recorded answer was empirically wrong). The independent
+            // max_elevated is the adversarial optimistic answer (high enter,
+            // max conviction, low latent risk, calib pass). The independent
             // RiskSnapshot supplies a real R2 pending-risk breach: intent
-            // 10% + pending 66% on another symbol = 76% > 75% cap, with
-            // no R1 count/direction trip, no symbol collision, no
-            // leverage trip. The four optimistic answers must not
-            // authorize around the independently detected breach.
-            std::string raw29 = read_all((dir + "/t_max_elevated.json").c_str());
-            JVal art29;
-            std::string err29;
-            CHECK("c29-parses", ParseJson(raw29, art29, err29));
-            const JVal* state29 = nullptr;
-            if (art29.t == JVal::T::OBJ) state29 = ObjGet(art29, "state");
-            JEVStateV3 st29;
-            std::string why29;
-            bool ok29 = state29 && state29->t == JVal::T::OBJ &&
-                        JEVStateV3::FromJVal(*state29, st29, why29);
-            CHECK("c29-state", ok29);
-            if (ok29) {
-                KernelState kern29;
-                std::string kwhy29;
-                CHECK("c29-kernel", KernelState::Create(
-                                          {"EURUSD"}, kwhy29, kern29));
-                ValidationRequest q29 = kern29.request_for(
-                    validation_bytes(raw29), key, st29.Serialize(),
-                    "EURUSD", 0.0, Mode::REPLAY);
-                ValidationResult r29 = validate_jev(q29);
-                CHECK("c29-valid", r29.ok());
-                if (r29.ok()) {
-                    RiskSnapshot s29 = Clean();
-                    s29.calib = CalibState::PASS;
-                    AddPending(s29, "GBPUSD", Side::SHORT, 6600000LL);
-                    VetoVerdict v29 = EvaluateVeto(s29);
-                    CHECK("c29-veto-hold",
-                          !v29.proceed &&
-                              std::string(v29.reason) == "pending-risk");
-                    // Isolated to that reason: no co-cause may hide
-                    // behind the same first reason in future changes.
-                    CHECK("c29-only-pending-veto",
-                          v29.n_reasons == 1 &&
-                              std::string(v29.reasons_all[0]) ==
-                                  "pending-risk");
-                    EngineInputs in29 = BuildEngineInputs(s29, v29);
-                    CHECK("c29-inputs",
-                          in29.deterministic_veto &&
-                              in29.veto_reason ==
-                                  VetoReason::PENDING_RISK);
-                    Decision d29 = EvaluateDecision(*r29.get(), in29);
-                    CHECK("c29-table-hold",
-                          d29.budget == Decision::Budget::HOLD &&
-                              d29.action == "HOLD" &&
-                              d29.reason == "engine-veto:pending-risk");
-                }
-            }
+            // 10% + pending 66% on another symbol = 76% > 75% cap, with no
+            // R1 trip, collision or leverage trip. The optimistic answer
+            // must not authorize around the independently detected breach.
+            RiskSnapshot s29 = Clean();
+            s29.calib = CalibState::PASS;
+            AddPending(s29, "GBPUSD", Side::SHORT, 6600000LL);
+            VetoVerdict v29 = EvaluateVeto(s29);
+            CHECK("c29-veto-hold",
+                  !v29.proceed && std::string(v29.reason) == "pending-risk");
+            CHECK("c29-only-pending-veto",
+                  v29.n_reasons == 1 &&
+                      std::string(v29.reasons_all[0]) == "pending-risk");
+            EngineInputs in29 = BuildEngineInputs(s29, v29);
+            CHECK("c29-inputs",
+                  in29.deterministic_veto &&
+                      in29.veto_reason == VetoReason::PENDING_RISK);
+            auto r29 = verdict(maxe, in29);
+            CHECK("c29-table-hold",
+                  !r29.pass && r29.action == "HOLD" && r29.reason == "engine");
+            // Sanity: the same artifact on a clean snapshot is eligible for
+            // the elevated tier, so the HOLD above is the veto's doing.
+            RiskSnapshot sc = Clean();
+            sc.calib = CalibState::PASS;
+            auto rc = verdict(maxe, BuildEngineInputs(sc, EvaluateVeto(sc)));
+            CHECK("c29-clean-eligible",
+                  rc.pass && rc.action == "PASS_ELEVATED_ELIGIBLE");
         }
     } else {
         printf("FAIL need-argv\n");

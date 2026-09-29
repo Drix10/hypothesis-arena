@@ -1,5 +1,5 @@
 #!/bin/bash
-# P3.1 gate: build + full validator suite + fuzz + API-surface check.
+# Kernel gate: build + every suite + authority/isolation/allocation greps.
 # Usage: ./build.sh [normal|hardened|sanitize]
 # Sanitizers: GCC ASan/UBSan runtimes do not ship for this MinGW target
 # (link fails: collect2 ld error, no libasan/libubsan). The hardened mode
@@ -32,61 +32,18 @@ elif [ "$MODE" = "hardened" ]; then
 else
     FLAGS="-std=c++17 -Wall -Wextra -O2"
 fi
-g++ $FLAGS -o tests/test_p31 tests/test_p31.cpp
-./tests/test_p31 fixtures
-g++ $FLAGS -o tests/test_p32 tests/test_p32.cpp
-./tests/test_p32 vectors
-g++ $FLAGS -o tests/test_p33 tests/test_p33.cpp
-./tests/test_p33 p33 fixtures
-# Slice A authority proof: the boundary is compiler-enforced, not merely
-# grep-policed. Each neg_* probe must fail compilation for its documented
-# reason; the positive control must compile, run, and exit 0 (it proves
-# the toolchain is healthy, so the failures are real rejections).
-for neg in auth/neg_*.cpp; do
-    # set -e is on: a failing probe compile would kill the script
-    # silently via the bare assignment, so capture status explicitly.
-    set +e
-    err="$(g++ $FLAGS -o /tmp/auth_neg "$neg" 2>&1)"
-    st=$?
-    set -e
-    if [ $st -eq 0 ]; then
-        echo "GATE FAIL: $neg compiled (authority boundary breached)"
-        exit 1
-    fi
-    echo "$err" | grep -qiE "private|deleted|read-only|lvalue|discards qualifiers" || {
-        echo "GATE FAIL: $neg failed for the wrong reason"
-        echo "$err" | head -5
-        exit 1
-    }
-done
-g++ $FLAGS -o /tmp/auth_pos auth/pos_authorized.cpp
-/tmp/auth_pos || { echo "GATE FAIL: authorized path broken"; exit 1; }
-# Friend list pinned tight inside ValidationRequest: exactly the
-# construction authority plus the read-only validator. Counts are
-# occurrences, not lines (a smuggled second declaration on one line must
-# still trip the gate), taken over the comment-stripped region (a matching
-# comment must never satisfy a positive check). Any third friend in that
-# region is a second authority. The neg_friendleak probe covers access
-# paths no text gate can name.
-_region="$(sed -n '/^class ValidationRequest {/,/^};/p' jev_validate.hpp | sed 's|//.*||')"
-[ "$(echo "$_region" | grep -o 'friend class KernelState;' | wc -l | tr -d ' ')" = "1" ] || {
-    echo "GATE FAIL: KernelState friendship moved"; exit 1; }
-[ "$(echo "$_region" | grep -o 'friend ValidationResult validate_jev(const ValidationRequest&);' | wc -l | tr -d ' ')" = "1" ] || {
-    echo "GATE FAIL: validator friendship moved"; exit 1; }
-[ "$(echo "$_region" | grep -o 'friend ' | wc -l | tr -d ' ')" = "2" ] || {
-    echo "GATE FAIL: unexpected friend (authority leak)"; exit 1; }
-g++ $FLAGS -o tests/fuzz_p31 tests/fuzz_p31.cpp
-./tests/fuzz_p31 20000
+g++ $FLAGS -o tests/test_jev_filter tests/test_jev_filter.cpp
+./tests/test_jev_filter jev_vectors
 # Slice B gate [correctness]: veto unit suite (doc 05 rule boundaries +
-# composed veto+table rows on committed P3.3 artifacts).
+# composed veto+filter rows on the committed filter vectors).
 g++ $FLAGS -o test_veto risk/test_veto.cpp risk/veto.cpp
-./test_veto p33 fixtures
+./test_veto jev_vectors
 # Slice B JEV isolation: veto.cpp must never read bounded model answers
 # (method calls or the validated type) , the frozen sec.3.2 table is the
 # only path from answers to size. This gate fails the build if any such
 # path is introduced, including via comments naming call syntax.
 for tok in '\.enter\(\)' 'latent_risk\(\)' 'conviction\(\)' 'family\(\)' \
-           'ValidatedJEVAnswerSetV3'; do
+           'jev_filter'; do
     if grep -nE "$tok" risk/veto.cpp; then
         echo "GATE FAIL: JEV answer read in veto ($tok)"
         exit 1
@@ -125,7 +82,7 @@ g++ $FLAGS -o test_bars runner/test_bars.cpp runner/bars.cpp runner/calendar.cpp
 g++ $FLAGS -o test_approved runner/test_approved.cpp runner/approved.cpp runner/calendar.cpp
 ./test_approved ..
 # The no-filter decision path must never reach a JEV AnswerSet.
-if grep -nE "AnswerSet|jev_v4|jev_state|validate_jev" exec/decide.cpp exec/decide.hpp risk/sizing.cpp risk/sizing.hpp; then
+if grep -nE "AnswerSet|jev_filter|jev_wire.*Validate" exec/decide.cpp exec/decide.hpp risk/sizing.cpp risk/sizing.hpp; then
     echo "GATE FAIL: no-filter path touches the AnswerSet surface"
     exit 1
 fi
@@ -213,7 +170,7 @@ fi
 # files (comments stripped; journal/broker std::string is documented
 # cycle-path, same class as Slice E).
 for tok in '\.enter\(\)' 'latent_risk\(\)' 'conviction\(\)' 'family\(\)' \
-           'ValidatedJEVAnswerSetV3' 'confidence' 'StageScale' \
+           'confidence' 'StageScale' \
            'PendingNotional' 'ReservedRisk' 'BuyingPower' \
            'DriftSelection' 'EvaluateVeto' 'clock\(' 'chrono' \
            'gettime' 'socket' 'popen' 'system\(' 'curl' 'getaddrinfo'; do
@@ -230,7 +187,7 @@ fi
 # any network/process/research affordance (comments stripped; the test
 # files are allowed clocks for the non-blocking proof, switch.* never).
 for tok in '\.enter\(\)' 'latent_risk\(\)' 'conviction\(\)' 'family\(\)' \
-           'ValidatedJEVAnswerSetV3' 'confidence' 'popen' 'system\(' \
+           'confidence' 'popen' 'system\(' \
            'socket' 'getaddrinfo' 'curl' 'clock\(' 'time\(' 'chrono'; do
     if sed 's|//.*||' kill/switch.hpp kill/switch.cpp | grep -nE "$tok"; then
         echo "GATE FAIL: forbidden path in kill ($tok)"
@@ -294,37 +251,16 @@ if grep -nE "effective\s*=\s*\"G[123]" stage/stage.cpp; then
     echo "GATE FAIL: stage escalation assignment present"
     exit 1
 fi
-# Acceptance: no downstream function may accept raw JEV JSON.
-# The header exposes exactly one entry point: validate_jev().
-if grep -nE "\b(evaluate|decide|decide_from_json|from_json)\s*\(" jev_validate.hpp \
-    | grep -v validate_jev; then
-    echo "GATE FAIL: raw-JSON downstream API present"
-    exit 1
-fi
-# P3.3: the decision table consumes the typed object only (never raw JSON
-# or parsed AnswerSet values smuggled around the validator).
-if grep -nE "EvaluateDecision[^(]*\([^)]*std::string" decision_table.hpp; then
-    echo "GATE FAIL: decision table takes raw strings"
-    exit 1
-fi
-# No confidence accessor may exist on any decision object (P3.4/b quarantine).
-if grep -nE "confidence\s*\(\s*\)" jev_validate.hpp jev_state.hpp kernel_state.hpp decision_table.hpp; then
-    echo "GATE FAIL: confidence accessor present"
+# The filter is the single entry point for model answers: nothing outside
+# it, its test and the veto composition test may call it.
+if grep -rnE "jev_filter::Validate" --include=*.cpp --include=*.hpp . \
+    | grep -v "^./jev_filter.hpp\|^./tests/test_jev_filter.cpp\|^./risk/test_veto.cpp"; then
+    echo "GATE FAIL: JEV filter called from an unexpected place"
     exit 1
 fi
 # Confidence must never be read on any kernel path (comments may name it).
-if grep -nE "\.confidence|->confidence" jev_state.hpp kernel_state.hpp decision_table.hpp; then
+if grep -nE "\.confidence|->confidence" jev_filter.hpp; then
     echo "GATE FAIL: confidence read on kernel path"
     exit 1
 fi
-# P3.2 interop: test_p32.cpp must never invoke Python (committed files only).
-if grep -nE "popen|system\(|python" tests/test_p32.cpp; then
-    echo "GATE FAIL: test_p32 depends on Python"
-    exit 1
-fi
-# P3.3 replay/table suite: committed files only, same rule.
-if grep -nE "popen|system\(|python" tests/test_p33.cpp; then
-    echo "GATE FAIL: test_p33 depends on Python"
-    exit 1
-fi
-echo "P3.1 GATE ($MODE): PASS"
+echo "KERNEL GATE ($MODE): PASS"

@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "stage.hpp"
-#include "../jev_validate.hpp"  // Sha256Hex for fixture construction
+#include "../jev_wire.hpp"  // Sha256Hex for fixture construction
 
 static int g_fail = 0;
 
