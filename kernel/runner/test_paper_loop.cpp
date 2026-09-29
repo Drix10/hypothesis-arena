@@ -179,6 +179,7 @@ int main(int argc, char** argv) {
     lc.dir = env.dir;
     lc.tables.sleeves.push_back({"trend_etf_v1", 3600});
     lc.tables.allowlist = {"VTI", "IEF"};
+    lc.holidays = {DaysFromCivil(2026, 12, 25)};
     PaperLoop loop(runner, io, lc);
 
     // 1. account outage: nothing is consumed.
@@ -253,6 +254,25 @@ int main(int argc, char** argv) {
     // 9. a restart reloads the book from settle.log.
     PaperLoop again(runner, io, lc);
     CHECK("book-reloads", again.stats().seen == 0);
+
+    // 10. an unterminated oversize line does not stall the queue.
+    Append(env.dir + "/candidates.jsonl", std::string(1100000, 'x'));
+    loop.Tick(NOW_S * 1000000000LL);
+    CHECK("oversize-skipped", loop.stats().skipped_long == 1);
+    Append(env.dir + "/candidates.jsonl", "\n" + Cand("rogue_v9"));
+    loop.Tick(NOW_S * 1000000000LL);
+    CHECK("queue-resumes", loop.stats().seen == 2);
+
+    // 11. a rotated (shorter) candidates file is replayed, not lost.
+    std::remove((env.dir + "/candidates.jsonl").c_str());
+    Append(env.dir + "/candidates.jsonl", Cand("rogue_v9"));
+    loop.Tick(NOW_S * 1000000000LL);
+    CHECK("rotation-replays", loop.stats().seen == 1);
+
+    // 12. a calendar with no holiday in the traded year fails closed.
+    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1"));
+    loop.Tick((NOW_S + 400LL * 86400) * 1000000000LL);
+    CHECK("calendar-year-uncovered", !loop.stats().account_ok);
 
     CHECK("offset-persisted", Slurp(env.dir + "/candidates.offset").size() > 0);
     CHECK("hwm-persisted", Slurp(env.dir + "/hwm.txt") == "10000000");

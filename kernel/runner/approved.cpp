@@ -32,7 +32,12 @@ bool IsoDay(const std::string& s, int64_t* day) {
                                       &tail) != 3 ||
         m < 1 || m > 12 || d < 1 || d > 31)
         return false;
-    *day = DaysFromCivil(y, (unsigned)m, (unsigned)d);
+    int64_t z = DaysFromCivil(y, (unsigned)m, (unsigned)d);
+    // Reject dates the calendar normalises (Feb 31 and the like).
+    int64_t next = m == 12 ? DaysFromCivil(y + 1, 1, 1)
+                           : DaysFromCivil(y, (unsigned)m + 1, 1);
+    if (z >= next) return false;
+    *day = z;
     return true;
 }
 

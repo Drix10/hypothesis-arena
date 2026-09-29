@@ -36,10 +36,13 @@ int main(int argc, char** argv) {
         return 2;
     }
     long long ticks = 1, interval = 60;
-    for (int a = 3; a + 1 < argc; a += 2) {
-        if (std::strcmp(argv[a], "--ticks") == 0) ticks = std::atoll(argv[a + 1]);
-        else if (std::strcmp(argv[a], "--interval-s") == 0)
-            interval = std::atoll(argv[a + 1]);
+    for (int a = 3; a < argc; a += 2) {
+        if (a + 1 >= argc) return 2;
+        char* end = nullptr;
+        long long v = std::strtoll(argv[a + 1], &end, 10);
+        if (end == argv[a + 1] || *end) return 2;
+        if (std::strcmp(argv[a], "--ticks") == 0) ticks = v;
+        else if (std::strcmp(argv[a], "--interval-s") == 0) interval = v;
         else return 2;
     }
     if (ticks < 0 || interval < 1) return 2;

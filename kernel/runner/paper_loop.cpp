@@ -5,6 +5,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <unistd.h>
+
 #include "../exec/decide.hpp"
 #include "../jev_validate.hpp"
 #include "../risk/measure.hpp"
@@ -44,14 +46,35 @@ int64_t ReadInt(const std::string& path) {
     return v > 0 ? v : 0;
 }
 
-void WriteInt(const std::string& path, int64_t v) {
+int64_t FileSize(const std::string& path) {
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return 0;
+    std::fseek(f, 0, SEEK_END);
+    long n = std::ftell(f);
+    std::fclose(f);
+    return n < 0 ? 0 : n;
+}
+
+bool WriteInt(const std::string& path, int64_t v) {
     std::string tmp = path + ".tmp";
     FILE* f = std::fopen(tmp.c_str(), "wb");
-    if (!f) return;
+    if (!f) return false;
     std::fprintf(f, "%lld", (long long)v);
     std::fflush(f);
-    std::fclose(f);
-    std::rename(tmp.c_str(), path.c_str());
+    ::fsync(fileno(f));
+    if (std::fclose(f) != 0) return false;
+    return std::rename(tmp.c_str(), path.c_str()) == 0;
+}
+
+// The calendar must list at least one holiday in the year being traded;
+// otherwise holidays would read as sessions and settlement as early.
+bool CalendarCovers(const std::set<int64_t>& hol, int64_t day) {
+    int y = 1970 + (int)(day / 365);
+    while (DaysFromCivil(y, 1, 1) > day) --y;
+    while (DaysFromCivil(y + 1, 1, 1) <= day) ++y;
+    int64_t lo = DaysFromCivil(y, 1, 1), hi = DaysFromCivil(y + 1, 1, 1);
+    auto it = hol.lower_bound(lo);
+    return it != hol.end() && *it < hi;
 }
 
 bool Http(const LoopIO& io, const char* method, const std::string& path,
@@ -134,26 +157,35 @@ void MeasureRisk(const LoopIO& io, const LoopConfig& cfg,
     s->r7_available = ok;
 }
 
-// Submitted decisions in the current UTC day and hour, from our own log.
+// Orders submitted in the current UTC day and hour, from submitted.log
+// (one ts_ns per line; the last 1 MiB covers far more than a day of orders).
 void CountSubmitted(const std::string& dir, int64_t now_ns, int64_t* day,
                     int64_t* hour) {
     *day = *hour = 0;
-    std::string log = ReadFrom(dir + "/decisions.jsonl", 0);
+    std::string path = dir + "/submitted.log";
+    int64_t size = FileSize(path);
+    int64_t from = size > (int64_t)kMaxRead ? size - (int64_t)kMaxRead : 0;
+    std::string log = ReadFrom(path, from);
     const int64_t d_ns = 86400LL * 1000000000LL, h_ns = 3600LL * 1000000000LL;
     size_t at = 0;
+    if (from > 0) {
+        size_t nl = log.find('\n');
+        at = nl == std::string::npos ? log.size() : nl + 1;
+    }
     while (at < log.size()) {
         size_t nl = log.find('\n', at);
         if (nl == std::string::npos) break;
-        std::string line = log.substr(at, nl - at);
+        long long ts = std::strtoll(log.c_str() + at, nullptr, 10);
         at = nl + 1;
-        if (line.find("\"submit\":\"submitted\"") == std::string::npos)
-            continue;
-        size_t k = line.find("\"ts_ns\":");
-        if (k == std::string::npos) continue;
-        int64_t ts = std::strtoll(line.c_str() + k + 8, nullptr, 10);
         if (ts / d_ns == now_ns / d_ns) ++*day;
         if (ts / h_ns == now_ns / h_ns) ++*hour;
     }
+}
+
+void AppendSubmitted(const std::string& dir, int64_t now_ns) {
+    char ln[32];
+    std::snprintf(ln, sizeof(ln), "%lld", (long long)now_ns);
+    AppendLine((dir + "/submitted.log").c_str(), ln);
 }
 
 bool FileExists(const std::string& path) {
@@ -163,7 +195,7 @@ bool FileExists(const std::string& path) {
     return true;
 }
 
-void LogDecision(const std::string& dir, int64_t now_ns,
+bool LogDecision(const std::string& dir, int64_t now_ns,
                  const exec::EntryDecision& d, const char* submit) {
     char ln[512];
     std::snprintf(ln, sizeof(ln),
@@ -174,7 +206,7 @@ void LogDecision(const std::string& dir, int64_t now_ns,
                   d.proceed ? "true" : "false", d.reason.c_str(),
                   (long long)(d.proceed ? d.intent.qty_shares : 0),
                   d.limiter.c_str(), submit);
-    AppendLine((dir + "/decisions.jsonl").c_str(), ln);
+    return AppendLine((dir + "/decisions.jsonl").c_str(), ln);
 }
 
 }  // namespace
@@ -203,16 +235,37 @@ bool PaperLoop::Tick(int64_t now_ns) {
                 Http(io_, "GET", "/v2/account", &acct) &&
                 Http(io_, "GET", "/v2/positions", &pos) &&
                 ParseAccount(acct, &av) && ParsePositions(pos, &held);
-    stats_.account_ok = have && !av.blocked;
     int64_t now_s = now_ns / 1000000000LL;
+    stats_.account_ok = have && !av.blocked &&
+                        CalendarCovers(cfg_.holidays,
+                                       (now_s + EtOffsetSeconds(now_s)) / 86400);
+    if (stats_.account_ok) {
+        std::string hp = cfg_.dir + "/hwm.txt";
+        if (av.equity_cents > ReadInt(hp)) WriteInt(hp, av.equity_cents);
+    }
 
     // Without account information nothing is consumed: the lines wait, and
     // the freshness window retires them if the outage outlasts it.
     std::string opath = cfg_.dir + "/candidates.offset";
     int64_t base = stats_.account_ok ? ReadInt(opath) : 0;
-    std::string chunk =
-        stats_.account_ok ? ReadFrom(cfg_.dir + "/candidates.jsonl", base) : "";
+    std::string cpath = cfg_.dir + "/candidates.jsonl";
+    if (base > FileSize(cpath)) base = 0;  // rotated or truncated: replay, the runner dedups on cid
+    std::string chunk = stats_.account_ok ? ReadFrom(cpath, base) : "";
+    if (chunk.size() >= kMaxRead && chunk.find('\n') == std::string::npos) {
+        // One unterminated oversize line: skip it so the loop cannot stall.
+        ++stats_.seen;
+        ++stats_.skipped_long;
+        exec::EntryDecision d;
+        d.reason = "line-too-long";
+        ++stats_.held;
+        if (LogDecision(cfg_.dir, now_ns, d, "none"))
+            WriteInt(opath, base + (int64_t)chunk.size());
+        chunk.clear();
+    }
     size_t at = 0;
+    // Orders already sent this tick are invisible to the account snapshot.
+    std::vector<risk::Position> sent;
+    int64_t spent_cents = 0;
     for (;;) {
         size_t nl = chunk.find('\n', at);
         if (nl == std::string::npos) break;
@@ -235,6 +288,7 @@ bool PaperLoop::Tick(int64_t now_ns) {
             in.tables.held.clear();
             for (const auto& p : held)
                 if (p.is_long && p.qty > 0) in.tables.held.push_back(p.symbol);
+            for (const auto& p : sent) in.tables.held.push_back(p.symbol);
             in.now_ns = now_ns;
             in.risk_bp = cfg_.risk_bp;
             for (const auto& p : held)
@@ -242,14 +296,11 @@ bool PaperLoop::Tick(int64_t now_ns) {
             risk::RiskSnapshot& s = in.state;
             s.equity_cents = av.equity_cents;
             int64_t hwm = ReadInt(cfg_.dir + "/hwm.txt");
-            if (av.equity_cents > hwm) {
-                hwm = av.equity_cents;
-                WriteInt(cfg_.dir + "/hwm.txt", hwm);
-            }
+            if (av.equity_cents > hwm) hwm = av.equity_cents;
             s.daily_close_hwm_cents = s.intraday_hwm_cents = hwm;
             int64_t today = (now_s + EtOffsetSeconds(now_s)) / 86400;
             s.settled_cash_cents =
-                book_.SettledCents(av.settled_cash_cents, today);
+                book_.SettledCents(av.settled_cash_cents, today) - spent_cents;
             CountSubmitted(cfg_.dir, now_ns, &s.day_count, &s.hour_count);
             s.entry_halt = FileExists(cfg_.dir + "/HALT");
             for (const auto& p : held) {
@@ -261,6 +312,7 @@ bool PaperLoop::Tick(int64_t now_ns) {
                                         : p.market_value_cents;
                 s.open.push_back(rp);
             }
+            for (const auto& rp : sent) s.open.push_back(rp);
             s.session_open = SessionOpen(clock);
             s.day_number = now_ns / 1000 / (86400LL * 1000000LL);
             s.hour_bucket = now_ns / 1000 / (3600LL * 1000000LL);
@@ -274,6 +326,15 @@ bool PaperLoop::Tick(int64_t now_ns) {
                 const char* why = nullptr;
                 if (runner_.SubmitIntent(d.intent, &why)) {
                     submit = "submitted";
+                    AppendSubmitted(cfg_.dir, now_ns);
+                    if (d.intent.kind == risk::IntentKind::ENTRY) {
+                        risk::Position rp;
+                        rp.symbol = d.symbol;
+                        rp.side = risk::Side::LONG;
+                        rp.notional_cents = pre.entry_cents * d.intent.qty_shares;
+                        sent.push_back(rp);
+                        spent_cents += rp.notional_cents;
+                    }
                     if (d.intent.kind == risk::IntentKind::EXIT) {
                         int64_t proceeds = pre.entry_cents * d.intent.qty_shares;
                         int64_t today = (now_s + EtOffsetSeconds(now_s)) / 86400;
@@ -292,8 +353,9 @@ bool PaperLoop::Tick(int64_t now_ns) {
             }
         }
         d.proceed ? ++stats_.proceeded : ++stats_.held;
-        LogDecision(cfg_.dir, now_ns, d, submit);
-        WriteInt(opath, base + (int64_t)at);
+        // A lost audit line or offset is replayed next tick, never skipped.
+        if (!LogDecision(cfg_.dir, now_ns, d, submit)) break;
+        if (!WriteInt(opath, base + (int64_t)at)) break;
     }
     return runner_.Cycle(now_ns);
 }

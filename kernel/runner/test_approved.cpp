@@ -42,6 +42,8 @@ int main(int argc, char** argv) {
                              h.count(DaysFromCivil(2026, 12, 25)) == 1);
     for (const char* bad : {"", "{}", "{\"holidays_2026\":[]}",
                             "{\"holidays_2026\":[\"2026-13-01\"]}",
+                            "{\"holidays_2026\":[\"2026-02-31\"]}",
+                            "{\"holidays_2026\":[\"2026-04-31\"]}",
                             "{\"holidays_2026\":[\"nope\"]}",
                             "{\"holidays_2026\":\"2026-01-01\"}",
                             "{\"holidays_2026\":[5]}"})

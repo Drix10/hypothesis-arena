@@ -1,5 +1,5 @@
 """Writes candidates.jsonl lines for the core passive sleeve from SIP daily
-bars. Run once per session after the close; idempotent per symbol and month.
+bars. Run once per session after the close; at most one emission per symbol and month.
 
     python3 ops/emit_candidates.py <loop_dir>
 
@@ -62,11 +62,13 @@ def main(argv, now=None):
     held = set()  # the kernel's veto refuses a collision; no broker read here
     lines, keys = core_passive.build(bars, held, now.strftime("%Y-%m"),
                                      emitted, int(now.timestamp() * 1e9))
+    # State first: a crash between the two loses a candidate for this month
+    # (fail closed) rather than emitting a second buy under a new cid.
+    save_state(state_path, emitted | set(keys))
     with open(os.path.join(d, "candidates.jsonl"), "a") as f:
         f.writelines(lines)
         f.flush()
         os.fsync(f.fileno())
-    save_state(state_path, emitted | set(keys))
     print(json.dumps({"emitted": keys}))
     return 0
 
