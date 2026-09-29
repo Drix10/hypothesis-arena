@@ -1,10 +1,10 @@
 {
   "cost_model_version": "cost_v2",
-  "created": "2026-09-28",
+  "created": "2026-09-29",
   "decision": {
     "max_drawdown_pct": 25.0,
     "min_cost_multiple": 2.0,
-    "min_days": 2000,
+    "min_days": 1000,
     "min_net_sharpe": 0.5,
     "new_signal_tstat_min": 3.0
   },
@@ -12,12 +12,12 @@
   "family": "trend",
   "holdout": {
     "end": "2026-09-01",
-    "rule": "untouched until the single final evaluation; one look only",
-    "start": "2023-09-01"
+    "rule": "last 25% of the sample (longer than 3 years, doc 11 0b); untouched until the single final evaluation; one look only",
+    "start": "2021-11-01"
   },
-  "hypothesis": "Holding each of VTI/VEU/VNQ/IEF/DBC only while its month-end close exceeds its 10-month mean beats vol-matched buy-and-hold and 60/40 net of cost_v2 at 2x cost.",
+  "hypothesis": "Holding each of VTI/VEU/VNQ/IEF/DBC only while its month-end close exceeds its 10-month mean, parking off-trend slots in BIL, beats the vol-matched 60/40 (VTI/IEF) and T-bill cash net of cost_v2 at 2x cost. Reported alongside: equal-weight buy-and-hold of the same five.",
   "schema": "prereg_v1",
-  "signal": "research.strategy.sleeves.trend variant ma10: at each calendar month-end hold asset next month iff close > mean of last 10 month-end closes, else cash (BIL leg unallocated); equal weight 1/5; orders next session, sells before buys on settled cash",
+  "signal": "research.strategy.sleeves.trend variant ma10: at each calendar month-end hold an asset next month iff close > mean of its last 10 month-end closes, else its 1/5 slot goes to BIL; equal weight 1/5; orders at the next open, sells before buys, buys from settled cash only. Prices are split+dividend adjusted SIP daily bars.",
   "sleeve": "T1",
   "split": {
     "embargo_days": 5,

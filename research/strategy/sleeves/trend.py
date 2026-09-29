@@ -3,7 +3,9 @@
 `make_target_fn(sessions, universe, variant)` returns a stateful target_fn
 for portfolio.run: it only sees closes up to `date`, acts on the last
 session of each calendar month, and returns None (hold) on other days.
-Cash slots are simply unallocated weight (equal weight 1/len(universe)).
+Slots that are off-trend (and every slot during warm-up) are parked in the
+cash leg (BIL), so the sleeve earns the T-bill return it is benchmarked
+against. Equal weight 1/len(universe) per slot.
 """
 MA_MONTHS = 10
 MOM_MONTHS = 12
@@ -29,30 +31,30 @@ def month_end_flags(sessions):
     return flags
 
 
-def make_target_fn(sessions, universe, variant="ma10"):
+def make_target_fn(sessions, universe, variant="ma10", park=True):
     if variant not in VARIANTS:
         raise TrendError("variant")
     if not universe or len(set(universe)) != len(universe):
         raise TrendError("universe")
-    if variant == "mom12_vs_tbill" and CASH_LEG in universe:
+    if CASH_LEG in universe:
         raise TrendError("cash-leg-in-universe")
     flags = month_end_flags(sessions)
     hist = {s: [] for s in universe}
     tb = []
+    need_cash = park or variant == "mom12_vs_tbill"
     w = 1.0 / len(universe)
 
     def fn(date, closes):
         if date not in flags:
             return None
+        last = {s: (closes.get(s) or [None])[-1] for s in universe}
+        b = (closes.get(CASH_LEG) or [None])[-1]
+        if any(not (c and c > 0) for c in last.values()) or \
+                (need_cash and not (b and b > 0)):
+            return None  # data hole: skip this rebalance, never guess
         for s in universe:
-            c = closes.get(s)
-            if c is None or not c > 0:
-                return {}
-            hist[s].append(c)
-        if variant == "mom12_vs_tbill":
-            b = closes.get(CASH_LEG)
-            if b is None or not b > 0:
-                return {}
+            hist[s].append(last[s])
+        if need_cash:
             tb.append(b)
         out = {}
         for s in universe:
@@ -68,6 +70,8 @@ def make_target_fn(sessions, universe, variant="ma10"):
                 if h[-1] / h[-1 - MOM_MONTHS] - 1.0 > \
                         tb[-1] / tb[-1 - MOM_MONTHS] - 1.0:
                     out[s] = w
+        if park and sum(out.values()) < 1.0 - 1e-12:
+            out[CASH_LEG] = 1.0 - sum(out.values())
         return out
 
     return fn
