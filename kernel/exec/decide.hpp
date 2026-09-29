@@ -27,6 +27,7 @@ struct EntryDecision {
     std::string reason = "bad-inputs";   // frozen reason code when HOLD
     std::string limiter;                 // which sizing term bound the size
     std::string cid;                     // candidate id (also the intent id)
+    std::string symbol;                  // candidate symbol once validated
     OrderIntent intent{};                // valid only when proceed
 };
 

@@ -1,0 +1,233 @@
+// PaperLoop against a real G0Runner in a temp directory with injected
+// REST/data. STAGE here is a test artifact; the real one is human-created.
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <sstream>
+#include <string>
+
+#include <sys/stat.h>
+
+#include "../jev_validate.hpp"
+#include "bars.hpp"
+#include "calendar.hpp"
+#include "paper_loop.hpp"
+
+static int fails = 0, count = 0;
+#define CHECK(name, expr)              \
+    do {                               \
+        ++count;                       \
+        if (!(expr)) {                 \
+            std::printf("FAIL %s\n", name); \
+            ++fails;                   \
+        }                              \
+    } while (0)
+
+using namespace jev;
+using namespace jev::runner;
+
+static std::string g_fix;                 // fixtures dir
+static std::string g_account, g_bracket;  // fixture bodies
+static bool g_account_up = true;
+static bool g_data_up = true;
+static int g_orders_posted = 0;
+static int64_t NOW_S = 0;
+
+static std::string Slurp(const std::string& p) {
+    std::ifstream f(p);
+    std::stringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+static void Write(const std::string& p, const std::string& b) {
+    FILE* f = std::fopen(p.c_str(), "wb");
+    std::fwrite(b.data(), 1, b.size(), f);
+    std::fclose(f);
+}
+
+static long long Now(void*) { return NOW_S * 1000000000LL; }
+static int NoStream(void*, char*, int) { return 0; }
+static void NoKill(void*, kill::KillInputs* o) { *o = kill::KillInputs(); }
+static broker::HttpResult Venue(const broker::HttpRequest& r) {
+    broker::HttpResult out;
+    out.status = 200;
+    if (std::strcmp(r.method, "POST") == 0) ++g_orders_posted;
+    std::snprintf(out.body, sizeof(out.body), "%s", g_bracket.c_str());
+    return out;
+}
+
+// Hourly bars for `sym` ending at the last completed regular bar before now.
+static std::string BarsJson(const std::string& sym, int n, double vol) {
+    std::set<int64_t> none;
+    auto starts = ExpectedStarts(NOW_S, n, none);
+    std::string out = "{\"bars\":{\"" + sym + "\":[";
+    double p = 100.0;
+    for (size_t i = 0; i < starts.size(); ++i) {
+        p *= std::exp(vol * std::sin(i * 12.9898));
+        char b[96];
+        std::snprintf(b, sizeof(b), "%s{\"t\":\"%s\",\"c\":%.4f}", i ? "," : "",
+                      FormatIsoZ(starts[i]).c_str(), p);
+        out += b;
+    }
+    return out + "]},\"next_page_token\":null}";
+}
+
+static const char* K[12] = {"strategy_version", "symbol", "snapshot_ts_ns",
+    "proposed_side", "proposed_family", "entry_px", "stop_px", "tp_px",
+    "time_exit_ns", "exit_profile_version", "cost_model_version",
+    "feature_revision"};
+static std::string Cand(const std::string& sleeve, int64_t age_s = 60) {
+    std::string f[12] = {sleeve, "VTI",
+                         std::to_string(NOW_S * 1000000000LL - age_s * 1000000000LL),
+                         "BUY", "trend", "250.50", "230.00", "999.00", "0",
+                         "exit_trend_v1", "cost_v2", "f1"};
+    std::string joined, c;
+    for (int i = 0; i < 12; ++i) {
+        if (i) joined += "|";
+        joined += f[i];
+        c += std::string("\"") + K[i] + "\":\"" + f[i] + "\",";
+    }
+    return "{\"schema\":\"c1\",\"created_ns\":\"5\",\"candidate\":{" + c +
+           "\"cid\":\"" + Sha256Hex(joined) + "\"}}\n";
+}
+
+static void Append(const std::string& p, const std::string& s) {
+    FILE* f = std::fopen(p.c_str(), "ab");
+    std::fwrite(s.data(), 1, s.size(), f);
+    std::fclose(f);
+}
+
+struct Env {
+    std::string dir = "plp_tmp";
+    Env() {
+        std::system(("rm -rf " + dir).c_str());
+        mkdir(dir.c_str(), 0755);
+        std::string body = "G0_PAPER|human|2026-09-25T00:00:00Z|0|GENESIS";
+        Write(dir + "/STAGE",
+              "stage: G0_PAPER\napproved_by: human\napproved_at: "
+              "2026-09-25T00:00:00Z\ncapital_usd: 0\nattest_hash: " +
+                  Sha256Hex(body) + "\n");
+    }
+    ~Env() { std::system(("rm -rf " + dir).c_str()); }
+};
+
+int main(int argc, char** argv) {
+    if (argc != 2) return 2;
+    g_fix = argv[1];
+    g_account = Slurp(g_fix + "/alpaca_account.json");
+    g_bracket = Slurp(g_fix + "/alpaca_bracket_reply.json");
+    // Monday 2026-09-28 20:30Z = 16:30 ET, after the close.
+    NOW_S = DaysFromCivil(2026, 9, 28) * 86400 + 20 * 3600 + 30 * 60;
+
+    Env env;
+    RunnerConfig cfg;
+    cfg.dir = env.dir;
+    std::strncpy(cfg.venue.broker, "alpaca-paper", 31);
+    std::strncpy(cfg.venue.account, "test", 31);
+    std::string ch(64, 'a');
+    std::strncpy(cfg.venue.context_hash, ch.c_str(), 64);
+    cfg.venue.context_hash[64] = 0;
+    RunnerDeps deps;
+    deps.transport = Venue;
+    deps.stream_read = NoStream;
+    deps.now_ns = Now;
+    deps.kill_inputs = NoKill;
+    deps.restart_flag = true;
+    G0Runner runner(cfg, deps);
+    const char* why = nullptr;
+    CHECK("runner-recovers", runner.Recover(&why));
+
+    LoopIO io;
+    io.rest = [](const char*, const std::string& path, int* st,
+                 std::string* body) {
+        *st = 200;
+        if (path == "/v2/clock") *body = "{\"is_open\":true}";
+        else if (path == "/v2/account") {
+            if (!g_account_up) return false;
+            *body = g_account;
+        } else if (path == "/v2/positions") *body = "[]";
+        else return false;
+        return true;
+    };
+    io.data = [](const std::string& path, std::string* body) {
+        if (!g_data_up) return false;
+        // Two pages: the first carries a token whose base64 characters must
+        // come back percent-encoded.
+        bool second = path.find("page_token=") != std::string::npos;
+        if (second && path.find("page_token=AB%2BC%2F%3D%3D") ==
+                          std::string::npos)
+            return false;
+        std::string all = BarsJson("VTI", 560, 0.002);
+        size_t cut = all.find("\"t\":", all.size() / 2);
+        cut = all.rfind("{", cut);
+        std::string head = all.substr(0, cut - 1);   // drop the comma
+        std::string tail = all.substr(cut);
+        if (!second) {
+            *body = head + "]},\"next_page_token\":\"AB+C/==\"}";
+        } else {
+            *body = "{\"bars\":{\"VTI\":[" + tail;
+        }
+        return true;
+    };
+    LoopConfig lc;
+    lc.dir = env.dir;
+    lc.tables.sleeves.push_back({"trend_etf_v1", 3600});
+    lc.tables.allowlist = {"VTI", "IEF"};
+    PaperLoop loop(runner, io, lc);
+
+    // 1. account outage: nothing is consumed.
+    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1"));
+    g_account_up = false;
+    loop.Tick(NOW_S * 1000000000LL);
+    CHECK("outage-consumes-nothing", loop.stats().seen == 0 &&
+                                         !loop.stats().account_ok);
+    g_account_up = true;
+
+    // 2. clean candidate: sized, vetoed clean, submitted.
+    loop.Tick(NOW_S * 1000000000LL);
+    CHECK("proceeds-and-submits", loop.stats().seen == 1 &&
+                                      loop.stats().proceeded == 1);
+    CHECK("one-slot", runner.slots() == 1);
+    std::string dec = Slurp(env.dir + "/decisions.jsonl");
+    if (loop.stats().proceeded != 1) std::printf("DECISIONS: %s\n", dec.c_str());
+    CHECK("decision-logged", dec.find("\"proceed\":true") != std::string::npos &&
+                                 dec.find("\"submit\":\"submitted\"") !=
+                                     std::string::npos &&
+                                 dec.find("\"qty\":12") != std::string::npos);
+
+    // 3. offsets: the same line is never processed twice.
+    loop.Tick(NOW_S * 1000000000LL);
+    CHECK("no-reprocessing", loop.stats().seen == 0);
+
+    // 4. holds are logged, not silent.
+    Append(env.dir + "/candidates.jsonl", Cand("rogue_v9"));
+    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 7200));
+    loop.Tick(NOW_S * 1000000000LL);
+    dec = Slurp(env.dir + "/decisions.jsonl");
+    CHECK("unapproved-held", loop.stats().held == 2 &&
+                                 dec.find("cand-sleeve-unapproved") !=
+                                     std::string::npos &&
+                                 dec.find("cand-stale-or-future") !=
+                                     std::string::npos);
+
+    // 5. no market data: R6/R7 unavailable, entry held.
+    g_data_up = false;
+    Append(env.dir + "/candidates.jsonl",
+           Cand("trend_etf_v1", 30));
+    loop.Tick(NOW_S * 1000000000LL);
+    dec = Slurp(env.dir + "/decisions.jsonl");
+    CHECK("no-data-holds", loop.stats().held == 1 &&
+                               dec.find("r6-unavailable") != std::string::npos);
+    g_data_up = true;
+
+    // 6. garbage lines are rejected as shape errors and skipped.
+    Append(env.dir + "/candidates.jsonl", "not json\n");
+    loop.Tick(NOW_S * 1000000000LL);
+    CHECK("garbage-held", loop.stats().held == 1);
+    CHECK("offset-persisted", Slurp(env.dir + "/candidates.offset").size() > 0);
+    CHECK("hwm-persisted", Slurp(env.dir + "/hwm.txt") == "10000000");
+    std::printf("CHECKS: %d/%d PASS\n", count - fails, count);
+    return fails ? 1 : 0;
+}

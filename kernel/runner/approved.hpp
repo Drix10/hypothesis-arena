@@ -1,0 +1,24 @@
+// Loaders for the two operator-owned inputs of the paper loop: the approved
+// sleeves + instrument allowlist (stage manifest), and the exchange calendar.
+// Both fail closed: unreadable or malformed input is a refusal to run.
+#pragma once
+#include <cstdint>
+#include <set>
+#include <string>
+
+#include "../ingest/candidates.hpp"
+
+namespace jev {
+namespace runner {
+
+// {"sleeves":[{"id":"trend_etf_v1","window_s":3600}],"allowlist":["VTI"]}
+bool ParseApproved(const std::string& json, ingest::CandidateTables* out);
+
+// collector/session_calendar.json: every "holidays_YYYY" array of ISO dates.
+// Needs at least one holiday list and a valid date for every entry.
+bool ParseCalendar(const std::string& json, std::set<int64_t>* holidays);
+
+bool ReadFile(const std::string& path, std::string* out);
+
+}  // namespace runner
+}  // namespace jev

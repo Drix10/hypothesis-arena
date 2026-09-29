@@ -8,10 +8,12 @@ namespace jev {
 namespace exec {
 namespace {
 
-EntryDecision Hold(const std::string& reason, const std::string& cid = "") {
+EntryDecision Hold(const std::string& reason, const std::string& cid = "",
+                   const std::string& symbol = "") {
     EntryDecision d;
     d.reason = reason;
     d.cid = cid;
+    d.symbol = symbol;
     return d;
 }
 
@@ -27,7 +29,7 @@ EntryDecision Decide(const DecideInput& in) {
     ingest::CandOutcome c =
         ingest::ValidateCandidate(*in.record, in.tables, in.now_ns);
     if (!c.accepted) return Hold(ingest::CandRejectStr(c.code));
-    if (c.side != "BUY") return Hold("exit-path-not-sized", c.cid);
+    if (c.side != "BUY") return Hold("exit-path-not-sized", c.cid, c.symbol);
 
     risk::RiskSnapshot s = in.state;
     risk::StageScale st = risk::ScaleFor(s.stage);
@@ -47,7 +49,7 @@ EntryDecision Decide(const DecideInput& in) {
     si.r2_headroom_cents = INT64_MAX;  // the veto below is the R2 authority
     si.liquidity_cap_shares = in.liquidity_cap_shares;
     risk::Sizing z = risk::ComputeSize(si);
-    if (z.qty <= 0) return Hold(z.limiter, c.cid);
+    if (z.qty <= 0) return Hold(z.limiter, c.cid, c.symbol);
 
     s.v3_constraints = true;
     s.instrument_allowed = true;  // the candidate gate checked the allowlist
@@ -60,16 +62,17 @@ EntryDecision Decide(const DecideInput& in) {
     s.intent.account = risk::AccountType::CASH;
     s.now_us = in.now_ns / 1000;
     risk::VetoVerdict v = risk::EvaluateVeto(s);
-    if (!v.proceed) return Hold(v.reason, c.cid);
+    if (!v.proceed) return Hold(v.reason, c.cid, c.symbol);
     // A drift-removal directive must be executed and reconciled before any
     // new entry (veto.hpp H1 contract); until that path exists, hold.
-    if (v.drift_idx >= 0) return Hold("r7-drift-directive-pending", c.cid);
+    if (v.drift_idx >= 0) return Hold("r7-drift-directive-pending", c.cid, c.symbol);
 
     EntryDecision d;
     d.proceed = true;
     d.reason = "proceed";
     d.limiter = z.limiter;
     d.cid = c.cid;
+    d.symbol = c.symbol;
     Copy(d.intent.intent_id, sizeof(d.intent.intent_id), c.cid);
     Copy(d.intent.symbol, sizeof(d.intent.symbol), c.symbol);
     d.intent.side = broker::OrderSide::BUY;

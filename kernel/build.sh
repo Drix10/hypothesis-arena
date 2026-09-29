@@ -116,6 +116,12 @@ g++ $FLAGS -o test_account runner/test_account.cpp runner/account.cpp
 ./test_account fixtures
 g++ $FLAGS -o test_settle runner/test_settle.cpp runner/settle.cpp
 ./test_settle
+g++ $FLAGS -o test_calendar runner/test_calendar.cpp runner/calendar.cpp
+./test_calendar
+g++ $FLAGS -o test_bars runner/test_bars.cpp runner/bars.cpp runner/calendar.cpp
+./test_bars fixtures
+g++ $FLAGS -o test_approved runner/test_approved.cpp runner/approved.cpp runner/calendar.cpp
+./test_approved ..
 # The no-filter decision path must never reach a JEV AnswerSet.
 if grep -nE "AnswerSet|jev_v4|jev_state|validate_jev" exec/decide.cpp exec/decide.hpp risk/sizing.cpp risk/sizing.hpp; then
     echo "GATE FAIL: no-filter path touches the AnswerSet surface"
@@ -170,11 +176,14 @@ g++ $FLAGS -o test_drills exec/test_drills.cpp exec/router.cpp broker/adapter.cp
 # compiles as the production entry (transport null = fail closed).
 g++ $FLAGS -o test_runner runner/test_runner.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
 ./test_runner
+g++ $FLAGS -o test_paper_loop runner/test_paper_loop.cpp runner/paper_loop.cpp runner/bars.cpp runner/calendar.cpp runner/account.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp risk/measure.cpp ingest/candidates.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
+./test_paper_loop fixtures
 g++ $FLAGS -o g0_runner runner/main.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
 # Live paper transport (libcurl): compiled and linked only when WITH_CURL=1;
 # the smoke tool needs ALPACA_KEY_ID/ALPACA_SECRET and is run by hand.
 if [ -n "${WITH_CURL:-}" ]; then
 g++ $FLAGS -DG0_WITH_CURL -o g0_runner_paper runner/main.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp log/journal.cpp kill/switch.cpp -lcurl
+g++ $FLAGS -DG0_WITH_CURL -o g0_paper_loop runner/paper_loop_main.cpp runner/paper_loop.cpp runner/bars.cpp runner/calendar.cpp runner/account.cpp runner/approved.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp risk/measure.cpp ingest/candidates.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp log/journal.cpp kill/switch.cpp -lcurl
 g++ $FLAGS -o smoke_paper broker/smoke_paper.cpp broker/http_curl.cpp broker/alpaca_paper.cpp broker/adapter.cpp -lcurl
 fi
 # H1 zero-malloc contract: the router STEP CORE allocates nothing
