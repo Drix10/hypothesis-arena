@@ -104,7 +104,7 @@ research-only). A negative result, honestly recorded, closes S2.
 
 - `baseline_v1` is frozen and permanent as a negative control and harness
   regression check. It is never edited in place, never promoted, and
-  never retired without a human-signed doc edit. The deterministic
+  never retired without an operator-approved doc edit. The deterministic
   reference implementation is `research/strategy/baseline_v1.py` and must
   reproduce this file exactly.
 - Every sleeve and every AI component is scored against the §12.6

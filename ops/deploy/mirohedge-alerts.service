@@ -1,9 +1,0 @@
-[Unit]
-Description=MiroHedge alert relay (outbound only)
-
-[Service]
-Type=oneshot
-User=mirotrade
-EnvironmentFile=/etc/mirohedge/env
-WorkingDirectory=/opt/mirohedge
-ExecStart=/usr/bin/python3 ops/alert_relay.py /var/lib/mirohedge/g0/alerts.jsonl /var/lib/mirohedge/g0/alerts.state

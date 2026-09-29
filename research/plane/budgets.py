@@ -102,10 +102,6 @@ def _bhrow(values):
             "utf-8")).hexdigest()
 
 
-def _bdxor(a, b):
-    return "%064x" % (int(a, 16) ^ int(b, 16))
-
-
 def _brecompute_table(con, slot, sql_table):
     cols = _BDIGEST_COLS[slot]
     cur = con.execute("SELECT %s FROM %s" % (",".join(cols),

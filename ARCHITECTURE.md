@@ -375,8 +375,8 @@ mirror (missing ledger raises, never $0).
 
 ## 9. Status ledger
 
-- Plan: docs 00–13 rewritten 2026-09-28; human signature of the final text
-  pending (doc 07 sign-off log).
+- Plan: docs 00–13 rewritten 2026-09-28; approved by the operator in chat
+  2026-09-29 (doc 07 sign-off log).
 - Harness (`research/strategy/`): ledger, `cost_v2`, settlement, portfolio,
   benchmarks, statistics, gates, prereg, `sip_fetch`, `a_run`, sleeve
   modules under `sleeves/`; pre-registrations in `research/prereg/`,

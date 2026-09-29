@@ -1,9 +1,0 @@
-[Unit]
-Description=Emit candidates during the US session
-
-[Timer]
-OnCalendar=Mon..Fri 15:00 UTC
-Persistent=true
-
-[Install]
-WantedBy=timers.target

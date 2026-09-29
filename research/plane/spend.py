@@ -819,20 +819,6 @@ class SpendGovernor:
                 raise StateUnavailable("ratio-journal-truncated")
         return rows
 
-    def _ratio_day_state(self, day, journaled_day=0, now=None,
-                           anchor=None):
-        """Recorded ratio state for one UTC day (newest row wins), or None when
-        the day was never evaluated (suspended days never journal and never count
-        as failed). journaled_day is the deletion tripwire (see _ratio_rows_strict);
-        anchor is the proven chain head."""
-        for row in self._ratio_rows_strict(journaled_day, now,
-                                           anchor):
-            if (type(row.get("day")) is int and row["day"] == day
-                    and row.get("state") in ("ok", "failed",
-                                               "suspended")):
-                return row["state"]
-        return None
-
     def _ratio_forces_stop(self, now, st=None, locked=False):
         """st is the caller's loaded tier state (see evaluate): its ratio_day is
         the journal-deletion tripwire and is advanced here whenever a row is
