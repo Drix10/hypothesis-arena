@@ -100,6 +100,7 @@ A box is checked only with evidence (commit + test output / report path).
       [BLOCKED on K1].
 - [x] K11 (Alert() now escapes and bounds code/detail, ASCII-only, tested in test_runner) Found in K7: `runner/store.cpp Alert()` does not JSON-escape `code`/`detail` (a quote or backslash yields an invalid alerts.jsonl line; the relay skips and counts such lines, so nothing crashes, but the alert is lost). Add an escape helper + test.
 - [ ] K12 Wire `v3_constraints` (R18/R19) from the stage manifest: it defaults off so pre-v3 verdicts stay bit-identical, which means R18/R19 are inert until the stage loader sets it; required before G0b.
+- [ ] K13 Loop glue for G0b (in order): R6/R7 measurement (`risk/measure.cpp` DONE, 17 checks); ET calendar + expected-hourly-bar count for the data-age gate; data-host transport for hourly bars; candidate tailer; `paper_loop` driver (account fetch, snapshot, Decide, SubmitIntent, Cycle); exit path (SELL-to-close, MOC); approved-sleeve/allowlist loader (K12); plumbing sleeve emitting c1 candidates; [HUMAN] STAGE signature (G0-STAGE).
 - [ ] K-exit P3.5 CLOSED (K1–K7 + K10 green).
 
 ## Track P — research plane (parallel)

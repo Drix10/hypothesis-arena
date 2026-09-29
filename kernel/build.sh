@@ -108,6 +108,8 @@ g++ $FLAGS -o test_candidates ingest/test_candidates.cpp ingest/candidates.cpp
 ./test_candidates
 g++ $FLAGS -o test_sizing risk/test_sizing.cpp risk/sizing.cpp
 ./test_sizing
+g++ $FLAGS -o test_measure risk/test_measure.cpp risk/measure.cpp
+./test_measure
 g++ $FLAGS -o test_decide exec/test_decide.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp ingest/candidates.cpp
 ./test_decide
 g++ $FLAGS -o test_account runner/test_account.cpp runner/account.cpp
