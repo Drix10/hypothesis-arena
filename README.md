@@ -79,12 +79,12 @@ Three principles:
 
 ### Progress
 
-Roadmap checklist (`TODO.md`): 29 of 57 boxes done. The open kernel box K1 is largely built; `TODO.md` lists what remains.
+Roadmap checklist (`TODO.md`): 30 of 57 boxes done. The open kernel box K1 is largely built; `TODO.md` lists what remains.
 
 | Track | Done | Open |
 |---|---|---|
 | Rebaseline (docs) | 3 | 1 (human signature) |
-| Ops, CI, hygiene | 5 | 2 (credential rotation; frozen-collector fixes) |
+| Ops, CI, hygiene | 6 | 1 (credential rotation) |
 | Alpha (harness + sleeves) | 12 | 6 (sleeves that failed are recorded, the rest untested) |
 | Kernel P3.5 remainder | 9 | 5 (transport WS stream, OTO/MOC wiring, live-venue soak and drills, exit gate) |
 | Research plane | 0 | 5 |
