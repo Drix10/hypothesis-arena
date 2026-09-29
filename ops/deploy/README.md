@@ -80,3 +80,5 @@ this shows the plumbing works, not whether JEV helps.
   optional.
 
 **Quick start:** `bash ops/deploy/start.sh` (builds, signs STAGE on first run, starts loop, emitter and shadow; `bash ops/deploy/start.sh stop` to stop).
+
+**Live view:** `python3 ops/monitor.py ~/g0` (read-only; refreshes every 3s; `--once` prints one frame).

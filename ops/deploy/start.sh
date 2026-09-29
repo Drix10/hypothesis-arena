@@ -28,4 +28,4 @@ if [ -n "$OPENROUTER_API_KEY" ]; then
     nohup python3 ops/jev_shadow.py "$dir" >"$dir/logs/shadow.log" 2>&1 &
 fi
 sleep 5
-echo "running. watch: tail -f $dir/logs/loop.log"
+echo "running. live view: python3 ops/monitor.py $dir"

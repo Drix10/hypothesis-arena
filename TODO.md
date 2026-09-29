@@ -160,7 +160,7 @@ to keep; this track is then connected to feed those strategies.
 
 - [ ] G0a Shadow on live data for every A-gate passer (harness fills,
       `cost_v2`, no broker orders); B-gate per sleeve.
-- [ ] G0-STAGE Sign the G0 bootstrap STAGE file (doc 10 §10.5).
+- [x] G0-STAGE Sign the G0 bootstrap STAGE file (doc 10 §10.5). Signed by the operator in-terminal 2026-09-29 (`scripts/sign-stage.sh ~/g0`, mode 0600); loop PID 381 started from the ext4 build tree `~/ha` at `dac4629`.
 - [ ] G0b Broker paper: one champion sleeve through the kernel on Alpaca
       paper [BLOCKED on K-exit + a B-gate pass + G0-STAGE].
 - [ ] G0-ops Daily summary, weekly replay, §6.2a drills on the live loop.
