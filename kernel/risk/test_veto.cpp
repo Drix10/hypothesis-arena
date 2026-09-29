@@ -210,10 +210,14 @@ int main(int argc, char** argv) {
         s.intent.account = AccountType::CASH;
         s.intent.notional_cents = 1000000LL;
         VetoVerdict base = EvaluateVeto(s);
-        s.v3_constraints = false;
+        s.settled_cash_cents = -1;  // v3 fields are inert while the flag is off
+        s.instrument_allowed = false;
+        s.r18_unsettled_dependency = true;
         VetoVerdict off = EvaluateVeto(s);
         CHECK("v3-off-identical", off.proceed == base.proceed &&
-                                      off.n_reasons == base.n_reasons);
+                                      off.n_reasons == base.n_reasons &&
+                                      std::string(off.reason) == base.reason);
+        s.r18_unsettled_dependency = false;
         s.v3_constraints = true;
         s.settled_cash_cents = 1000000LL;
         s.instrument_allowed = true;
@@ -241,6 +245,16 @@ int main(int argc, char** argv) {
         s.intent.side = Side::SHORT;
         v = EvaluateVeto(s);
         CHECK("r19-short", !v.proceed);
+        s = Clean();
+        s.intent.asset = AssetClass::STOCK;
+        s.intent.account = AccountType::CASH;
+        s.v3_constraints = true;
+        s.instrument_allowed = true;
+        s.settled_cash_cents = INT64_MAX;
+        AddPending(s, "SPY", Side::LONG, INT64_MAX);
+        AddPending(s, "VTI", Side::LONG, INT64_MAX);
+        v = EvaluateVeto(s);
+        CHECK("r18-no-overflow", !v.proceed);
         s = Clean();
         s.intent.asset = AssetClass::STOCK;
         s.intent.account = AccountType::MARGIN;
