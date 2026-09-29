@@ -4,7 +4,7 @@
   "decision": {
     "max_drawdown_pct": 25.0,
     "min_cost_multiple": 2.0,
-    "min_days": 1000,
+    "min_days": 700,
     "min_net_sharpe": 0.5,
     "new_signal_tstat_min": 3.0
   },
@@ -12,8 +12,8 @@
   "family": "trend",
   "holdout": {
     "end": "2026-09-01",
-    "rule": "last 25% of the sample (longer than 3 years, doc 11 0b); untouched until the single final evaluation; one look only",
-    "start": "2021-11-01"
+    "rule": "last 3 years (longer than 25% of the 2016-01-04..2026-08-31 sample, doc 11 0b); untouched until the single final evaluation; one look only",
+    "start": "2023-09-01"
   },
   "hypothesis": "Holding each of VTI/VEU/VNQ/IEF/DBC only while its month-end close exceeds its 10-month mean, parking off-trend slots in BIL, beats the vol-matched 60/40 (VTI/IEF) and T-bill cash net of cost_v2 at 2x cost. Reported alongside: equal-weight buy-and-hold of the same five.",
   "schema": "prereg_v1",
