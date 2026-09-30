@@ -88,12 +88,15 @@ jobs:
           PYTHONWARNINGS=error python3 research/tests/test_candidate_wire.py
           PYTHONWARNINGS=error python3 research/tests/test_core_passive.py
           PYTHONWARNINGS=error python3 research/tests/test_sleeve_shadow.py
+          PYTHONWARNINGS=error python3 research/tests/test_sleeve_eval.py
+          PYTHONWARNINGS=error python3 research/tests/test_forward_register.py
           PYTHONWARNINGS=error python3 research/tests/test_jev_twin.py
           PYTHONWARNINGS=error python3 research/tests/test_macro_shadow.py
           PYTHONWARNINGS=error python3 research/tests/test_event_shadow.py
           PYTHONWARNINGS=error python3 research/tests/test_pead_data.py
           PYTHONWARNINGS=error python3 research/tests/test_pead_sleeve.py
           PYTHONWARNINGS=error python3 research/tests/test_alert_relay.py
+          PYTHONWARNINGS=error python3 research/tests/test_long_history.py
       - name: strategy baseline (stdlib only)
         run: PYTHONWARNINGS=error python3 research/tests/test_baseline.py
       - name: strategy JEV filter interop (stdlib only)

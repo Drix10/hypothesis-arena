@@ -221,12 +221,39 @@ def panel_shadow(d, out):
             r.get("symbol"), r.get("verdict"), r.get("reason")))
 
 
+def eval_line(ev, sid, last):
+    """EVAL line from sleeves/eval.json (read-only): checkpoint state and HAC
+    t-stat of the paired active return; flagged stale if the eval lags the
+    ledger. 'ELIGIBLE-FOR-REVIEW' means a human may review, never promote."""
+    try:
+        if sid in (ev.get("benchmarks") or {}):
+            return "    " + col("EVAL BENCHMARK (control)", DIM)
+        e = (ev.get("ledgers") or {}).get(sid)
+        if e is None:
+            return "    " + col("EVAL n/a (not evaluated yet)", DIM)
+        st = e["checkpoint"]["state"]
+        t = (e.get("paired") or {}).get("t_hac")
+        txt = "EVAL %s  t=%s  vs %s" % (
+            st, "n/a" if t is None else "%+.2f" % t, e.get("benchmark"))
+        if e.get("last_date") != last:
+            txt += "  (stale: eval to %s)" % e.get("last_date")
+        bad = st in ("CHAIN-BROKEN", "KILL-FUTILE")
+        return "    " + col(txt, RED if bad else DIM)
+    except (KeyError, TypeError, AttributeError):
+        return "    " + col("EVAL unreadable", YEL)
+
+
 def panel_sleeves(d, out):
     out.append(col("SLEEVE SHADOW LEDGERS (virtual $100k each, no orders)", BOLD))
     sd = os.path.join(d, "sleeves")
     names = sorted(f for f in os.listdir(sd) if f.endswith(".jsonl")) if os.path.isdir(sd) else []
     if not names:
         out.append("  " + col("none yet (runs after each close)", DIM))
+    try:  # written by ops/sleeve_eval.py (shadow --loop); absent is fine
+        with open(os.path.join(sd, "eval.json")) as f:
+            ev = json.load(f)
+    except (OSError, ValueError):
+        ev = {}
     for n in names:
         rows = jrows(os.path.join(sd, n))
         if not rows:
@@ -242,6 +269,7 @@ def panel_sleeves(d, out):
             pass
         out.append("  %-24s %s  equity %10.2f  %+6.2f%%  (%d sessions)%s" % (
             n[:-6], last, eq, pct, len(rows), flag))
+        out.append(eval_line(ev, n[:-6], last))
 
 
 def panel_broker(broker, out):

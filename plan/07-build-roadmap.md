@@ -109,6 +109,10 @@ passed its B-gate AND P3.5 closed.
 - [ ] G0a shadow: every sleeve that passed A-gate runs on live data with
       harness fills (`cost_v2`), no broker orders, from the day it passes.
       B-gate per sleeve per doc 11 §11.3a.
+- [ ] Forward replication ledgers (`ops/sleeve_shadow.py`, doc 11 §11.2a,
+      appendix 10): every built sleeve plus controls, registered in the trial
+      ledger first, judged paired against benchmarks; research observation
+      only until a sleeve passes its A-gate. As of 2026-09-30 none has.
 - [ ] G0b broker paper: exactly one champion sleeve through the kernel on
       Alpaca paper (P3.5 closed + sleeve passed B-gate + G0 STAGE file
       signed per doc 10 §10.5).
@@ -215,3 +219,4 @@ MANIFEST HASH: <sha256>
 - Freeze v3 rebaseline authorized by operator instruction ("full permission to rewrite plans and code; plan first") | 2026-09-28 | text committed
 - Freeze v3 text approved | operator, in chat | 2026-09-29
 - Single JEV contract (candidate-bound; v3 sidecar path retired, plain names) | operator, in chat | 2026-09-29
+- Sleeve testing program (appendix 10 rev 2: four evidence tracks, forward replication ledgers, long-history track L) | operator, in chat | 2026-09-30

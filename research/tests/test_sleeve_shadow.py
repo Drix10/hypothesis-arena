@@ -94,6 +94,49 @@ class Shadow(unittest.TestCase):
         finally:
             S.fetch_prices = old
 
+    def test_benchmark_ledgers_are_buy_and_hold_same_schema(self):
+        self.assertTrue(set(S.BENCHMARKS) <= set(self.specs))
+        self.assertEqual(self.specs[S.BENCH_CASH][0], ["BIL"])
+        self.assertEqual(self.specs[S.BENCH_SPY][0], ["SPY"])
+        t1 = S._prereg("t1_trend_etf_v1.json")["universe"]
+        t2 = S._prereg("t2_sector_mom_v1.json")["universe"]
+        self.assertEqual(self.specs[S.BENCH_EW_TREND][0], t1)
+        self.assertEqual(self.specs[S.BENCH_EW_SECTOR][0], t2)
+        self.assertIn("SPY", self.prices)
+        for sid in S.BENCHMARKS:
+            u, fac, _ = self.specs[sid]
+            rows = S.replay(sid, self.prices, fac, u)
+            self.assertEqual(rows[0]["date"], self.fwd)
+            self.assertEqual(set(rows[0]), {"date", "sleeve", "equity", "ret",
+                                            "target"})
+            # one initial allocation in history, never a rebalance target
+            px = {s: self.prices[s] for s in u}
+            sessions = S.common_sessions(px)
+            res = S.portfolio.run(sessions, px, fac(sessions), cash0=S.CASH0)
+            self.assertEqual(len(res["weights"]), 1, sid)
+            self.assertAlmostEqual(sum(res["weights"][0][1].values()), 1.0)
+            self.assertTrue(all(r["target"] is None for r in rows), sid)
+        w = S.portfolio.run(
+            S.common_sessions({s: self.prices[s] for s in t1}),
+            {s: self.prices[s] for s in t1},
+            self.specs[S.BENCH_EW_TREND][1](None), cash0=S.CASH0)["weights"][0][1]
+        self.assertEqual(set(w), set(t1))
+        self.assertTrue(all(abs(x - 1.0 / len(t1)) < 1e-12 for x in w.values()))
+
+    def test_run_writes_benchmark_ledgers_and_no_twin_for_them(self):
+        old = S.fetch_prices
+        S.fetch_prices = lambda symbols, now, http_get=None: self.prices
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                bad, summ = S.run(d, NOW, event_sleeves=False)
+                self.assertEqual(bad, [])
+                for sid in S.BENCHMARKS:
+                    self.assertIn(sid, summ)
+                    rows, _ = S.read_log(os.path.join(d, "sleeves", sid + ".jsonl"))
+                    self.assertTrue(rows)
+        finally:
+            S.fetch_prices = old
+
     def test_status_flags_drawdown_states(self):
         with tempfile.TemporaryDirectory() as d:
             os.makedirs(os.path.join(d, "sleeves"))

@@ -1,0 +1,36 @@
+{
+  "cost_model_version": "cost_v2",
+  "created": "2026-09-30",
+  "decision": {
+    "max_drawdown_pct": 25.0,
+    "min_cost_multiple": 2.0,
+    "min_days": 756,
+    "min_net_sharpe": 0.5,
+    "new_signal_tstat_min": 3.0
+  },
+  "experiment_id": "m1_macro_lite_v1_forward",
+  "family": "macro",
+  "holdout": {
+    "end": "2029-09-30",
+    "rule": "FORWARD ONLY: the evaluation window opens 2026-09-30 and is measured only on sessions recorded forward in sleeves/macro_lite_v1.jsonl; there is no historical holdout. New non-literature signal: the holdout t-statistic must be >= 3.0 (doc 11 0b), computed with HAC standard errors on the daily return difference macro_lite_v1 minus core_passive_v1 (the tilt's own contribution; the 60/40 market beta alone must not pass). One final evaluation once decision.min_days forward sessions exist (about 3 years, holdout.end is the earliest date it can run); interim looks at ledger checkpoints may only close a trial as fail, crashed, abandoned or void, never promote. Rows are read as recorded; nothing is refit.",
+    "start": "2026-09-30"
+  },
+  "hypothesis": "FORWARD-ONLY pre-registration. macro_lite_v1 is a new, non-literature signal, so it is held to the new-signal standard (doc 11 0b): holdout t-statistic >= 3.0. There is NO historical holdout and no historical backtest of this signal is evaluated or used for any choice: the signal below was fixed in ops/macro_shadow.py before any forward row exists and is not tuned. The one and only evaluation window is forward from 2026-09-30, recorded by ops/sleeve_shadow.py in the log-only ledger sleeves/macro_lite_v1.jsonl. Hypothesis: tilting the 60/40 VTI/IEF core by 10 percentage points, toward equity when the 2-year Treasury yield fell over the year and VTI rose over the year, toward bonds when the yield rose and VTI fell, earns a positive return difference versus the untilted core_passive_v1 forward ledger net of cost_v2, at 2x cost. Comparator: core_passive_v1 (60/40 VTI/IEF buy and hold) over the same forward sessions. No LLM is used anywhere in this sleeve. Validator limitation (documented, nothing frozen was changed): prereg_v1 has no forward-only scheme, so split.scheme is 'forward_only' as free text and n_splits=2 is only the validator minimum; no splitting, cross-validation or walk-forward is performed. holdout.start/end are the forward evaluation window, not a held-out historical sample.",
+  "schema": "prereg_v1",
+  "signal": "ops/macro_shadow.py, no tuning. base 60/40 VTI/IEF (core_passive_v1 weights). tilt: equity/bond split moves by TILT = 10 percentage points: +10 (VTI 70 / IEF 30) when the 1-year change in the 2-year Treasury yield (FRED DGS2) is negative (easing) AND the 1-year VTI return is positive; -10 (VTI 50 / IEF 50) when the 1-year DGS2 change is positive AND the 1-year VTI return is negative; 0 otherwise (a change or return of exactly 0 is 'otherwise'). when: decided at each month-end close (the last session of a calendar month); the target is held until the next month-end, and the portfolio rebalances to it at the next open through research/strategy/portfolio.run with the default cost_v2 model, exactly as ops/sleeve_shadow.py does. Before the first month-end with a full year of history the base 60/40 is held (warm-up only). Point-in-time: VTI return is the close on the decision date D over the last close at or before D minus one calendar year. DGS2 is published the next business day and never revised; the decision uses only the latest observation dated on or before the business day BEFORE D, and the year-ago leg is the latest observation on or before that observation's date minus one year. An anchor observation more than 7 days old, or a year-ago leg more than 10 days before its target, is a data gap: inside the forward window the sleeve is skipped (never a partial row); in warm-up history the tilt is 0. Prices are split+dividend adjusted SIP daily bars. Event-risk flags (FOMC/CPI/NFP) are not produced (no dated calendar in the repo). No orders, no broker calls; log-only shadow.",
+  "sleeve": "macro_lite_v1",
+  "split": {
+    "embargo_days": 0,
+    "label_horizon_days": 21,
+    "n_splits": 2,
+    "scheme": "forward_only"
+  },
+  "universe": [
+    "VTI",
+    "IEF",
+    "FRED:DGS2"
+  ],
+  "variants": [
+    "tilt10_dgs2_vti_1y"
+  ]
+}

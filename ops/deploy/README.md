@@ -146,6 +146,17 @@ the JEV paired twins (`OPENROUTER_API_KEY`, real spend under the existing cap;
 `python3 ops/jev_twin.py ~/g2 --report` for the paired comparison).
 `~/g2/sleeves/status.json` flags a sleeve soft at -15% and hard at -20% drawdown.
 
+Every sleeve is scored only against benchmark ledgers (`bench_*`, the 60/40 core) as a
+paired daily difference. `python3 ops/sleeve_eval.py ~/g2` prints the table (also written to
+`~/g2/sleeves/eval.json`, shown in the monitor): states WARMUP under 60 sessions, KILL-FUTILE
+from 126 sessions when even the best case is below the benchmark, and ELIGIBLE-FOR-REVIEW
+only after 504 sessions with a corrected p under 0.05 (it never means promote). On the first
+start the loop registers the whole forward program in the trial ledger
+(`python3 ops/forward_register.py ~/g2` does the same by hand); commit
+`research/ledger/trials.jsonl` and `checkpoint.json` afterwards. Long-history check of the
+canonical rules (run once, on a machine with internet):
+`python3 ops/long_history_fetch.py && python3 ops/long_history_run.py`.
+
 Optional macro/filing collector (nothing reads its output yet):
 `WITH_COLLECTOR=1 bash ops/deploy/start.sh ~/g2`. Plan and promotion rules: `plan/appendix/10-sleeve-integration-plan.md`.
 

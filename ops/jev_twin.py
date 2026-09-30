@@ -294,6 +294,8 @@ def run(d, now, key, prices=None, post_fn=None, wall=time.time, verify=False,
     jrows, _ = read_decisions(jpath)
     bad, summary = [], {}
     for sid, (universe, factory, spec) in specs.items():
+        if sid in S.BENCHMARKS:  # controls are never filtered
+            continue
         process_sleeve(d, sid, universe, factory, spec, prices, jrows, jpath,
                        key, post_fn, wall, verify, bad, summary)
     return bad, summary
@@ -353,6 +355,8 @@ def _welch(a, b):
 def report(d, prices=None, reps=2000, block=5, seed=0):
     out = {"paired": {}, "decisions": {}}
     for sid in S.sleeve_specs():
+        if sid in S.BENCHMARKS:
+            continue
         base, _ = S.read_log(os.path.join(d, "sleeves", sid + ".jsonl"))
         twin, _ = S.read_log(os.path.join(d, "sleeves", sid + SUFFIX + ".jsonl"))
         b = {r["date"]: r["ret"] for r in base}

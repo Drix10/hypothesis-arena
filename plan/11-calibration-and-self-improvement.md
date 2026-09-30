@@ -234,6 +234,16 @@ Everything not live runs in shadow, permanently:
   logged. "It would have made money by taking more risk than we permit" is not a
   result; it is a disqualification.
 
+## 11.2a Forward replication program (2026-09-30, additive to §11.2)
+
+When no champion exists, built sleeves that failed their A-gate may still run
+as log-only forward replication ledgers against paired benchmarks: registered
+in the trial ledger before results, one pooled Holm over the family, fixed
+weights, kill-only sequential rules, and "eligible for review" (never
+promotion) at 504 sessions. They are research observations, not challengers,
+so the §11.2 cap of three challengers does not apply to them. Full protocol:
+`plan/appendix/10-sleeve-integration-plan.md`.
+
 ## 11.3 The promotion gate (the only path into the live decision path)
 
 A challenger may be proposed for promotion only when **all** of the following hold:

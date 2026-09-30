@@ -334,7 +334,11 @@ mirror (missing ledger raises, never $0).
   benchmarks, statistics, gates, prereg, `sip_fetch`, `a_run`, sleeve
   modules under `sleeves/`; pre-registrations in `research/prereg/`,
   ledger in `research/ledger/`, gate reports in `research/reports/`;
-  `ops/` holds the alert relay.
+  `ops/` holds the alert relay, the forward replication ledgers
+  (`sleeve_shadow`, `event_shadow`, `macro_shadow`, `jev_twin`,
+  `sleeve_eval`, `forward_register`) and the long-history track
+  (`long_history_fetch`, `long_history_run`); see
+  `plan/appendix/10-sleeve-integration-plan.md`.
 - FROZEN: `kernel/` impl, collector production code (`config.py`
   carries the additive `RESEARCH_MODEL_ID` loader key per Addendum 32
   — the only exception), `plan/`, JEV

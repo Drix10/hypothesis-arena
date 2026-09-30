@@ -84,6 +84,22 @@ A box is checked only with evidence (commit and test output, or a report path).
       one candidate-bound contract, log-only); a live provider run and enough candidates are still open.
 - [ ] A9 S1 closure with ETF/EDGAR universes; PIT S&P-500 limitation recorded.
 
+## Track L — long-history replication (parallel with A)
+
+- [x] L1 `l1_long_history_v1` harness (2026-09-30): T1/T2 rules on French daily
+      industry portfolios (1926+), sub-period and post-publication decay
+      (`research/strategy/long_history.py`, `ops/long_history_fetch.py`,
+      `ops/long_history_run.py`, prereg `research/prereg/l1_long_history_v1.json`,
+      `test_long_history`, in CI). Not run on real data.
+  - [HUMAN] `python3 ops/long_history_fetch.py` from a networked host (the sandbox
+    cannot download), then `python3 ops/long_history_run.py`; the run is
+    one-shot per data vintage, nothing may be tuned after it.
+  - Decision (operator, AGENTS rule 11): L1 runs count toward the global trial N.
+    `ops/long_history_run.py` opens one trial per rule before computing and
+    closes each after, one run per data vintage (`--force` opens new trials);
+    `--custom-csv` runs open their own trials. Smoke runs (`--boot`) use a
+    temp ledger or `--no-ledger`, never the real one.
+
 ## Track K — kernel P3.5 remainder (parallel with A)
 
 - [ ] K1 P3.5-T transport: decision record (libcurl+TLS vs `mirotrade`
@@ -166,7 +182,7 @@ The paper run is started with `bash ops/deploy/start.sh ~/g2` (see `ops/deploy/R
   - [x] Event sleeves E1 and I1 in the shadow ledger (`ops/event_shadow.py`); E2det PEAD not wired (no forward source for its registered signal).
   - [x] Collector background poller (opt-in `WITH_COLLECTOR=1`). [x] macro-lite shadow ledger (`ops/macro_shadow.py`, needs FRED_API_KEY).
   - [x] JEV paired A/B twins per sleeve (`ops/jev_twin.py`, needs OPENROUTER_API_KEY; live run pending).
-  - [ ] Netting router + Tier R promotion of T1 [BLOCKED on K5 exit sequence: sells of shares held by stop legs].
+  - [ ] Netting router: not on the critical path (G0b is one champion; none passed A-gate). Build with the K5 exit sequence when a champion exists.
   - [x] Account kill inputs wired (daily loss 3% entry hold, drawdown 15% latch). [x] per-sleeve limits reported in `sleeves/status.json`.
 - [x] G0-STAGE Sign the G0 bootstrap STAGE file (doc 10 §10.5). Signed by the operator 2026-09-29 (`scripts/sign-stage.sh ~/g0`, mode 0600).
 - [ ] G0b Broker paper: one champion sleeve through the kernel on Alpaca

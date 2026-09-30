@@ -14,6 +14,9 @@ warm up the signal only.
     python3 ops/sleeve_shadow.py <dir> --loop     # re-run every hour
     ... --no-events                               # core/T1/T2 only
 
+Benchmark ledgers (BENCHMARKS) ride along in sleeve_specs; ops/sleeve_eval.py
+judges every other ledger against them (read-only, writes sleeves/eval.json).
+
 Event sleeves (E1 insider, I1 intraday) come from ops/event_shadow.py; one
 that cannot be computed completely is skipped and logged, never partial.
 E2-det (PEAD) is not wired: see event_shadow.py for why.
@@ -46,25 +49,45 @@ PREREG = os.path.join(ROOT, "research", "prereg")
 
 CORE_WEIGHTS = {"VTI": 0.6, "IEF": 0.4}
 
+# Benchmark / control ledgers (same engine, schema and chain as the sleeves).
+# All five sleeves failed their A-gates, so the forward ledgers are replication
+# and observation ledgers judged against these, not promotion candidates
+# (plan/12 section 12.6). They are buy-and-hold: one allocation, no rebalance.
+BENCH_CASH = "bench_cash_bil_v1"
+BENCH_EW_TREND = "bench_ew_trend_v1"
+BENCH_EW_SECTOR = "bench_ew_sector_v1"
+BENCH_SPY = "bench_spy_v1"
+BENCHMARKS = (BENCH_CASH, BENCH_EW_TREND, BENCH_EW_SECTOR, BENCH_SPY)
 
-def core_fn():
-    """60/40 benchmark: buy at the first decision, then hold (no rebalance)."""
+
+def hold_fn(weights):
+    """Buy-and-hold: one initial allocation at the first decision where every
+    symbol has a close, then no rebalancing (returns None forever after)."""
     done = []
 
     def fn(date, closes):
         if done:
             return None
-        if any(not closes.get(s) for s in CORE_WEIGHTS):
+        if any(not closes.get(s) for s in weights):
             return None
         done.append(date)
-        return dict(CORE_WEIGHTS)
+        return dict(weights)
 
     return fn
+
+
+def core_fn():
+    """60/40 benchmark: buy at the first decision, then hold (no rebalance)."""
+    return hold_fn(CORE_WEIGHTS)
 
 
 def _prereg(name):
     with open(os.path.join(PREREG, name)) as f:
         return json.load(f)
+
+
+def _equal(universe):
+    return {s: 1.0 / len(universe) for s in universe}
 
 
 def sleeve_specs():
@@ -82,6 +105,16 @@ def sleeve_specs():
                           lambda s: sector_mom.make_target_fn(
                               s, t2["universe"], variant=v2),
                           f"t2:{v2}"),
+        BENCH_CASH: (["BIL"], lambda s: hold_fn({"BIL": 1.0}),
+                     "benchmark: 100% BIL buy and hold"),
+        BENCH_EW_TREND: (list(t1["universe"]),
+                         lambda s: hold_fn(_equal(t1["universe"])),
+                         "benchmark: equal-weight buy and hold of the T1 universe"),
+        BENCH_EW_SECTOR: (list(t2["universe"]),
+                          lambda s: hold_fn(_equal(t2["universe"])),
+                          "benchmark: equal-weight buy and hold of the T2 universe"),
+        BENCH_SPY: (["SPY"], lambda s: hold_fn({"SPY": 1.0}),
+                    "benchmark: SPY buy and hold"),
     }
 
 
@@ -275,12 +308,39 @@ def _extras(d, now, prices, verify, bad, summary, http_get):
         print(json.dumps({"jev_twin": "error: %r" % (e,)}), file=sys.stderr)
 
 
+def _evaluate(d):
+    """Refresh sleeves/eval.json after write_status. Read-only w.r.t. the
+    ledgers; any failure is logged and can never stop the loop."""
+    try:
+        from ops import sleeve_eval
+        sleeve_eval.write_eval(d)
+    except Exception as e:  # noqa: BLE001
+        print(json.dumps({"sleeve_eval": "error: %r" % (e,)}), file=sys.stderr)
+
+
+def _register_forward(d):
+    """Once at loop start: open the global-ledger trials for every forward
+    ledger before any result is computed (ops/forward_register.py, idempotent).
+    Never raises; a refusal is one stderr line and the shadow run continues."""
+    try:
+        from ops import forward_register
+        res = forward_register.register(d)
+        if res["registered"]:
+            print(json.dumps({"forward_register": {
+                "registered": len(res["registered"])}}), file=sys.stderr)
+    except Exception as e:  # noqa: BLE001
+        print(json.dumps({"forward_register": "error: %r" % (e,)}),
+              file=sys.stderr)
+
+
 def main(argv, now=None):
     args = [a for a in argv[1:] if not a.startswith("--")]
     if len(args) != 1:
         raise SystemExit("usage: sleeve_shadow.py <dir> [--verify|--loop]")
     from research.strategy import a_run
     a_run._load_env()
+    if "--verify" not in argv:
+        _register_forward(args[0])
     while True:
         n = now or datetime.datetime.now(datetime.timezone.utc)
         try:
@@ -292,6 +352,8 @@ def main(argv, now=None):
                 return 2
         else:
             print(json.dumps({"sleeves": summary, "mismatch": bad}))
+            if "--loop" in argv:
+                _evaluate(args[0])
             if bad and "--loop" not in argv:
                 return 1
         if "--loop" not in argv:
