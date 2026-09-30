@@ -14,6 +14,7 @@
 #include "bars.hpp"
 #include "calendar.hpp"
 #include "settle.hpp"
+#include "store.hpp"
 
 namespace jev {
 namespace runner {
@@ -326,6 +327,23 @@ bool PaperLoop::Tick(int64_t now_ns) {
     // working sell means an exit is already on its way.
     bool unexplained = false;
     std::set<std::string> exiting;
+    // A long with no working sell order has no stop behind it: say so, once per
+    // symbol per day (the loop keeps running; the operator decides).
+    if (stats_.account_ok) {
+        std::set<std::string> sells;
+        for (const auto& o : orders)
+            if (!o.is_buy) sells.insert(o.symbol);
+        long long day = now_s / 86400;
+        for (const auto& p : held) {
+            if (!p.is_long || p.qty <= 0 || sells.count(p.symbol)) continue;
+            std::string key = p.symbol + "|" + std::to_string(day);
+            if (!warned_.insert(key).second) continue;
+            Alert((cfg_.dir + "/alerts.jsonl").c_str(), "MEDIUM",
+                  "unprotected-position",
+                  ("long " + p.symbol + " has no working sell order").c_str(),
+                  now_ns);
+        }
+    }
     for (const auto& o : orders) {
         if (!o.is_buy) {
             exiting.insert(o.symbol);

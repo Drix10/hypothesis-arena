@@ -52,6 +52,7 @@ class PaperLoop {
                         const std::vector<PositionView>& held, int64_t now_s);
     void RecordInflight(const std::string& sym, int64_t entry_cents);
     std::map<std::string, int64_t> inflight_;  // symbol -> entry ref cents
+    std::set<std::string> warned_;             // unprotected-position alerts sent
     std::set<std::string> booked_;             // cids with proceeds booked
     G0Runner& runner_;
     LoopIO io_;

@@ -76,6 +76,17 @@ int main(int argc, char** argv) {
                             !ParseOpenOrders(
         "[{\"symbol\":\"V\",\"side\":\"buy\",\"qty\":\"1\","
         "\"filled_qty\":\"2\"}]", &os));
+    // Bracket legs rest under the parent; a notional (qty-less) order still counts.
+    CHECK("nested-legs-seen", ParseOpenOrders(
+        "[{\"symbol\":\"VTI\",\"side\":\"buy\",\"qty\":\"5\",\"filled_qty\":\"5\","
+        "\"legs\":[{\"symbol\":\"VTI\",\"side\":\"sell\",\"qty\":\"5\","
+        "\"filled_qty\":\"0\"},{\"symbol\":\"VTI\",\"side\":\"sell\","
+        "\"qty\":\"5\",\"filled_qty\":\"0\"}]}]", &os) &&
+                              os.size() == 2 && !os[0].is_buy);
+    CHECK("null-qty-order-tolerated", ParseOpenOrders(
+        "[{\"symbol\":\"VTI\",\"side\":\"buy\",\"qty\":null,"
+        "\"filled_qty\":\"0\",\"legs\":null}]", &os) &&
+                              os.size() == 1 && os[0].remaining_qty == 1);
     CHECK("bad-position", !ParsePositions("[{\"symbol\":\"X\"}]", &ps));
     CHECK("bad-side", !ParsePositions(
         "[{\"symbol\":\"X\",\"qty\":\"1\",\"side\":\"flat\","

@@ -17,6 +17,7 @@
 #include "../broker/ws_stream.hpp"
 #include "approved.hpp"
 #include "paper_loop.hpp"
+#include "store.hpp"
 
 namespace {
 // SIGTERM/SIGINT/SIGHUP ask for a clean stop between ticks (the destructor
@@ -99,7 +100,18 @@ int main(int argc, char** argv) {
     io.data = [](const std::string& path, std::string* body) {
         return jev::broker::CurlData(path, body);
     };
+    {   // Credentials must work before the loop starts (a bad key would only
+        // show up as endless account_ok=0 ticks).
+        int st = 0;
+        std::string body;
+        if (!io.rest("GET", "/v2/account", &st, &body) || st != 200) {
+            std::printf("g0_paper_loop: refused: GET /v2/account failed "
+                        "(status %d): check the Alpaca paper keys\n", st);
+            return 2;
+        }
+    }
     jev::runner::PaperLoop loop(runner, io, lc);
+    int bad_ticks = 0;
     std::signal(SIGPIPE, SIG_IGN);
     std::signal(SIGTERM, OnStop);
     std::signal(SIGINT, OnStop);
@@ -113,6 +125,14 @@ int main(int argc, char** argv) {
         std::printf("tick account_ok=%d seen=%d proceeded=%d held=%d\n",
                     st.account_ok, st.seen, st.proceeded, st.held);
         std::fflush(stdout);
+        if (st.account_ok) {
+            bad_ticks = 0;
+        } else if (++bad_ticks == 5) {
+            jev::runner::Alert((lc.dir + "/alerts.jsonl").c_str(), "MEDIUM",
+                               "account-unavailable",
+                               "5 consecutive ticks without account data",
+                               WallNs(nullptr));
+        }
         for (long long s = 0; !g_stop && s < interval; ++s) {
             if (ticks != 0 && i + 1 >= ticks) break;
             sleep(1);

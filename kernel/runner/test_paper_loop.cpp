@@ -273,6 +273,9 @@ int main(int argc, char** argv) {
     dec = Slurp(env.dir + "/decisions.jsonl");
     CHECK("exit-in-flight-held", dec.find("exit-in-flight") != std::string::npos);
     g_orders = "[]";
+    CHECK("unprotected-long-alerts",
+          Slurp(env.dir + "/alerts.jsonl").find("unprotected-position") !=
+              std::string::npos);
 
     // 10. an unterminated oversize line does not stall the queue.
     Append(env.dir + "/candidates.jsonl", std::string(1100000, 'x'));

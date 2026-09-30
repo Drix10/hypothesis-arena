@@ -78,12 +78,15 @@ bool ParseAccount(const std::string& body, AccountView* out) {
     bool acct_blocked = true, trade_blocked = true;
     int64_t nmbp = 0;
     if (!Money(v, "equity", &a.equity_cents) ||
-        !Money(v, "last_equity", &a.last_equity_cents) ||
         !Money(v, "cash", &a.cash_cents) ||
-        !Money(v, "non_marginable_buying_power", &nmbp) ||
         !Str(v, "status", &status) || !Bool(v, "account_blocked", &acct_blocked) ||
         !Bool(v, "trading_blocked", &trade_blocked))
         return false;
+    // Optional fields: a fresh account may omit them. Fall back to the
+    // conservative reading (no day gain; settled cash is plain cash).
+    if (!Money(v, "last_equity", &a.last_equity_cents))
+        a.last_equity_cents = a.equity_cents;
+    if (!Money(v, "non_marginable_buying_power", &nmbp)) nmbp = a.cash_cents;
     a.settled_cash_cents = a.cash_cents < nmbp ? a.cash_cents : nmbp;
     if (a.settled_cash_cents < 0) a.settled_cash_cents = 0;
     a.blocked = status != "ACTIVE" || acct_blocked || trade_blocked;
@@ -119,27 +122,44 @@ bool ParsePositions(const std::string& body, std::vector<PositionView>* out) {
     return true;
 }
 
+// One order (and, recursively, its nested legs). A bracket's stop/limit legs
+// rest under the parent, so they are only visible through "legs". A null or
+// missing qty (notional order) still counts as one working share: it is
+// exposure or protection the loop cannot size, never a reason to fail the tick.
+static bool ParseOrderNode(const JVal& e, std::vector<OrderView>* os, int depth) {
+    if (e.t != JVal::T::OBJ || depth > 3) return false;
+    OrderView o;
+    std::string side, qty, filled;
+    if (!Str(e, "symbol", &o.symbol) || o.symbol.empty() ||
+        !Str(e, "side", &side) || (side != "buy" && side != "sell"))
+        return false;
+    int64_t q = 0, f = 0;
+    bool have_qty = Str(e, "qty", &qty) && ParseMoneyCents(qty, &q);
+    if (Str(e, "filled_qty", &filled)) {
+        if (!ParseMoneyCents(filled, &f)) return false;
+    }
+    o.is_buy = side == "buy";
+    if (have_qty) {
+        if (f > q) return false;
+        o.remaining_qty = (q - f + 99) / 100;  // any remainder counts as a share
+    } else {
+        o.remaining_qty = 1;
+    }
+    if (o.remaining_qty > 0) os->push_back(o);
+    const JVal* legs = e.find(U"legs");
+    if (legs && legs->t == JVal::T::ARR)
+        for (const JVal& l : legs->a)
+            if (!ParseOrderNode(l, os, depth + 1)) return false;
+    return true;
+}
+
 bool ParseOpenOrders(const std::string& body, std::vector<OrderView>* out) {
     JVal v;
     std::string err;
     if (!ParseJson(body, v, err) || v.t != JVal::T::ARR) return false;
     std::vector<OrderView> os;
-    for (const JVal& e : v.a) {
-        if (e.t != JVal::T::OBJ) return false;
-        OrderView o;
-        std::string side, qty, filled;
-        if (!Str(e, "symbol", &o.symbol) || o.symbol.empty() ||
-            !Str(e, "side", &side) || (side != "buy" && side != "sell") ||
-            !Str(e, "qty", &qty) || !Str(e, "filled_qty", &filled))
-            return false;
-        int64_t q = 0, f = 0;
-        if (!ParseMoneyCents(qty, &q) || !ParseMoneyCents(filled, &f) ||
-            f > q)
-            return false;
-        o.is_buy = side == "buy";
-        o.remaining_qty = (q - f + 99) / 100;  // any remainder counts as a share
-        if (o.remaining_qty > 0) os.push_back(o);
-    }
+    for (const JVal& e : v.a)
+        if (!ParseOrderNode(e, &os, 0)) return false;
     *out = os;
     return true;
 }

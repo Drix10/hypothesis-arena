@@ -339,19 +339,12 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
     };
     if (bad) {
         // Corrupt snapshots hold on bad-inputs alone: co-causes computed from
-        // garbage are noise. Valid EXITs bypass below; ENTRY evaluates the
+        // garbage are noise. Valid EXITs already bypassed above; ENTRY evaluates the
         // battery.
         v.reasons_all[0] = "bad-inputs";
         v.n_reasons = 1;
         v.proceed = false;
         v.reason = "bad-inputs";
-        return v;
-    }
-    // A valid EXIT bypasses risk limits (doc 10 10.3); structure was proven
-    // above.
-    if (s.intent.kind == IntentKind::EXIT) {
-        v.proceed = true;
-        v.reason = "exit-bypass";
         return v;
     }
     if (R5Trips(s.equity_cents, peak)) arm("r5-loss-cap");

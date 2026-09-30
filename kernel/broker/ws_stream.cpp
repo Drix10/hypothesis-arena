@@ -230,6 +230,7 @@ bool TradeStream::Connect() {
                       "Sec-WebSocket-Key: " + Base64(k, 16) +
                       "\r\nSec-WebSocket-Version: 13\r\n\r\n";
     state_ = kAwaitUpgrade;
+    hs_start_ = std::chrono::steady_clock::now();
     return SendRaw(req);
 }
 
@@ -361,7 +362,16 @@ int TradeStream::Read(char* buf, int n) {
         for (int i = 0; i < 64 && h_; ++i) {  // bounded per call
             size_t got = 0;
             CURLcode rc = curl_easy_recv(h_, chunk, sizeof(chunk), &got);
-            if (rc == CURLE_AGAIN) break;
+            if (rc == CURLE_AGAIN) {
+                // A handshake that never completes must not park the stream.
+                if (state_ != kLive &&
+                    std::chrono::steady_clock::now() - hs_start_ >
+                        std::chrono::seconds(15)) {
+                    Close(backoff_s_);
+                    backoff_s_ = std::min(backoff_s_ * 2, kMaxBackoffS);
+                }
+                break;
+            }
             if (rc != CURLE_OK || got == 0) {  // error or peer closed
                 Close(backoff_s_);
                 backoff_s_ = std::min(backoff_s_ * 2, kMaxBackoffS);

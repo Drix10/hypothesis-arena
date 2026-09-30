@@ -4,6 +4,7 @@
 #pragma once
 #include <cstdint>
 #include <set>
+#include <cstddef>
 #include <vector>
 
 namespace jev {

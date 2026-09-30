@@ -50,6 +50,7 @@ class TradeStream {
     unsigned long long skip_ = 0;  // payload bytes of an oversize frame to drop
     bool oversize_ = false;        // dropping the rest of a fragmented message
     std::chrono::steady_clock::time_point next_try_{};
+    std::chrono::steady_clock::time_point hs_start_{};
     int backoff_s_ = 2;
     long reconnects_ = 0;
     long dropped_ = 0;
