@@ -58,8 +58,8 @@ VERIFIED (acceptance green).
 Paper run (WSL, Ubuntu 24.04), from the repo root:
 
 ```bash
-bash ops/deploy/start.sh ~/g1       # build, sign STAGE once, start the loop
-python3 ops/monitor.py ~/g1         # live view (Ctrl+C closes the view only)
+bash ops/deploy/start.sh ~/g2       # build, sign STAGE once, start the loop
+python3 ops/monitor.py ~/g2         # live view (Ctrl+C closes the view only)
 bash ops/deploy/start.sh stop       # stop everything
 ```
 

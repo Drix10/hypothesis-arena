@@ -1,54 +1,31 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-node_modules
-dist
-dist-ssr
-*.local
-
-# Environment variables (contains API keys)
-.env
-.env.local
-.env.*.local
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-
-# TypeScript build info
-*.tsbuildinfo
-data/
-__pycache__/
-# Python
-*.pyc
-*.pyo
-.pytest_cache/
-.venv/
-venv/
-# OS
-.DS_Store
-Thumbs.db
-# local secrets / deployment config (template .env.example is committed)
+# Secrets (the template .env.example is committed)
 .env
 .env.*
 !.env.example
 
-# C++ build artifacts
+# Runtime data and logs
+data/
+logs
+*.log
+
+# Python
+__pycache__/
+*.py[co]
+.pytest_cache/
+.venv/
+venv/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.sw?
+
+# C++ build outputs (kernel/build.sh writes binaries; sources are .cpp)
 *.exe
-# kernel/build.sh outputs (binaries; sources are .cpp)
+*.o
+*.a
 kernel/test_*
 !kernel/test_*.cpp
 kernel/tests/test_*
@@ -56,7 +33,6 @@ kernel/tests/test_*
 kernel/g0_*
 kernel/smoke_paper
 kernel/live_drill
-*.o
-*.a
 
+# Lock files
 *.lock

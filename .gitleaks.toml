@@ -1,4 +1,4 @@
-# Freeze v3 O2. Default ruleset + narrow path allowlist. Nothing here may
+# Secret-scan config. Default ruleset + narrow path allowlist. Nothing here may
 # ever cover a real credential; each entry is a reviewed false positive.
 [extend]
 useDefault = true
@@ -6,7 +6,7 @@ useDefault = true
 [allowlist]
 description = "committed test vectors (SHA-256 digests) and the local evidence-only sandbox"
 paths = [
-  '''^kernel/(p33|v4|fixtures|vectors)/''',            # digests / signed test vectors
+  '''^kernel/(fixtures|vectors)/''',            # digests / signed test vectors
   '''^kernel/jev_vectors/''',                       # JEV candidate-bound vectors: expected_cid / expected_fhash / pubkey are 64-hex test digests, tripping generic-api-key (reviewed 2026-09-29, commit ee0e71f)
   '''^research(-plane)?/sandbox/langfuse/docker-compose\.yml$''', # throwaway local Langfuse (also its pre-rename path in history), never networked
 ]

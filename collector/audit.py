@@ -33,9 +33,7 @@ def _audit(as_of):
            "duplicates": 0, "revisions": 0, "corrections": 0,
            "malformed": 0, "stale": 0, "trigger_candidates": 0,
            "context": 0, "rejected": 0, "reason_by_category": {},
-           "per_source": stats.get("per_source", {}),
-           # legacy aliases (definition: unique == unique_content_versions)
-           "total": 0, "unique": 0}
+           "per_source": stats.get("per_source", {})}
     event_keys = set()
     for src, s in agg["per_source"].items():
         for k, v in s.items():
@@ -76,8 +74,6 @@ def _audit(as_of):
                            for s in agg["per_source"].values())
     agg["malformed"] += stats.get("malformed_lines", 0) + stats.get("schema_invalid", 0)
     agg["input_records"] += stats.get("malformed_lines", 0) + stats.get("schema_invalid", 0)
-    agg["total"] = agg["input_records"]
-    agg["unique"] = agg["unique_content_versions"]
     agg["as_of"] = as_of
     agg["classified_file"] = out_path
     print(json.dumps(agg, indent=1))

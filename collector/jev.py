@@ -961,18 +961,6 @@ def spend_charge(cost, prompt_t=0, completion_t=0, known=True, now=None):
                            now if now is not None else time.time())
 
 
-def spend_add(cost, prompt_t=0, completion_t=0):
-    """Legacy entry point kept for tooling: charges money/tokens only
-    (calls are reservation-counted). Prefer spend_charge()."""
-    return spend_charge(cost, prompt_t, completion_t, known=True)
-
-
-def spend_attempt():
-    """Legacy entry point kept for tooling: reserves one attempt."""
-    status, s = spend_reserve()
-    return s if s is not None else blank_ledger()
-
-
 def spend_30d(now=None):
     """Returns (total_usd, unknown). Out-of-window files are ignored
     without penalty; in-window corrupt/invalid files (or unknown charges

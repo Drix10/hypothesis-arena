@@ -5,7 +5,7 @@ only (freeze v3, 2026-09-28). Forex is research-only (OANDA blocked, RBI LRS
 prohibits forex and margin trading abroad). No crypto.
 
 Status: plan freeze v3 (alpha-first rebaseline), P3.5 H1
-built with the paper transport verified read-only, two sleeves measured and
+built with the paper transport verified read-only, five sleeves backtested and
 none past an economic gate, G0 not started, paper only.
 
 `plan/` is the source of truth; this file describes the tree. It had 544
@@ -52,26 +52,25 @@ Tracked: `.env.example`, `.gitattributes`, `.gitignore`, `AGENTS.md`,
 
 ## 2. plan/ (freeze v3: 13 docs + manifest + appendix/ + reviews/)
 
-Freeze v3 rewrote the plan around a legal live scope, a strategy book, a
-validation standard and the shortest path to paper. The per-doc notes below
-are the freeze-v2 descriptions; where they conflict with the docs, the docs
-win. Changes in v3: doc 02 is the strategy book (X archive in
+The plan is built around a legal live scope, a strategy book, a validation
+standard and the shortest path to paper. Where a note below conflicts with a
+doc, the doc wins. Notes: doc 02 is the strategy book (X archive in
 `appendix/02-x-lists-archive.md`), doc 03 JEV is an optional filter, doc 05
 adds R18/R19, doc 06 §6.1b and doc 08 §8.4 internals moved to `appendix/`,
 doc 10 adds the jurisdiction gate, doc 11 adds the trial ledger and
 contamination control, doc 12 demotes `baseline_v1` to a negative control.
 
 - `00-INDEX.md` — reading order + doc authority map. Read first.
-- `01-vision-and-scope.md` — fund scope; locks venues: OANDA v20
-  practice (forex) + Alpaca paper (stocks); broker WS + 15-min REST
-  reconcile; no FIX in v1.
+- `01-vision-and-scope.md` — fund scope; locks the venue: Alpaca paper
+  (US stocks and ETFs); broker WS + 15-min REST reconcile; no FIX. Forex is
+  research-only.
 - `02-strategy-book.md` — alpha system contract; X-lists tail
   DISABLED in v1 (§2.6).
 - `03-jev-decision-layer.md` — JEV contract: one candidate-bound
   contract, 4 questions, exit profile v1, case 29.
 - `04-cpp-deterministic-core.md` — kernel contract §4.2 broker-feed
   staleness, §4.5 ingest.
-- `05-risk-and-determinism.md` — R1–R17 (code constants) + §5.1c DAG.
+- `05-risk-and-determinism.md` — R1–R19 (code constants) + §5.1c DAG.
 - `06-execution-and-ops.md` — ops: §6.4 HALT friction, §6.5 paper fill
   model (10bp drag), exits local and never source-gated.
 - `07-build-roadmap.md` — phase sequencing incl. Phase-0 boxes and
@@ -298,25 +297,17 @@ Direct children:
 - `lessons/lessons.jsonl` — ACTIVE Tier-D output (12/12 graded).
 - `requirements.txt` — ACTIVE pinned plane deps (`==` only).
 
-## 6. research/ (REMOVED — P1-era memos deleted, full text in git history)
-
-The two HISTORICAL memos (`js-gap-analysis.md`, `p15-phase2-readiness.md`)
-were removed: their content is superseded (contracted work landed in
-plan/13 §13.7, plan/05 §5.1c, P1.5/doc 11, doc 03 case 29, doc 11 §11.1a)
-and the bytes remain recoverable via git history. TODO.md keeps the
-completion record.
-
-## 7. data/ (UNTRACKED runtime, never committed)
+## 6. data/ (UNTRACKED runtime, never committed)
 
 `canonical.db`, `classified/`, `signals/`, `soak/`, `state/` —
 collector/plane runtime outputs. Local-only by `.gitignore`.
 
-## 8. Cross-component flows
+## 7. Cross-component flows
 
 Production (P1 frozen path): Tier-A/B source → `collector/collect.py`
 (TTL/heartbeat/keys) → classify → `data/signals/<day>.jsonl` →
 plane `graph.py` (LLM context via `workers.py`, spend-governed,
-checkpointed) → `features.jsonl` + emit bundles → kernel
+checkpointed) → emit bundles → kernel
 `risk/veto` → optional `jev_filter` → paper fills
 (doc 06 §6.5). Production (Phase-2.5 seam path, plan/08 §8.3): the
 five accepted adapters → `source_seam.py` harvest (canonical lineage
@@ -336,7 +327,7 @@ lock; size = frozen §3.2 table via typed object only; exits = local
 spend ceilings = `jev.py` + doc 10 tiers; attribution = `attribution.py`
 mirror (missing ledger raises, never $0).
 
-## 9. Status ledger
+## 8. Status ledger
 
 - Plan: docs 00–13 rewritten 2026-09-28; approved by the operator in chat
   2026-09-29 (doc 07 sign-off log).
