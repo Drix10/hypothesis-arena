@@ -23,9 +23,9 @@ void Copy(char* dst, size_t cap, const std::string& s) {
 }
 
 // Exit profile -> protection shape (doc 06 6.0 table). Trend and the plain
-// profile keep the bracket until the live drill settles how a resting stop and
-// a sell interact; intraday and event profiles are stop-only. Unknown
-// profiles are refused.
+// profile use a GTC bracket (kept until the live drill settles how a resting
+// stop and a sell interact: an exit must cancel the legs first); intraday
+// and event profiles are stop-only. Unknown profiles are refused.
 bool ProtectionFor(const std::string& profile, broker::Protection* p,
                    bool* gtc) {
     *gtc = false;

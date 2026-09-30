@@ -3,6 +3,7 @@
 namespace jev {
 namespace ingest {
 namespace {
+const int64_t kMaxFutureSkewNs = 120LL * 1000000000LL;
 const char* kIdFields[12] = {
     "strategy_version", "symbol", "snapshot_ts_ns", "proposed_side",
     "proposed_family", "entry_px", "stop_px", "tp_px", "time_exit_ns",
@@ -118,7 +119,9 @@ CandOutcome ValidateCandidate(const JVal& rec, const CandidateTables& t,
         return Rej(CandReject::SHAPE);
     if (side == "SELL" && !(tp < entry && entry < stop))
         return Rej(CandReject::SHAPE);
-    if (snap > now_ns) return Rej(CandReject::FRESHNESS);
+    // A tick reads its clock before its broker calls; tolerate a stamp taken
+    // during them rather than dropping the candidate for good.
+    if (snap > now_ns + kMaxFutureSkewNs) return Rej(CandReject::FRESHNESS);
     __int128 age = (__int128)now_ns - snap;
     if (age > (__int128)sl->window_s * 1000000000LL)
         return Rej(CandReject::FRESHNESS);

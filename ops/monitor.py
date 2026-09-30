@@ -55,9 +55,17 @@ def load_env():
     env = dict(os.environ)
     p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
     for ln in read_lines(p):
-        m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)", ln)
+        ln = ln.lstrip("\ufeff").strip()
+        if ln.startswith("export "):
+            ln = ln[7:].lstrip()
+        m = re.match(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)", ln)
         if m and m.group(1) not in env:
-            env[m.group(1)] = m.group(2).strip().strip('"\'\r')
+            v = m.group(2).strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+                v = v[1:-1]
+            else:
+                v = v.split(" #", 1)[0].rstrip()
+            env[m.group(1)] = v
     return env
 
 
@@ -85,6 +93,7 @@ class Broker:
                 "account": self.get("/v2/account"),
                 "positions": self.get("/v2/positions"),
                 "orders": self.get("/v2/orders?status=all&limit=8&direction=desc"),
+                "open": self.get("/v2/orders?status=open&limit=100&nested=true"),
                 "clock": self.get("/v2/clock"),
             }
             self.err = ""
@@ -185,10 +194,14 @@ def panel_journal(d, out):
         if len(p) == 7:
             rows.append(p)
     kinds = Counter(p[2] for p in rows)
-    chain = all(rows[i][5] == rows[i - 1][6] and int(rows[i][0]) == int(rows[i - 1][0]) + 1
-                for i in range(1, len(rows)))
-    out.append(col("ORDER JOURNAL (%d rows)" % len(rows), BOLD) + "  " + (
-        col("chain intact", GRN) if chain else col("CHAIN BROKEN", RED)) +
+    try:
+        chain = all(rows[i][5] == rows[i - 1][6] and
+                    int(rows[i][0]) == int(rows[i - 1][0]) + 1
+                    for i in range(1, len(rows)))
+        chain_txt = col("chain intact", GRN) if chain else col("CHAIN BROKEN", RED)
+    except ValueError:
+        chain_txt = col("CHAIN UNREADABLE (torn or garbled row)", RED)
+    out.append(col("ORDER JOURNAL (%d rows)" % len(rows), BOLD) + "  " + chain_txt +
         "  " + " ".join("%s=%d" % kv for kv in sorted(kinds.items())))
     for p in rows[-6:]:
         c = RED if p[2] in ("unknown", "exit", "demotion") else DIM
@@ -226,12 +239,21 @@ def panel_broker(broker, out):
     if data["positions"]:
         out.append(DIM + "  %-6s %6s %10s %10s %11s %8s" % (
             "SYMBOL", "QTY", "AVG", "LAST", "P/L $", "P/L %") + RST)
+    live = ("new", "accepted", "held", "partially_filled", "pending_new",
+            "accepted_for_bidding", "pending_replace")
+    sells = Counter()
+    for o in data.get("open", []):
+        for x in [o] + list(o.get("legs") or []):
+            if x.get("side") == "sell" and x.get("status") in live:
+                sells[x["symbol"]] += 1
     for p in data["positions"]:
         pl = float(p.get("unrealized_pl", 0))
-        out.append("  %-6s %6s %10s %10s %s %8s" % (
+        n = sells.get(p["symbol"], 0)
+        prot = col("stop ok (%d sell)" % n, GRN) if n else col("NO STOP", RED)
+        out.append("  %-6s %6s %10s %10s %s %8s  %s" % (
             p["symbol"], p["qty"], f(p["avg_entry_price"]), f(p["current_price"]),
             col("%11s" % f(pl), GRN if pl >= 0 else RED),
-            f(float(p.get("unrealized_plpc", 0)) * 100) + "%"))
+            f(float(p.get("unrealized_plpc", 0)) * 100) + "%", prot))
     if not data["positions"]:
         out.append("  no open positions")
     out.append(DIM + "  recent orders" + RST)
@@ -266,7 +288,10 @@ def main(argv):
     rest = list(argv[1:])
     if "--interval" in rest:
         i = rest.index("--interval")
-        interval = float(rest[i + 1])
+        try:
+            interval = float(rest[i + 1])
+        except (IndexError, ValueError):
+            raise SystemExit("--interval needs a number of seconds")
         del rest[i:i + 2]
     args = [a for a in rest if not a.startswith("--")]
     if len(args) != 1:

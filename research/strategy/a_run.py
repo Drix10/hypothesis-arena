@@ -56,10 +56,8 @@ def load_bars(symbols, end):
 
 def _load_env():
     from collector.config import load
-    cfg = load()
-    for n in ("ALPACA_KEY_ID", "ALPACA_SECRET"):
-        v = getattr(cfg, n, None)
-        if v:
+    for n, v in load()["values"].items():
+        if n in ("ALPACA_KEY_ID", "ALPACA_SECRET"):
             os.environ.setdefault(n, v)
 
 

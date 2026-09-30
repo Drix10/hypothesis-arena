@@ -792,7 +792,7 @@ bool SummarizeJournal(const char* path, Summary* out) {
             ++out->exit;
         else if (r.kind == "reconcile")
             ++out->reconcile;
-        else if (r.kind == "drift_directive")
+        else if (r.kind == "drift-directive")
             ++out->drift_directive;
         else if (r.kind == "demotion")
             ++out->demotion;

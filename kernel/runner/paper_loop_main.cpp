@@ -6,6 +6,7 @@
 //
 // Exit: 0 clean, 2 refused to start, 3 HARD stop.
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -18,6 +19,12 @@
 #include "paper_loop.hpp"
 
 namespace {
+// SIGTERM/SIGINT/SIGHUP ask for a clean stop between ticks (the destructor
+// then releases the directory lock). SIGPIPE is ignored: a write to a reset
+// TLS socket must fail the request, not kill the process.
+volatile std::sig_atomic_t g_stop = 0;
+void OnStop(int) { g_stop = 1; }
+
 long long WallNs(void*) {
     return (long long)std::chrono::duration_cast<std::chrono::nanoseconds>(
                std::chrono::system_clock::now().time_since_epoch())
@@ -93,7 +100,11 @@ int main(int argc, char** argv) {
         return jev::broker::CurlData(path, body);
     };
     jev::runner::PaperLoop loop(runner, io, lc);
-    for (long long i = 0; ticks == 0 || i < ticks; ++i) {
+    std::signal(SIGPIPE, SIG_IGN);
+    std::signal(SIGTERM, OnStop);
+    std::signal(SIGINT, OnStop);
+    std::signal(SIGHUP, OnStop);
+    for (long long i = 0; !g_stop && (ticks == 0 || i < ticks); ++i) {
         if (!loop.Tick(WallNs(nullptr))) {
             std::printf("g0_paper_loop: HARD stop\n");
             return 3;
@@ -102,7 +113,11 @@ int main(int argc, char** argv) {
         std::printf("tick account_ok=%d seen=%d proceeded=%d held=%d\n",
                     st.account_ok, st.seen, st.proceeded, st.held);
         std::fflush(stdout);
-        if (ticks == 0 || i + 1 < ticks) sleep((unsigned)interval);
+        for (long long s = 0; !g_stop && s < interval; ++s) {
+            if (ticks != 0 && i + 1 >= ticks) break;
+            sleep(1);
+        }
     }
+    if (g_stop) std::printf("g0_paper_loop: stopped by signal\n");
     return 0;
 }

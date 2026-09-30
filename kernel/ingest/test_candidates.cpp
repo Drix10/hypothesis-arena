@@ -90,8 +90,10 @@ int main(int argc, char** argv) {
                        .code == CandReject::FRESHNESS);
     CHECK("window-edge", Run(Rec(std::to_string(NOW - 3600LL * 1000000000LL)),
                              t).accepted);
-    CHECK("future", Run(Rec(std::to_string(NOW + 1)), t).code ==
-                        CandReject::FRESHNESS);
+    CHECK("small-skew-accepted",
+          Run(Rec(std::to_string(NOW + 60LL * 1000000000LL)), t).accepted);
+    CHECK("future", Run(Rec(std::to_string(NOW + 121LL * 1000000000LL)), t)
+                            .code == CandReject::FRESHNESS);
     CHECK("sell-unheld", Run(Rec(fresh, "SELL"), t).code == CandReject::SIDE);
     CHECK("sell-held", Run(Rec(fresh, "SELL", "trend_etf_v1", "VEU"), t)
                            .accepted);

@@ -39,7 +39,7 @@ def _load_dotenv():
     quotes stripped. Only fills keys missing from the real environment."""
     path = os.path.join(ROOT, ".env")
     try:
-        fh = open(path, encoding="utf-8")
+        fh = open(path, encoding="utf-8-sig")
     except OSError:
         return
     with fh:
