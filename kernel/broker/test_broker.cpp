@@ -651,6 +651,23 @@ int main() {
                   Has(g_last_body,
                       "\"client_order_id\":\"cccc"),
               "repair-oco-limit-opposing");
+        // The real OCO reply: the take-profit limit is the order and "legs"
+        // holds only the stop leg; a live order of class oco is protected.
+        g_reply =
+            "{\"id\":\"o10\",\"order_class\":\"oco\",\"type\":\"limit\","
+            "\"status\":\"new\",\"legs\":[{\"id\":\"r3\","
+            "\"type\":\"stop_limit\",\"status\":\"held\"}]}";
+        Check(ad.EstablishProtection(o), "repair-oco-one-leg-reply-ok");
+        g_reply =
+            "{\"id\":\"o11\",\"order_class\":\"oco\",\"type\":\"limit\","
+            "\"status\":\"canceled\",\"legs\":[]}";
+        Check(!ad.EstablishProtection(o), "repair-oco-canceled-not-ok");
+        g_reply = "{\"id\":\"o12\",\"type\":\"limit\",\"status\":\"new\"}";
+        Check(!ad.EstablishProtection(o), "repair-plain-limit-not-oco");
+        g_reply =
+            "{\"id\":\"o9\",\"order_class\":\"oco\",\"take_profit\":{},\"stop_loss\":{},"
+            "\"legs\":[{\"id\":\"r1\",\"type\":\"limit\"},"
+            "{\"id\":\"r2\",\"type\":\"stop\"}]}";
         // Short recovery buys with stop above TP.
         o.side = OrderSide::SELL;
         o.stop_cents = 52000;

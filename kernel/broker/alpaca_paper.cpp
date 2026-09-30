@@ -424,8 +424,24 @@ bool OtoStopProtected(const char* body) {
     return has_id && stop && !lim;
 }
 
+// A live OCO order under our repair id. The venue's OCO reply carries the
+// take-profit limit as the order and only the stop leg in "legs" (or no legs
+// on a by-client-id lookup), so the two-leg bracket rule never matches it. The
+// venue only accepts an OCO with both legs, so a live order of class oco is the
+// protection pair itself.
+bool OcoRepairLive(const char* body) {
+    if (!body || !Contains(body, "\"order_class\":\"oco\"")) return false;
+    char id[64] = {0};
+    if (!ExtractQuoted(body, "id", id, sizeof(id)) || id[0] == '\0')
+        return false;
+    char st[32] = {0};
+    if (!ExtractQuoted(body, "status", st, sizeof(st))) return false;
+    return ClassifyStatus(st) == CloseState::PENDING;
+}
+
 bool ShapeProtected(const char* body) {
-    return LegsProtected(body) || OtoStopProtected(body);
+    return LegsProtected(body) || OtoStopProtected(body) ||
+           OcoRepairLive(body);
 }
 }  // namespace
 
@@ -828,7 +844,7 @@ bool AlpacaPaperAdapter::EstablishProtection(
     HttpResult r = transport_(req);
     // The OCO reply proves both legs via the same strict legs rule.
     return (r.status >= 200 && r.status < 300) &&
-           LegsProtected(r.body);
+           (LegsProtected(r.body) || OcoRepairLive(r.body));
 }
 
 }  // namespace broker

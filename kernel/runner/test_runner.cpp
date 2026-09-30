@@ -2775,6 +2775,33 @@ int main() {
               "rp-protected-after-pauses");
         Check(naps == 2, "rp-two-pauses");
     }
+    // 40f. A repair OCO that already rests at the venue (found under the
+    // repair id, one leg in the reply) is adopted as protection: no second
+    // POST and no flatten.
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-315", "AAPL", 0, 0, 100,
+                          3, 100, &cid)
+                   .empty(),
+              "ro-image");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "ro-recover");
+        PushRule("GET", "by_client_order_id", 200,
+                 PlainReply("filled", "100").c_str());
+        std::string oco = std::string("{\"id\":\"") + kUuid +
+                          "\",\"order_class\":\"oco\",\"type\":\"limit\","
+                          "\"status\":\"new\",\"filled_qty\":\"0\","
+                          "\"legs\":[{\"id\":\"leg-1\",\"type\":"
+                          "\"stop_limit\",\"status\":\"held\"}]}";
+        PushRule("GET", "by_client_order_id", 200, oco.c_str());
+        Check(g.Cycle(g_now), "ro-cycle");
+        const auto* rs = g.Find("intent-315");
+        Check(rs && rs->done &&
+                  rs->m.state == jev::exec::RouteState::PROTECTED,
+              "ro-adopted-protected");
+        Check(CountMethod("POST", "/v2/orders") == 0, "ro-no-post");
+    }
     // 41. P1 S2 union semantics: (a) PROTECTED +100 vs broker
     // +100 = quiet; (b) local-only = drift; (c) broker-only =
     // drift; (d) short agreement = quiet.
