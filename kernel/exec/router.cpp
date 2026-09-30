@@ -834,19 +834,11 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                     return o;
                 }
                 if (fq >= 0) o.next.filled_qty = fq;
-                if (o.next.protection_ok && fq >= intent.qty_shares) {
-                    // Fully filled: the entry protection still rests. A partial
-                    // never takes this branch: cancelling the entry order also
-                    // cancels its bracket/OTO legs at the venue, so the filled
-                    // quantity is re-protected below under its own identity.
-                    o.action = RouteAction::JOURNAL_CANCEL;
-                    o.next.state = RouteState::PROTECTED;
-                    o.journal_kind = "cancel";
-                    o.reason = "exec:partial-protected";
-                    return o;
-                }
-                // Filled but protection never confirmed (or final qty
-                // unattributed): repair before any claim of PROTECTED.
+                // Our own cancel of the entry order also cancels its bracket/OTO
+                // legs at the venue, even when the order filled fully before
+                // the cancel landed. Protection is therefore never assumed
+                // here: the filled quantity is re-protected under the repair
+                // identity (a failed repair flattens).
                 o.action = RouteAction::ESTABLISH_PROTECTION;
                 o.next.state = RouteState::REPAIR_SENT;
                 o.reason = "exec:repair-now";

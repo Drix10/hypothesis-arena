@@ -790,11 +790,12 @@ int main() {
                   rc2.next.filled_qty == 50,
               "cancel-sent-partial-reprotects");
         mc.filled_qty = 100;
-        oc.cancel_filled_qty = 100;  // fully filled: entry protection rests
+        oc.cancel_filled_qty = 100;  // filled before the cancel landed
         auto rc2f = Step(mc, in, venue, oc);
-        Check(rc2f.next.state == RouteState::PROTECTED &&
+        Check(rc2f.action == RouteAction::ESTABLISH_PROTECTION &&
+                  rc2f.next.state == RouteState::REPAIR_SENT &&
                   rc2f.next.filled_qty == 100,
-              "cancel-sent-full-protected-rests");
+              "cancel-sent-full-reprotects");
         // Same machine, final observation without authoritative
         // quantity: coverage unproven -> repair, never assume.
         RouteObs oc2 = OpenMarket();
@@ -803,7 +804,7 @@ int main() {
         Check(rc3.action == RouteAction::ESTABLISH_PROTECTION,
               "cancel-no-qty-repairs");
         // P1-4: partial 40 -> cancel -> fills grow to authoritative
-        // total 100 -> PROTECTED with 100 (not stale 40).
+        // total 100 -> repair for 100 (not stale 40); our cancel took the legs.
         RouteMachine mp;
         mp.state = RouteState::CANCEL_SENT;
         mp.kind = IntentKind::ENTRY;
@@ -813,8 +814,8 @@ int main() {
         op.cancel_confirmed = true;
         op.cancel_filled_qty = 100;
         auto rp = Step(mp, in, venue, op);
-        Check(rp.action == RouteAction::JOURNAL_CANCEL &&
-                  rp.next.state == RouteState::PROTECTED &&
+        Check(rp.action == RouteAction::ESTABLISH_PROTECTION &&
+                  rp.next.state == RouteState::REPAIR_SENT &&
                   rp.next.filled_qty == 100,
               "cancel-final-authoritative-qty");
     }
