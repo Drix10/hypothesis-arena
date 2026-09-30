@@ -24,8 +24,9 @@ A box is checked only with evidence (commit and test output, or a report path).
 
 ## Track O — ops, CI, hygiene (small, do first)
 
-- [ ] O6 Rotate every credential shared in chat on 2026-09-28
+- [x] O6 Rotate every credential shared in chat on 2026-09-28
       (OpenRouter, FRED, BEA, Alpaca paper); re-seed local `.env` only.
+      Done; operator confirmed in chat 2026-09-30.
 - [x] O4 S7-C closure: hosted CI green, all 6 jobs (run 36470824852).
 - [x] O1 CI: run on every push + `workflow_dispatch`; add `test_baseline`,
       `test_candidate` (pytest pinned in a strategy requirements file),
