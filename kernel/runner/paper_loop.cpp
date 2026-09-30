@@ -210,6 +210,17 @@ bool LogDecision(const std::string& dir, int64_t now_ns,
     return AppendLine((dir + "/decisions.jsonl").c_str(), ln);
 }
 
+// Fail-safe account checks: unusable data (non-positive, or a peak/last
+// equity that is missing) never trips.
+bool DailyLossBreach(int64_t equity, int64_t last_equity) {
+    if (equity <= 0 || last_equity <= 0) return false;
+    return (__int128)(last_equity - equity) * 100 > (__int128)last_equity * 3;
+}
+bool DrawdownKill(int64_t equity, int64_t hwm) {
+    if (equity <= 0 || hwm <= 0) return false;
+    return (__int128)(hwm - equity) * 100 >= (__int128)hwm * 15;
+}
+
 }  // namespace
 
 // Sale proceeds stay unsettled until the next session. The estimate is the
@@ -247,6 +258,11 @@ void PaperLoop::RecordInflight(const std::string& sym, int64_t entry_cents) {
 
 PaperLoop::PaperLoop(G0Runner& runner, LoopIO io, LoopConfig cfg)
     : runner_(runner), io_(io), cfg_(cfg) {
+    // Latches survive a restart: a present file is a trip, whatever it holds.
+    dd_latched_ = FileExists(cfg_.dir + "/dd-kill.latch");
+    if (dd_latched_ && cfg_.kill_feed) cfg_.kill_feed->drawdown_r5 = true;
+    if (FileExists(cfg_.dir + "/daily-loss.day"))
+        daily_loss_day_ = ReadInt(cfg_.dir + "/daily-loss.day");
     // settle.log: "<settle_day> <proceeds_cents>" per line, append-only.
     std::string log = ReadFrom(cfg_.dir + "/settle.log", 0);
     size_t at = 0;
@@ -295,10 +311,32 @@ bool PaperLoop::Tick(int64_t now_ns) {
     stats_.account_ok = have && !av.blocked &&
                         CalendarCovers(cfg_.holidays,
                                        (now_s + EtOffsetSeconds(now_s)) / 86400);
+    int64_t session_today = (now_s + EtOffsetSeconds(now_s)) / 86400;
     if (stats_.account_ok) {
         std::string hp = cfg_.dir + "/hwm.txt";
-        if (av.equity_cents > ReadInt(hp)) WriteInt(hp, av.equity_cents);
+        int64_t peak = ReadInt(hp);
+        if (av.equity_cents > peak) {
+            WriteInt(hp, av.equity_cents);
+            peak = av.equity_cents;
+        }
+        // -15% from the high-water mark latches the kill (never cleared here).
+        if (!dd_latched_ && DrawdownKill(av.equity_cents, peak)) {
+            dd_latched_ = true;
+            AppendLine((cfg_.dir + "/dd-kill.latch").c_str(), "drawdown-15pct");
+            Alert((cfg_.dir + "/alerts.jsonl").c_str(), "MEDIUM",
+                  "drawdown-kill", "equity -15% from high-water mark", now_ns);
+        }
+        // Daily loss > 3% of last_equity holds entries for the session day.
+        if (daily_loss_day_ != session_today &&
+            DailyLossBreach(av.equity_cents, av.last_equity_cents)) {
+            daily_loss_day_ = session_today;
+            WriteInt(cfg_.dir + "/daily-loss.day", session_today);
+            Alert((cfg_.dir + "/alerts.jsonl").c_str(), "MEDIUM",
+                  "daily-loss-hold", "entries held: day loss > 3%", now_ns);
+        }
     }
+    if (dd_latched_ && cfg_.kill_feed) cfg_.kill_feed->drawdown_r5 = true;
+    const bool daily_hold = daily_loss_day_ == session_today;
 
     // Without account information nothing is consumed: the lines wait, and
     // the freshness window retires them if the outage outlasts it.
@@ -398,7 +436,9 @@ bool PaperLoop::Tick(int64_t now_ns) {
             s.settled_cash_cents =
                 book_.SettledCents(av.settled_cash_cents, session_day) - spent_cents;
             CountSubmitted(cfg_.dir, now_ns, &s.day_count, &s.hour_count);
-            s.entry_halt = unexplained || FileExists(cfg_.dir + "/HALT");
+            const bool other_halt =
+                unexplained || FileExists(cfg_.dir + "/HALT");
+            s.entry_halt = other_halt || daily_hold || dd_latched_;
             for (const auto& p : held) {
                 risk::Position rp;
                 rp.symbol = p.symbol;
@@ -418,6 +458,10 @@ bool PaperLoop::Tick(int64_t now_ns) {
             if (pre.accepted)
                 MeasureRisk(io_, cfg_, pre.symbol, held, now_s, &s);
             d = exec::Decide(in);
+            // Name the account-level cause; exits bypass entry_halt upstream.
+            if (!d.proceed && d.reason == "entry-halt" && !other_halt)
+                d.reason = dd_latched_ ? "drawdown-15pct-kill"
+                                       : "daily-loss-3pct";
             if (d.proceed && d.intent.kind == risk::IntentKind::EXIT &&
                 exiting.count(d.symbol)) {
                 d.proceed = false;

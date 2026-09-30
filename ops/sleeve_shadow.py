@@ -12,6 +12,11 @@ warm up the signal only.
     python3 ops/sleeve_shadow.py <dir>            # append missing sessions
     python3 ops/sleeve_shadow.py <dir> --verify   # replay must equal the log
     python3 ops/sleeve_shadow.py <dir> --loop     # re-run every hour
+    ... --no-events                               # core/T1/T2 only
+
+Event sleeves (E1 insider, I1 intraday) come from ops/event_shadow.py; one
+that cannot be computed completely is skipped and logged, never partial.
+E2-det (PEAD) is not wired: see event_shadow.py for why.
 
 --verify is the fidelity gate: a logged row that a fresh replay cannot
 reproduce means look-ahead or revised data, and exits 1.
@@ -27,6 +32,7 @@ import urllib.error
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from ops import event_shadow
 from research.strategy import portfolio, sip_fetch
 from research.strategy.sleeves import sector_mom, trend
 
@@ -174,26 +180,40 @@ def append_rows(path, rows, new):
     return n
 
 
-def run(d, now, verify=False, http_get=sip_fetch.default_http_get):
+def _settle(d, sid, fresh, spec, verify, bad, summary, lenient=False):
+    """Fidelity-check the log against `fresh`, append what is missing."""
+    path = os.path.join(d, "sleeves", sid + ".jsonl")
+    rows, _ = read_log(path)
+    by_date = {r["date"]: r for r in fresh}
+    last = fresh[-1]["date"] if fresh else ""
+    for r in rows:  # fidelity: the log must equal what a replay gives now
+        f = by_date.get(r["date"])
+        if f is None and lenient and r["date"] > last:
+            continue  # event sleeves may lag; a shorter replay is not a mismatch
+        if f is None or abs(f["equity"] / r["equity"] - 1) > TOL:
+            bad.append((sid, r["date"]))
+    if not verify:
+        append_rows(path, rows, fresh)
+    rows, _ = read_log(path)
+    summary[sid] = {"sessions": len(rows), "spec": spec,
+                    "equity": rows[-1]["equity"] if rows else None}
+
+
+def run(d, now, verify=False, http_get=sip_fetch.default_http_get,
+        event_sleeves=True, edgar_get=None, sleep=time.sleep):
     specs = sleeve_specs()
     symbols = sorted({s for u, _, _ in specs.values() for s in u})
     prices = fetch_prices(symbols, now, http_get)
     os.makedirs(os.path.join(d, "sleeves"), exist_ok=True)
     bad, summary = [], {}
     for sid, (universe, factory, spec) in specs.items():
-        path = os.path.join(d, "sleeves", sid + ".jsonl")
-        rows, _ = read_log(path)
         fresh = replay(sid, prices, factory, universe)
-        by_date = {r["date"]: r for r in fresh}
-        for r in rows:  # fidelity: the log must equal what a replay gives now
-            f = by_date.get(r["date"])
-            if f is None or abs(f["equity"] / r["equity"] - 1) > TOL:
-                bad.append((sid, r["date"]))
-        if not verify:
-            append_rows(path, rows, fresh)
-        rows, _ = read_log(path)
-        summary[sid] = {"sessions": len(rows), "spec": spec,
-                        "equity": rows[-1]["equity"] if rows else None}
+        _settle(d, sid, fresh, spec, verify, bad, summary)
+    if event_sleeves:
+        extra = event_shadow.produce(d, now, FORWARD_START, CASH0,
+                                     retrying(http_get), edgar_get, sleep)
+        for sid, (fresh, spec) in extra.items():
+            _settle(d, sid, fresh, spec, verify, bad, summary, lenient=True)
     return bad, summary
 
 
@@ -206,7 +226,8 @@ def main(argv, now=None):
     while True:
         n = now or datetime.datetime.now(datetime.timezone.utc)
         try:
-            bad, summary = run(args[0], n, verify="--verify" in argv)
+            bad, summary = run(args[0], n, verify="--verify" in argv,
+                               event_sleeves="--no-events" not in argv)
         except (ValueError, OSError, sip_fetch.SipError) as e:
             print(json.dumps({"error": str(e)}), file=sys.stderr)
             if "--loop" not in argv:

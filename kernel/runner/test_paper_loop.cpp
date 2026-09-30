@@ -291,6 +291,114 @@ int main(int argc, char** argv) {
     loop.Tick(NOW_S * 1000000000LL);
     CHECK("rotation-replays", loop.stats().seen == 1);
 
+    // 11b. account-level daily loss (> 3% of last_equity): entries hold for
+    // the day with a named reason; exits proceed; missing data never clears.
+    const std::string acct_ok = g_account;
+    auto Acct = [&](const char* eq, const char* last) {
+        std::string a = acct_ok;
+        size_t i = a.find("\"equity\":\"100000\"");
+        a.replace(i, 17, std::string("\"equity\":\"") + eq + "\"");
+        i = a.find("\"last_equity\":\"100000\"");
+        a.replace(i, 22, std::string("\"last_equity\":\"") + last + "\"");
+        return a;
+    };
+    g_positions = "[]";
+    g_account = Acct("97000", "100000");  // exactly -3%: not a breach
+    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 51));
+    loop.Tick(NOW_S * 1000000000LL);
+    dec = Slurp(env.dir + "/decisions.jsonl");
+    CHECK("loss-3pct-exact-no-hold",
+          dec.find("daily-loss-3pct") == std::string::npos &&
+              Slurp(env.dir + "/daily-loss.day").empty());
+    g_account = Acct("96900", "100000");  // -3.1%
+    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 52));
+    loop.Tick(NOW_S * 1000000000LL);
+    dec = Slurp(env.dir + "/decisions.jsonl");
+    CHECK("daily-loss-holds-entry",
+          loop.stats().held == 1 && loop.stats().proceeded == 0 &&
+              dec.rfind("daily-loss-3pct") != std::string::npos);
+    CHECK("daily-loss-not-a-kill",
+          Slurp(env.dir + "/dd-kill.latch").empty());
+    g_positions = "[{\"symbol\":\"VTI\",\"qty\":\"40\",\"side\":\"long\","
+                  "\"market_value\":\"10020.00\"}]";
+    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 53, "SELL"));
+    loop.Tick(NOW_S * 1000000000LL);
+    CHECK("daily-loss-exit-proceeds", loop.stats().proceeded == 1);
+    g_positions = "[]";
+    g_account = acct_ok;  // equity recovered: the day stays held
+    std::remove((env.dir + "/submitted.log").c_str());  // clear r3 counters
+    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 54));
+    loop.Tick(NOW_S * 1000000000LL);
+    dec = Slurp(env.dir + "/decisions.jsonl");
+    CHECK("daily-loss-latched-for-day",
+          loop.stats().proceeded == 0 &&
+              dec.rfind("daily-loss-3pct") > dec.rfind("\"proceed\":true"));
+    g_account_up = false;  // outage: still held, nothing consumed
+    loop.Tick(NOW_S * 1000000000LL);
+    g_account_up = true;
+    CHECK("daily-loss-survives-outage", !loop.stats().account_ok);
+    PaperLoop restarted(runner, io, lc);  // latch reloads from disk
+    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 55));
+    restarted.Tick(NOW_S * 1000000000LL);
+    CHECK("daily-loss-survives-restart", restarted.stats().proceeded == 0);
+    // Missing last_equity falls back to equity: no breach.
+    std::string nolast = acct_ok;
+    nolast.replace(nolast.find("\"last_equity\":\"100000\","), 23, "");
+    AccountView nav;
+    CHECK("missing-last-equity-no-breach",
+          ParseAccount(nolast, &nav) &&
+              nav.last_equity_cents == nav.equity_cents);
+
+    // 11c. -15% drawdown from hwm.txt raises the kill input (latched).
+    KillFeed feed;
+    LoopConfig lc2 = lc;
+    lc2.kill_feed = &feed;
+    PaperLoop dd(runner, io, lc2);
+    kill::KillInputs ki;
+    KillFeedInputs(&feed, &ki);
+    CHECK("dd-feed-quiet-at-start", !ki.drawdown_r5);
+    g_account = Acct("86000", "86000");  // -14%: below the line
+    dd.Tick(NOW_S * 1000000000LL);
+    KillFeedInputs(&feed, &ki);
+    CHECK("dd-14pct-no-kill", !ki.drawdown_r5 && !feed.drawdown_r5);
+    g_account = Acct("85000", "85000");  // exactly -15%
+    dd.Tick(NOW_S * 1000000000LL);
+    ki = kill::KillInputs();
+    KillFeedInputs(&feed, &ki);
+    kill::LevelResult lr = kill::EvaluateLevel(ki);
+    CHECK("dd-15pct-kills", ki.drawdown_r5 &&
+                                lr.level == risk::KillLevel::MEDIUM &&
+                                std::strcmp(lr.reason, "kill:drawdown-r5") == 0);
+    CHECK("dd-latch-persisted", !Slurp(env.dir + "/dd-kill.latch").empty());
+    g_account = acct_ok;  // recovery does not clear the latch
+    dd.Tick(NOW_S * 1000000000LL);
+    g_account_up = false;  // nor does missing data
+    dd.Tick(NOW_S * 1000000000LL);
+    g_account_up = true;
+    ki = kill::KillInputs();
+    KillFeedInputs(&feed, &ki);
+    CHECK("dd-latch-holds", ki.drawdown_r5);
+    KillFeed feed2;  // a restart reads the latch file
+    lc2.kill_feed = &feed2;
+    PaperLoop dd2(runner, io, lc2);
+    CHECK("dd-latch-restart", feed2.drawdown_r5);
+    CHECK("dd-hwm-untouched", Slurp(env.dir + "/hwm.txt") == "10000000");
+    std::remove((env.dir + "/submitted.log").c_str());  // clear r3 counters
+    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 56));
+    dd.Tick(NOW_S * 1000000000LL);
+    dec = Slurp(env.dir + "/decisions.jsonl");
+    CHECK("dd-holds-entry-named", dd.stats().proceeded == 0 &&
+              dec.rfind("drawdown-15pct-kill") != std::string::npos);
+    g_positions = "[{\"symbol\":\"VTI\",\"qty\":\"40\",\"side\":\"long\","
+                  "\"market_value\":\"10020.00\"}]";
+    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 57, "SELL"));
+    dd.Tick(NOW_S * 1000000000LL);
+    CHECK("dd-exit-proceeds", dd.stats().proceeded == 1);
+    g_positions = "[]";
+    KillFeedInputs(nullptr, &ki);  // null-safe
+    std::remove((env.dir + "/dd-kill.latch").c_str());
+    std::remove((env.dir + "/daily-loss.day").c_str());
+
     // 12. a calendar with no holiday in the traded year fails closed.
     Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1"));
     loop.Tick((NOW_S + 400LL * 86400) * 1000000000LL);

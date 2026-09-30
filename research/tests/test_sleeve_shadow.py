@@ -81,15 +81,15 @@ class Shadow(unittest.TestCase):
         S.fetch_prices = fake
         try:
             with tempfile.TemporaryDirectory() as d:
-                bad, summ = S.run(d, NOW)
+                bad, summ = S.run(d, NOW, event_sleeves=False)
                 self.assertEqual(bad, [])
                 self.assertEqual(set(summ), set(self.specs))
-                bad, _ = S.run(d, NOW, verify=True)
+                bad, _ = S.run(d, NOW, verify=True, event_sleeves=False)
                 self.assertEqual(bad, [])
                 for s in self.prices["VTI"]:  # provider revises history
                     o, c = self.prices["VTI"][s]
                     self.prices["VTI"][s] = (o * 1.3, c * 1.3) if s > self.dates[350] else (o, c)
-                bad, _ = S.run(d, NOW, verify=True)
+                bad, _ = S.run(d, NOW, verify=True, event_sleeves=False)
                 self.assertTrue(bad)
         finally:
             S.fetch_prices = old

@@ -77,6 +77,10 @@ int main(int argc, char** argv) {
     std::strncpy(cfg.venue.context_hash, "GENESIS-NO-SNAPSHOT-CONTEXT", 64);
     cfg.venue.context_hash[64] = '\0';
     jev::runner::RunnerDeps deps;
+    jev::runner::KillFeed kill_feed;
+    deps.kill_inputs = jev::runner::KillFeedInputs;
+    deps.kill_ctx = &kill_feed;
+    lc.kill_feed = &kill_feed;
     deps.transport = jev::broker::CurlTransport;
     deps.now_ns = WallNs;
     deps.mono_ns = MonoNs;

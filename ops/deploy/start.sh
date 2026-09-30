@@ -16,6 +16,7 @@ if [ "${1:-}" = stop ]; then
     pkill -f "^$loop_bin " || true
     pkill -f "ops/jev_shadow.py" || true
     pkill -f "ops/sleeve_shadow.py" || true
+    pkill -f "collector/soak.py" || true
     echo stopped; exit 0
 fi
 dir="${1:-$HOME/g0}"
@@ -82,6 +83,11 @@ echo "loop running (pid $(cat "$dir/loop.pid")). live view: python3 ops/monitor.
 # Forward shadow ledgers for the non-routed sleeves (log-only, no orders).
 setsid nohup python3 ops/sleeve_shadow.py "$dir" --loop </dev/null >>"$dir/logs/sleeves.log" 2>&1 &
 echo "sleeve shadow ledgers running (log: $dir/logs/sleeves.log, data: $dir/sleeves/)"
+# Optional: macro/filing collector (frozen code, writes only repo data/, nothing reads it yet).
+if [ "${WITH_COLLECTOR:-0}" = "1" ]; then
+    setsid nohup python3 collector/soak.py --loop </dev/null >>"$dir/logs/collector.log" 2>&1 &
+    echo "collector running (log: $dir/logs/collector.log)"
+fi
 
 if [ -n "$OPENROUTER_API_KEY" ]; then
     timeout 180 python3 ops/jev_shadow.py "$dir" >>"$dir/logs/shadow.log" 2>&1 || echo "shadow did not finish, see $dir/logs/shadow.log" >&2

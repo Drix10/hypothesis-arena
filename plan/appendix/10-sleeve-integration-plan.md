@@ -1,7 +1,7 @@
 # Sleeve integration plan (2026-09-30)
 
 Status: operating plan for G0a/G0b. It does not change any frozen contract;
-where it touches one it says so. Evidence base: the 2026-09-30 literature
+where it touches one it says so. Evidence base (full text in `11-sleeve-evidence-review.md`): the 2026-09-30 literature
 review (McLean-Pontiff 2016, Moskowitz-Ooi-Pedersen 2012, Hurst-Ooi-Pedersen,
 Faber 2007/2017, Moskowitz-Grinblatt 1999, Cohen-Malloy-Pomorski 2012,
 Martineau 2022, Gao-Han-Li-Zhou 2018, Harvey et al. 2018, Kaminski-Lo 2014,
@@ -73,18 +73,22 @@ band. Promote at a 5-10% risk budget.
 
 1. [done] Shadow ledgers for core, T1, T2 (`ops/sleeve_shadow.py`), monitor
    panel, start.sh background loop, CI test.
-2. Event sleeves (E1, E2det, I1) into the same ledger: need their data pulls
-   scheduled (Form 4 acceptance timestamps, earnings calendar, intraday
-   bars) and their frozen A-gate runs. Not wired for g2.
-3. Collector as an optional background poller feeding the shadow macro-lite
-   tilt and event-day flags (vintage data only).
+2. [done] Event sleeves in the same ledger (`ops/event_shadow.py`): E1 insider
+   (3 prereg variants, acceptance-time entry) and I1 intraday (2 variants).
+   E2det PEAD is NOT wired: its registered signal needs SEC Financial
+   Statement Data Sets, published only after each quarter, so there is no
+   forward source; rebuilding SUE elsewhere would be an unregistered signal.
+3. [done, opt-in] Collector as a background poller (`WITH_COLLECTOR=1`). The
+   macro-lite tilt and event-day flags that would consume it are not built.
 4. JEV paired A/B: every sleeve's filtered twin on identical candidates,
    prompt/context hash journaled before the outcome; success criterion
    preregistered before any run.
 5. Netting router and Tier R promotion of T1 (after the fidelity gate).
-6. Kill inputs (`deps.kill_inputs`): per-sleeve -1.5x / -2x vol from peak,
-   account daily loss 3%, account drawdown -15%. Practitioner conventions,
-   not tuned values.
+6. [partly done] Kill inputs: account daily loss > 3% holds entries for the
+   ET day; account drawdown >= 15% from `hwm.txt` latches (`dd-kill.latch`,
+   operator deletes it to clear) into the kernel's existing MEDIUM kill, which
+   stops entries and runs the existing flatten sweep. Per-sleeve -1.5x/-2x
+   limits wait for Tier R. Practitioner conventions, not tuned values.
 
 ## 6. Known caveats
 

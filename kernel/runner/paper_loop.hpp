@@ -26,8 +26,23 @@ struct LoopIO {
     std::function<bool(const std::string& path, std::string* body)> data;
 };
 
+// Account-level kill signals the loop feeds to the runner's kill gate.
+// The owner (main) sets RunnerDeps.kill_inputs = KillFeedInputs and
+// kill_ctx = &feed, and hands the same feed to LoopConfig. Only the loop
+// writes it, and only ever to true: absent data cannot set it and nothing
+// here clears it (an operator removes dd-kill.latch and restarts).
+struct KillFeed {
+    bool drawdown_r5 = false;  // equity <= -15% from hwm.txt, latched
+};
+inline void KillFeedInputs(void* ctx, kill::KillInputs* out) {
+    if (!ctx || !out) return;
+    if (static_cast<const KillFeed*>(ctx)->drawdown_r5)
+        out->drawdown_r5 = true;
+}
+
 struct LoopConfig {
     std::string dir;
+    KillFeed* kill_feed = nullptr;  // optional; null = no drawdown kill wiring
     std::set<int64_t> holidays;
     ingest::CandidateTables tables;  // approved sleeves + allowlist
     int64_t risk_bp = 25;
@@ -58,6 +73,8 @@ class PaperLoop {
     LoopIO io_;
     LoopConfig cfg_;
     LoopStats stats_;
+    bool dd_latched_ = false;          // -15% from hwm seen (persisted)
+    int64_t daily_loss_day_ = -1;      // session day of a >3% daily-loss trip
     SettleBook book_;  // proceeds of exits this loop submitted (R18)
 };
 

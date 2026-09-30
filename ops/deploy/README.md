@@ -136,8 +136,13 @@ place no orders. Check that history reproduces (the fidelity gate) any time:
 python3 ops/sleeve_shadow.py ~/g2 --verify
 ```
 
-Exit 1 means a logged row can no longer be reproduced (look-ahead or revised
-data). Plan and promotion rules: `plan/appendix/10-sleeve-integration-plan.md`.
+The insider (E1) and intraday (I1) sleeves are in the same ledger. The first
+E1 run downloads SEC quarterly insider data sets into `~/g2/event_cache` (up to
+3 per hourly pass), so its rows start after about two passes. Pass `--no-events`
+to skip them. PEAD is not wired (its registered signal has no forward data
+source). Exit 1 means a logged row can no longer be reproduced (look-ahead or revised
+data). Optional macro/filing collector (nothing reads its output yet):
+`WITH_COLLECTOR=1 bash ops/deploy/start.sh ~/g2`. Plan and promotion rules: `plan/appendix/10-sleeve-integration-plan.md`.
 
 On a Linux-native checkout, `bash ops/deploy/start.sh` automates the same
 steps (build, first-run STAGE sign-off, loop, emitter, shadow);
