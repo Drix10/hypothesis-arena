@@ -1,9 +1,8 @@
 # Testing program for the built sleeves (rev 2, 2026-09-30)
 
 Status: operating protocol under docs 07, 11 and 12; it adds no gate and
-relaxes none. Evidence base: `11-sleeve-evidence-review.md`. Recorded by the
-agent on the operator's instruction in chat, 2026-09-30 ("plan the best
-testing strategy for all of these, update all plan docs, then code").
+relaxes none. Evidence base: `11-sleeve-evidence-review.md`. Written on the
+operator's instruction in chat, 2026-09-30.
 
 ## 1. Where things stand (from the trial ledger and `research/reports/`)
 
@@ -18,7 +17,7 @@ All five built sleeves have run their A-gate (doc 11 §11.3a) on the frozen
 | E1 insider | FAIL, clearly | Sharpe below passive, drawdown 27%, 7.9% of events unpriced |
 | E2det PEAD | FAIL, clearly | no drift in tradable names |
 
-Consequences that override the earlier draft of this appendix:
+Consequences:
 1. No sleeve is a promotion candidate. Doc 07 §7.6 allows exactly one
    champion through the kernel (G0b), and none exists. The g2 run is a
    plumbing test with the passive core; it is not a sleeve.
@@ -35,33 +34,33 @@ Consequences that override the earlier draft of this appendix:
 
 ## 2. Strategy: four evidence tracks, run concurrently, never mixed
 
-The best test of "does this already-published thing work" is not another
-short forward test; it is long data. So:
+Whether a published effect works is best tested on long data, not another
+short forward test.
 
-- **Track L (long history, decades):** the canonical trend and industry
+- Track L (long history, decades): the canonical trend and industry
   momentum rules on Ken French daily industry portfolios (1926+), judged by
   post-publication sub-periods and the decay ratio (McLean-Pontiff).
   Pre-registered (`research/prereg/l1_long_history_v1.json`), run once per
-  data vintage, three trials counted in the global N. Answers "does the
-  effect still exist, and how much has it decayed" with 100 years of power.
+  data vintage, three trials counted in the global N. It answers whether the
+  effect still exists and how much it has decayed, with 100 years of data.
   Not promotion evidence (doc 11 §11.0d: it is not the live constraint set);
   it sets the prior that decides whether a sleeve is worth forward time.
-- **Track F (forward replication ledgers, from 2026-09-30):** every built
+- Track F (forward replication ledgers, from 2026-09-30): every built
   sleeve plus its controls runs as a virtual ledger on live data
   (`ops/sleeve_shadow.py`, `ops/event_shadow.py`, `ops/macro_shadow.py`), all
   on the identical engine, `cost_v2`, next-open fills, settled cash, all
   registered in the trial ledger before any result
-  (`ops/forward_register.py`). Question asked: does the failed A-gate
-  hypothesis hold on untouched data, and how does it track its own replay.
+  (`ops/forward_register.py`). It asks whether the failed A-gate
+  hypothesis holds on untouched data and how it tracks its own replay.
   These are research observations under doc 11 §11.2; they are not
   challengers of a champion (there is none), so the "3 challengers" cap does
   not apply, and they consume no capital and no AI spend except Track J.
-- **Track J (JEV paired A/B, `ops/jev_twin.py`):** doc 11 §11.3b. Each
+- Track J (JEV paired A/B, `ops/jev_twin.py`): doc 11 §11.3b. Each
   ledger's twin drops the adds the JEV vetoes; the test is filtered minus
   unfiltered on identical post-cutoff candidates, >= 100 resolved decisions.
   Spend stays under the doc 10 §10.4 caps; without OPENROUTER_API_KEY it does
   nothing.
-- **Track R (real orders):** only the passive core through the kernel (g2).
+- Track R (real orders): only the passive core through the kernel (g2).
   Judged on fidelity and operations, never on Sharpe.
 
 ## 3. Controls and benchmarks (doc 12 §12.6, all as ledgers)
@@ -71,8 +70,7 @@ short forward test; it is long data. So:
 passive counterpart), `bench_spy_v1` (equity sleeves), `core_passive_v1`
 (60/40 sanity reference and the macro-lite baseline). Every sleeve is scored
 only as a paired daily difference against its mapped benchmark
-(`ops/sleeve_eval.py` `MAPPING`); paired differences remove market beta and
-are the most powerful test available. Benchmarks are not trials.
+(`ops/sleeve_eval.py` `MAPPING`); paired differences remove market beta. Benchmarks are not trials.
 
 ## 4. Statistics (doc 11 §11.0b, applied to the forward program)
 
@@ -83,7 +81,7 @@ are the most powerful test available. Benchmarks are not trials.
 - Test statistic: HAC t of the daily paired difference, stationary-bootstrap
   95% CI on the annualised active return, information ratio, tracking error.
 - Power is reported per ledger ((1.645/IR)^2 years to reach one-sided 95%) so
-  nobody reads a short window as evidence.
+  a short window is not read as evidence.
 - New non-literature signals (macro-lite, twins): t >= 3.0 on the difference
   to the mapped baseline, not to zero.
 
@@ -94,19 +92,19 @@ are the most powerful test available. Benchmarks are not trials.
 | < 60 | WARMUP | plumbing and fidelity only; no judgement |
 | >= 60 | CONTINUE | B-gate window for a sleeve that has passed an A-gate (none yet) |
 | >= 126 | KILL-FUTILE if the 95% CI UPPER bound of the annualised active return is < 0 | stop spending attention (ledger stays, marked) |
-| >= 504 (2 y) | ELIGIBLE-FOR-REVIEW only if Holm-adjusted p < 0.05, CI lower bound > 0 and drawdown not larger than the benchmark's | a human MAY review; it is never a promotion |
+| >= 504 (2 y) | ELIGIBLE-FOR-REVIEW only if Holm-adjusted p < 0.05, CI lower bound > 0 and drawdown not larger than the benchmark's | a human may review; it is never a promotion |
 
-Weights and specs are fixed for the whole program; no bandit reallocation, no
-early stopping for success. A spec change opens new trials.
+Weights and specs are fixed for the whole program: no bandit reallocation and
+no early stopping for success. A spec change opens new trials.
 
-## 6. Fidelity gate (does the book equal the strategy)
+## 6. Fidelity gate (the book must equal the strategy)
 
 `python3 ops/sleeve_shadow.py <dir> --verify` replays from fresh data and
 must reproduce every logged row within 20 bp, else look-ahead or revised
 data (exit 1). The hash chain of every ledger is checked by the evaluator on
 every pass (CHAIN-BROKEN excludes a ledger and exits 3).
 
-## 7. What runs, and how the pieces fit
+## 7. What runs
 
 `start.sh` starts the kernel loop (real orders, core only) and one background
 job (`sleeve_shadow.py --loop`, hourly after close) that: registers the

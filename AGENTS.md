@@ -14,8 +14,8 @@
 6. Fail closed. Prefer HOLD / refuse / ask over expanding scope.
 7. One commit, one theme: docs XOR one track slice. Never "docs + C++ +
    agents" in a single commit.
-8. If a task conflicts with `ARCHITECTURE.md` §6/§8 or a plan locked
-   decision: stop and report. Do not work around it.
+8. If a task conflicts with a plan locked decision: stop and report. Do not
+   work around it.
 9. Alpha-first (doc 06 AUDIT STOP RULE): do not start a hardening round
    on a component whose stage does not need it while a strategy gate on
    the critical path is open. Ask "does this change the probability the

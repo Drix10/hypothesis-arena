@@ -1,11 +1,10 @@
 # Appendix 02 - X-Lists signal system archive (NON-PRODUCTION / HISTORICAL)
 
-Moved VERBATIM from doc 02 §§2.1–2.6 in the freeze-v3 rebaseline
-(2026-09-28). X is out of the production path (§2.6 below, unchanged).
-Nothing in this file authorizes a build. Doc 02 now carries the strategy
-book; its filename is legacy until the code-phase freeze-check update.
+Moved from doc 02 §§2.1–2.6 (2026-09-28). X is out of the production path
+(§2.6 below). Nothing in this file authorizes a build. Doc 02 now carries
+the strategy book under its legacy filename.
 
-Original doc 02 header (freeze v2): Ported from `Twitter-Gemini-GitHub-MVP`.
+Original source: ported from `Twitter-Gemini-GitHub-MVP`.
 
 ## 2.1 What the old system did (HISTORICAL - archived design, not built)
 
@@ -123,24 +122,22 @@ macro/FX/earnings-native lists + calendar events (Fed/ECB, CPI, NFP, earnings fo
 covered names) + price feeds can trigger entries. This prevents
 "AI hype tweet → long EURUSD" nonsense.
 
-## 2.5 Collector design (HISTORICAL - the archived X-sidecar shape; production collector is §2.7 + doc 09)
+## 2.5 Collector design (HISTORICAL - the archived X-sidecar shape; production collector is specified in doc 09)
 
-- **Transport (locked, corrected from an earlier draft of this doc): there is
+- **Transport (locked): there is
   no free X API tier to build on.** As of 2026, X eliminated the free and
   legacy Basic/Pro tiers for new developers; the default is metered pay-per-use
   (charged per read and per post), with unmetered access granted only
   case-by-case to approved "public good" applications. Paying per call is a
   paid data subscription in substance even if billed as usage, and doc 01
-  forbids that for core operation - so the API is **not used**, full stop, not
-  "used carefully."
+  forbids that for core operation - so the API is **not used**, without exception.
   - Transport is therefore **self-hosted mirror feeds, best-effort**: Phase-0
     research selected `twikit-rss` (MIT, `GET /list/{id}/rss` + `/user/{name}/rss`,
     cookie-persisted session, no X API key). It authenticates as a normal logged-in
     session, so X-credential placement on the sidecar host is a Phase-1 design
     item (never in git, never on the trading host). No 15-min SLA can be assumed
-    against X's frontend; this is a real reduction in freshness and coverage
-    from the original scrape-based pipeline, accepted deliberately in exchange
-    for zero cost and zero fragility to a scraper breaking.
+    against X's frontend; this is a reduction in freshness and coverage
+    from the original scrape-based pipeline, accepted in exchange for zero cost and no dependence on a scraper.
   - **CONTEXT-capped permanently by transport, independent of the doc §2.4
     TRIGGER/CONTEXT list classification.** §2.4's TRIGGER/CONTEXT split is about
     which *lists* are logically eligible to influence entries; this rule is
@@ -154,8 +151,7 @@ covered names) + price feeds can trigger entries. This prevents
   - **No browser automation against X.** Not Selenium (already banned), not
     Playwright, not CDP, and no paid API as a substitute for automation. If the
     mirrors are unavailable, the sentiment tail is **absent**, and absent is not
-    neutral (§2.5 failure default). The fund does not depend on this feed and
-    must trade without it.
+    neutral (§2.5 failure default). The fund does not depend on this feed.
 - Polling: each list every 15 min, staggered; obey rate limits; jittered backoff
   (port `withJsonRetry` semantics: 3 retries, ~15 s base, jitter ±20%).
 - Storage: append-only JSONL per day + SQLite index by (list, tweet_id), pruned

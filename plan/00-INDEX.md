@@ -2,18 +2,16 @@
 
 One folder. Everything lives here. If it is not in here, we do not build it.
 
-**Freeze v3 = the "alpha-first rebaseline".** Freeze v2 built a rigorous
-safety machine around an unproven edge. Freeze v3 keeps every safety
-contract and re-points the work at three things the v2 plan lacked:
-a legally tradable scope for the actual operator, a measurable alpha
-pipeline, and the shortest path into the paper loop.
+Freeze v3 keeps every safety contract and adds three things: a legally
+tradable scope for the operator, a measurable alpha pipeline, and the
+shortest path into the paper loop.
 
 ## Files (read in order)
 
 1. `01-vision-and-scope.md` - what we build, what we do not, operator
    jurisdiction, venue, latency tiers (why this is not HFT and what is).
-2. `02-strategy-book.md` - **Strategy book: alpha sleeves** (renamed
-   from `02-twitter-alpha-system.md`; the X-lists archive moved to `appendix/02-x-lists-archive.md`).
+2. `02-strategy-book.md` - strategy book: alpha sleeves. The filename is
+   legacy; the X-lists archive is `appendix/02-x-lists-archive.md`.
 3. `03-jev-decision-layer.md` - JEV: the single candidate-bound
    contract; JEV is an optional challenger-grade filter.
 4. `04-cpp-deterministic-core.md` - the C++ kernel: processes, modules,
@@ -36,7 +34,8 @@ pipeline, and the shortest path into the paper loop.
 13. `13-cpp-kernel-build.md` - Phase-3 build record + P3.5 remaining scope.
 
 Also: `system-manifest.yaml` (fingerprint code verifies against),
-`appendix/` (implementation records moved verbatim, still frozen; `appendix/10-sleeve-integration-plan.md` is the live operating plan for sleeve tiers and g2 gates),
+`appendix/` (implementation records, frozen; `appendix/10-sleeve-integration-plan.md`
+is the live operating plan for sleeve tiers and g2 gates),
 `reviews/` (result reviews; never authority).
 
 ## Rules of this folder
@@ -55,26 +54,26 @@ Also: `system-manifest.yaml` (fingerprint code verifies against),
   They are binding where a doc points to them; they are not reading-order
   material.
 
-## Global locked decisions (one page, no exceptions)
+## Global locked decisions
 
-- **Deterministic code owns every decision that can lose money.** Agents
-  produce evidence, research, and code proposals - never orders.
-- **Alpha-first.** No engineering beyond what the current stage needs
+- Deterministic code owns every decision that can lose money. Agents
+  produce evidence, research, and code proposals, never orders.
+- Alpha-first. No engineering beyond what the current stage needs
   until a strategy sleeve has passed its gate (doc 11). Audit reopening
   follows the doc 06 AUDIT STOP RULE classes only.
-- **Legality first.** Live scope is what the operator may lawfully trade:
+- Legality first. Live scope is what the operator may lawfully trade:
   US-listed equities and ETFs, cash account, long only, 1× (doc 01,
   R18/R19, doc 10 jurisdiction gate). Paper evidence counts toward
   promotion only if produced under that same constraint set.
-- **LLMs earn their place where evidence says they can:** the offline
-  research factory, typed extraction from primary documents, and
-  (optionally) a calibrated filter that must prove a paired delta. No LLM
-  output originates direction at the execution boundary.
-- **LLM evidence is time-gated:** any evaluation involving a model's
-  output uses only data after that model's pinned knowledge cutoff plus
-  an embargo (doc 11). Data timestamps are guarded by R12; model memory is
+- LLMs are used where evidence says they can help: the offline research
+  factory, typed extraction from primary documents, and (optionally) a
+  calibrated filter that must prove a paired delta. No LLM output
+  originates direction at the execution boundary.
+- LLM evidence is time-gated: any evaluation involving a model's output
+  uses only data after that model's pinned knowledge cutoff plus an
+  embargo (doc 11). Data timestamps are guarded by R12; model memory is
   guarded by this rule.
-- JEV (`typesafe/jev-1.13`, pinned, never floating) one contract,
+- JEV (`typesafe/jev-1.13`, pinned, never floating): one contract,
   candidate-bound. JEV is not required on the champion path.
 - R1–R19 are code constants. Any change = doc edit + version bump +
   fresh paper window.
@@ -91,4 +90,4 @@ Also: `system-manifest.yaml` (fingerprint code verifies against),
   paused research. New risk stops; old risk stays managed; the system
   fails toward paper.
 - Secrets never enter the repo, a log, a prompt, or a chat. A secret that
-  was exposed anywhere is rotated, not reasoned about.
+  was exposed anywhere is rotated.

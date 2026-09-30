@@ -1,13 +1,12 @@
-# 06 - Execution and Ops (freeze v3)
+# 06 - Execution and Ops
 
-Freeze v3 keeps the H1 order lifecycle exactly as accepted and adds what
-the v2 doc never had: execution rules per sleeve, a cost model that is
-the evaluation authority, cash-account settlement operations, and
-outbound-only alerting. The ~340-line close-ownership / incident-identity /
-recovery contract formerly in §6.1b moved VERBATIM to
-`appendix/06b-close-ownership-and-recovery-record.md` and remains binding.
+This doc covers the H1 order lifecycle, execution rules per sleeve, the
+cost model (the evaluation authority), cash-account settlement operations,
+and outbound-only alerting. The close-ownership / incident-identity /
+recovery contract (§6.1b) is in
+`appendix/06b-close-ownership-and-recovery-record.md` and is binding.
 
-## 6.0 Execution by sleeve (v3)
+## 6.0 Execution by sleeve
 
 | Sleeve | Signal time | Entry order | Protection | Normal exit |
 |---|---|---|---|---|
@@ -16,39 +15,37 @@ recovery contract formerly in §6.1b moved VERBATIM to
 | E1/E2 events | EDGAR acceptance time (R12) | next session 10:00 ET marketable limit | OTO stop-only, GTC (`exit_event_v1`) | MOC on the holding-period day |
 | B0 baseline (shadow only) | per doc 12 | per doc 12 | bracket (`exit_profile_v1`) | stop / TP / time_exit |
 
-Ordering rules that every sleeve obeys:
+Ordering rules for every sleeve:
 - Marketable limits, never naked market orders, for entries; the limit cap
-  is the pre-registered slippage bound (a fill worse than the cap does not
-  happen; an unfilled entry is cancelled at the sleeve's window end -
-  no chasing).
+  is the pre-registered slippage bound (no fill worse than the cap; an
+  unfilled entry is cancelled at the sleeve's window end, never chased).
 - MOC exits go in before the broker-declared MOC cutoff (adapter data).
-  MOC vs protective stop (K5 live finding 2026-09-29): Alpaca rejects both
-  MOC and market sells when an OTO stop is live; the stop must be cancelled
-  first. The stop is cancelled before MOC submission if it is currently live
-  (postpones the close to the next cycle when the stop is no longer active).
-  If the stop fills first, the MOC becomes an over-sell that a cash account
-  rejects - the router treats that reject as the expected terminal for the
-  MOC (journaled, reconciled), never as an error loop. If the MOC is
-  rejected or missed, the position stays protected and the exit is retried
-  at the next session open (journaled incident).
+  MOC vs protective stop (K5, observed on Alpaca paper 2026-09-29): the
+  broker rejects both MOC and market sells while an OTO stop is live, so
+  the stop is cancelled before MOC submission if it is live (if the stop
+  is no longer active, the close moves to the next cycle). If the stop
+  fills first, the MOC becomes an over-sell that a cash account rejects;
+  the router treats that reject as the expected terminal for the MOC
+  (journaled, reconciled), not as an error loop. If the MOC is rejected or
+  missed, the position stays protected and the exit is retried at the next
+  session open (journaled incident).
 - Whole shares for protected orders (adapter constraint); rounding is the
   last step of the sizing hierarchy and never rounds up past a cap.
 - No extended-hours orders in v1. No order in the first 5 minutes after
   the open except the E-sleeve window, which starts at 10:00 ET.
 
-## 6.0a Cost model and TCA (v3 - the evaluation authority)
+## 6.0a Cost model and TCA (the evaluation authority)
 
-Alpaca paper is a plumbing test, not a cost oracle: per Alpaca's own
+Alpaca paper is a plumbing test, not a cost oracle. Per Alpaca's
 documentation it does not check order size against NBBO quantity,
 partial-fills a random 10% of eligible orders, ignores market impact,
 queue position, price improvement, latency slippage, and regulatory fees,
 and does not simulate dividends. Therefore:
 
-- `paper_fill_v1` (frozen, unchanged - see Locked decisions) stays the
-  conservative per-leg fill rule used by `baseline_v1` and S2/S5
-  reproductions.
-- `cost_v2` (v3, for every sleeve pre-registration) = `paper_fill_v1`
-  priced from **SIP NBBO at the decision time** (delayed history in
+- `paper_fill_v1` (frozen; see Locked decisions) is the conservative
+  per-leg fill rule used by `baseline_v1` and S2/S5 reproductions.
+- `cost_v2` (used by every sleeve pre-registration) = `paper_fill_v1`
+  priced from SIP NBBO at the decision time (delayed history in
   research; the live quote in G0b shadow accounting) + SEC Section 31 fee
   and FINRA TAF on sells + a participation cap (order ≤ 1% of the
   symbol's 20-day median volume and ≤ displayed size at the touch; larger
@@ -59,12 +56,12 @@ and does not simulate dividends. Therefore:
   and vs the modeled cost; daily and per-sleeve aggregates in the summary.
   Live (G1+) realized shortfall > 1.5× modeled over 30 fills → S3 pause.
 
-## 6.0b Cash-account settlement operations (v3)
+## 6.0b Cash-account settlement operations
 
 - The settlement ledger (doc 04 §4.2 5c) is rebuilt at startup from the
   journal + broker account and reconciled every cycle (S2).
-- Intraday sleeves use **two alternating capital tranches** so that each
-  day's buys are funded by cash that settled; the ledger enforces it (R18).
+- Intraday sleeves use two alternating capital tranches so that each
+  day's buys are funded by settled cash; the ledger enforces it (R18).
 - Monthly sleeves sell first and buy the next session with settled
   proceeds (the rebalance is two sessions by design).
 - A T-bill ETF used as the cash leg is itself subject to T+1: moving from
@@ -74,11 +71,11 @@ and does not simulate dividends. Therefore:
   compliance incident: entries stop, human review, root cause in the
   journal before resuming.
 
-## 6.1 Order lifecycle (locked, v2: broker-native protection)
+## 6.1 Order lifecycle (locked; broker-native protection)
 
 Local C++ stops are the active controller, never the disaster protection. A
-position the broker cannot protect on its own is a position the process cannot
-survive losing - so protection is established broker-side first:
+position the broker cannot protect on its own is a position the process
+cannot survive losing, so protection is established broker-side first:
 
 ```
 intent (risk PASS) → re-check HALT file → journal row → send entry +
@@ -87,9 +84,9 @@ intent (risk PASS) → re-check HALT file → journal row → send entry +
   positively establishes the entry↔protection relationship - OANDA
   stopLossOnFill/takeProfitOnFill; Alpaca bracket legs with adapter-proven
   semantics). Each adapter proves: entry ack, protection ack, partial-fill
-  behavior, cancel/replace behavior, double-trigger behavior - including
-  fast-market edge behavior. "Atomic" is the requirement (no naked entry),
-  not a cross-broker primitive claim. → ack/timeout → query once:
+  behavior, cancel/replace behavior, double-trigger behavior, including
+  fast-market edge behavior. The requirement is no naked entry, not a
+  cross-broker atomic primitive. → ack/timeout → query once:
    filled + protection acked → journal fill → PROTECTED → track
    filled, protection missing → PROTECTIVE_ORDER_MISSING: establish now or
      flatten immediately; never hold naked awaiting a retry loop
@@ -104,41 +101,40 @@ intent (risk PASS) → re-check HALT file → journal row → send entry +
  → exit (stop, TP, calendar time_exit, or flip rule below) → journal + reflection row
 ```
 
-- Durable order state machine (survives restarts): intent_id + client order ID
-  + send_attempt + broker_ack_state persisted before send. After any crash the
-  process reconciles ack state with the broker BEFORE issuing anything new -
-  a restart must never double-send what the dead process already sent.
+- Durable order state machine (survives restarts): intent_id + client order
+  ID + send_attempt + broker_ack_state persisted before send. After any
+  crash the process reconciles ack state with the broker BEFORE issuing
+  anything new; a restart never double-sends what the dead process sent.
 - Client order ID = typed intent fingerprint + broker/account namespace +
   persisted intent_id, hashed: `hex(sha256(broker ‖ account ‖ context_hash ‖
   symbol ‖ side ‖ intent_id))`, truncated only if the broker requires it -
   one intent, one ID, no attempt counter, no delimiter ambiguity, no
-  cross-account collision. (An `attempt` field in the hash was a
-  duplicate-order bug: every retry would mint a fresh ID and double-fill.
-  Retries reuse the ID.)
+  cross-account collision. Retries reuse the ID (an `attempt` field in the
+  hash would mint a fresh ID per retry and double-fill).
 - One send attempt + one status query. No martingale re-sends.
 - Stops are attached at entry or the entry is rejected. exit_profile_v1
   (doc 03 §3.3): fixed stop + fixed 2R take-profit + mandatory calendar
   time_exit (E4): time_exit = actual exchange close − frozen exit buffer
-  (30 min default), from the validated IANA/exchange calendar - never a
-  hard-coded 15:55 ET, which is wrong on early closes.
+  (30 min default), from the validated IANA/exchange calendar (early-close
+  days included), never a hard-coded clock time.
   Stop floor 0.1% ⇒ min TP 0.2% (20bp), which must EXCEED all-in modeled
-  cost + safety margin under the frozen cost stress - 20bp clears
-  fees/slippage only if the cost model says so, never by construction.
+  cost + safety margin under the frozen cost stress; 20bp clears
+  fees/slippage only if the cost model says so.
   Entry requires: expected gross edge > all-in modeled cost + margin.
-- Journal-before-order is absolute for NORMAL entries. Emergency exits carry
-  an explicit exception: if the journal write fails mid-emergency, execute
-  first, then append through the durable emergency-exit buffer - a delayed
-  exit is worse than a delayed row, and the row still lands. (This supersedes
-  any "no exceptions" wording: the exception is this paragraph.)
-- Discretionary exit is REMOVED from live actuation (E3): `enter.noul < 0.3`
-  twice is logged and researched, but never market-exits a position. Live
-  exits are: stop, TP, time_exit, deterministic risk/kill exit, broker
-  reconciliation logic. Exits never depend on JEV - the hard stop/TP always
-  stand regardless; stale/missing JEV never forces, and never blocks, an exit.
+- Journal-before-order is absolute for NORMAL entries. Emergency exits are
+  the one exception: if the journal write fails mid-emergency, execute
+  first, then append through the durable emergency-exit buffer (a delayed
+  exit is worse than a delayed row, and the row still lands).
+- No discretionary exit in live actuation (E3): `enter.noul < 0.3` twice is
+  logged and researched, but never market-exits a position. Live exits are:
+  stop, TP, time_exit, deterministic risk/kill exit, broker reconciliation
+  logic. Exits never depend on JEV: the hard stop/TP always stand, and
+  stale/missing JEV never forces or blocks an exit.
 - Feed stale > 30 s → entries forbidden (veto). Exits go via REST if WS is down.
-- Stage multiplier (doc 10 §10.2) is applied to the computed size **after** the
-  conviction table and before the R2 check. An order that is legal at G3 and
-  illegal at G1 is rejected at G1, with the stage named in the HOLD reason.
+- Stage multiplier (doc 10 §10.2) is applied to the computed size after
+  risk-budget sizing (doc 03 §3.3) and before the R2 check. An order that
+  is legal at G3 and illegal at G1 is rejected at G1, with the stage named
+  in the HOLD reason.
 
 ## 6.1b Close ownership + incident identity (frozen; moved)
 
@@ -147,15 +143,14 @@ close identity may be live, every kill-path close is pre-flighted by its
 stable id, incident epochs are durable-or-nothing, HARD quantities come
 from the signed broker position with a write-ahead chain, recovery refuses
 torn or orphaned durable state, and one OS-lifetime lock owns a state
-directory. The full frozen rule set - MEDIUM/HARD ownership, incident ids,
+directory. The full frozen rule set (MEDIUM/HARD ownership, incident ids,
 HARD chain integrity and attribution durability, overflow-safe parsing,
-state-file integrity (absent vs corrupt), single-process ownership,
-recovery-before-mutation, per-book orphan coverage, and the rest - is in
-`appendix/06b-close-ownership-and-recovery-record.md`, unchanged and
-binding. Long-only note (v3): every live close is a SELL of a long
-position; a close that would exceed the held quantity is refused before
-the POST (a cash account would reject it anyway; the kernel never relies
-on the venue to catch it).
+state-file integrity, single-process ownership, recovery-before-mutation,
+per-book orphan coverage, and the rest) is in
+`appendix/06b-close-ownership-and-recovery-record.md` and is binding.
+Long-only: every live close is a SELL of a long position; a close that
+would exceed the held quantity is refused before the POST (the kernel does
+not rely on the venue to reject it).
 
 ## 6.2 Reflection (after every closed trade)
 
@@ -168,7 +163,7 @@ the review directly.
 
 ## 6.2a Outage playbook (the unattended cases)
 
-In all of them: **exits, broker-native stops, and reconcile keep working.**
+In every case, exits, broker-native stops, and reconcile keep working.
 
 | Failure | Detection | Automatic response | Human needed? |
 |---|---|---|---|
@@ -187,8 +182,8 @@ In all of them: **exits, broker-native stops, and reconcile keep working.**
 | Journal chain break | daily verify | HARD kill, forensics before restart | Yes |
 | Stage chain unverifiable | startup / cycle boundary | Fall back to G0_PAPER, alert | Yes |
 
-The pattern behind every row: **new risk stops, old risk stays managed,
-and the system fails toward paper.**
+In every row, new risk stops, existing risk stays managed, and the system
+fails toward paper.
 
 ## 6.3 Daily ops rhythm (paper phase)
 
@@ -210,14 +205,18 @@ and the system fails toward paper.**
 - Kill switch: `HALT` file → entries stop within 1 cycle. Deleting it does
   NOT resume (restart + flag required). MEDIUM and HARD per doc 10 §10.3,
   drilled monthly.
-- (v3) **Outbound-only alert adapter** - required before unattended
-  operation of G0b: a one-way push (e.g. authenticated HTTPS POST to a
-  push-notification endpoint, or SMTP send-only) carrying bounded,
+- Outbound-only alert adapter (`ops/alert_relay.py`), required before
+  unattended operation of G0b: a one-way push (authenticated HTTPS POST to
+  a push-notification endpoint, or SMTP send-only) carrying bounded,
   redacted alert records. It accepts no inbound messages, runs no
   commands, holds no broker credential, and is not a chat agent (the
   doc 01 chat-gateway ban stands). At minimum it carries HARD kill, stage
   demotion, R13, R18 compliance incidents, and spend tier 3. An alert
-  written only to a log file is not an alert in an unattended system.
+  written only to a log file does not count as an alert.
+- Account kill inputs: the paper loop feeds the kill gate a latched
+  drawdown input (-15% from the persisted HWM; an operator clears the
+  latch and restarts) and holds entries for the session after a daily
+  loss above 3%.
 - Autonomy metric: every human intervention logged with its cause.
 
 ## 6.5 What "done" means
@@ -243,34 +242,33 @@ and the system fails toward paper.**
   §6.1). No row = no send for entries.
 - Exits never depend on JEV, research freshness, or WS health (broker-
   native stops; REST fallback). Only entries may wait on data.
-- Resume-from-HALT is manual. Always. So is every stage promotion.
+- Resume-from-HALT is manual, as is every stage promotion.
 - Broker-status quarantine (frozen, per Alpaca order-lifecycle docs):
-  `done_for_day`, `calculated`, and `replaced` are NEVER routed as generic
-  DEAD; the id is burned, filled qty authoritative-for-today but never
-  folded; first sighting freezes the symbol + journals + alerts; any
+  `done_for_day`, `calculated`, and `replaced` are never routed as generic
+  DEAD; the id is burned, filled qty is authoritative for today but never
+  folded; first sighting freezes the symbol, journals, and alerts; any
   next-session exposure is a NEW intent under a NEW id. `canceled`/
-  `expired`/`rejected` stay safe-DEAD.
+  `expired`/`rejected` are safe-DEAD.
 - Live-hold statuses (frozen): `held`, `stopped`, `accepted_for_bidding`
-  are PENDING; the runner waits, never re-issues blind.
+  are PENDING; the runner waits and never re-issues blind.
 - Every outage default stops new risk and keeps old risk managed.
-- Paper fill rule (LOCKED 2026-09-18, `paper_fill_v1`): BUY at mid + one
+- Paper fill rule (locked 2026-09-18, `paper_fill_v1`): BUY at mid + one
   full spread adverse, SELL at mid − one full spread adverse (min 1bp),
   full size, flagged `simulated`, no partials in paper. `cost_v2` (§6.0a)
-  wraps it for all v3 sleeves; neither is ever loosened without a doc
-  edit + fresh paper window.
+  wraps it for all sleeves; neither is loosened without a doc edit + fresh
+  paper window.
 - Alpaca paper results are plumbing evidence; the harness cost model is
   the economic evidence (§6.0a).
 - Alerts are outbound-only; nothing on a capital host accepts inbound
   commands.
-- AUDIT STOP RULE (frozen engineering-process rule, v3-strengthened):
-  reopening audit is allowed only for (1) P0/P1 decision-outcome changes,
+- AUDIT STOP RULE (frozen engineering-process rule): reopening audit is
+  allowed only for (1) P0/P1 decision-outcome changes,
   (2) corruption/loss of durable trading state, (3) duplicate-order /
   wrong-side / wrong-quantity risk, (4) security boundary violations,
   (5) reproducibility / lookahead / statistical-validity failures, (6) a
   failing correctness/drill gate. P2 cleanup collects into one bounded
-  backlog, never another cascade. (v3) **Alpha-first:** no hardening
-  round may start on a component whose stage does not yet need it while a
-  strategy gate on the critical path is open; the question "does this
-  change the probability that the fund makes money or loses it?" decides
-  priority. Grep observations are static tripwires, not proofs
+  backlog, never another cascade. Alpha-first: no hardening round may
+  start on a component whose stage does not yet need it while a strategy
+  gate on the critical path is open; priority is decided by whether the
+  change alters the probability that the fund makes or loses money. Grep observations are static tripwires, not proofs
   (compiler-enforced authority probes excepted).

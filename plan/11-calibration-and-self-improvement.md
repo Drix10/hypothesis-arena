@@ -1,11 +1,11 @@
 # 11 - Validation, Calibration, Shadow Evaluation, and Promotion (freeze v3)
 
-Three jobs: prove that a sleeve has edge net of everything, know whether
-any probabilistic AI component means what it claims, and change the system
-only when the evidence clears a bar that published LLM-trading work does
-not. Nothing in this doc promotes anything by itself. Every arrow ends at
-a human. Freeze v3 adds §11.0 and §11.3a–b; §§11.1–11.3 are the freeze-v2
-contract, unchanged, and apply wherever a sleeve uses `filter = jev`.
+This doc has three jobs: show that a sleeve has edge net of all costs,
+check whether any probabilistic AI component means what it claims, and
+change the system only when the evidence clears the bar below. Nothing
+here promotes anything by itself; every path ends at a human. §11.1-§11.3
+apply wherever a sleeve uses `filter = jev`; §11.0 and §11.3a-b apply to
+all sleeves.
 
 ## 11.0 The validation standard (v3)
 
@@ -40,8 +40,8 @@ the journal (doc 05 §5.5). Rows are never edited or deleted.
 - Overfitting diagnostics: Deflated Sharpe Ratio with N from the ledger;
   Probability of Backtest Overfitting when ≥ 2 variants; minimum
   track-record length (MinTRL) for the observed Sharpe. These are
-  **necessary**: a contrived oracle has passed DSR and PBO in published
-  testing, so passing them proves little and failing them is decisive.
+  necessary, not sufficient: a contrived oracle has passed DSR and PBO in
+  published testing, so passing proves little and failing is decisive.
 - New, non-literature signals (e.g. from the research factory): holdout
   t-statistic ≥ 3.0 (multiple-testing standard).
 - Literature-derived sleeves: planning estimates apply a 50% haircut to
@@ -70,8 +70,8 @@ is research, never promotion evidence.
 
 ## 11.1 Calibration tracking (online, automatic)
 
-Every JEV answer is a probabilistic claim, so it gets scored against what actually
-happened. Scored per question, per regime, per symbol class, on a rolling window.
+Every JEV answer is a probabilistic claim and is scored against what
+happened, per question, per regime, per symbol class, on a rolling window.
 
 | Question | Resolves against | Horizon |
 |---|---|---|
@@ -98,66 +98,61 @@ when resolution occurs within the venue's frozen SELF_WINDOW_S of our fill),
 `UNKNOWN` (cannot determine - scored with confidence intervals widened, never
 as exogenous by default). Frozen SELF_WINDOW_S (CAL6): OANDA practice 5 s,
 Alpaca paper 5 s, with a venue-depth participation threshold of 1% (our fill
-≥ 1% of top-of-book depth at the resolving print). Self-influenced outcomes are never neutral market
+≥ 1% of top-of-book depth at the resolving print). Self-influenced outcomes are not neutral market
 truth: they are scored separately and cannot promote a challenger alone.
 
-- **HOLDs are scored too, sampled.** A system that only scores trades it took
-  cannot discover that it is systematically too cautious - or that its `enter`
-  scores are noise. Every HOLD is eligible, but only a deterministically
-  sampled 25% (CAL2) is actually resolved and scored - full enumeration
-  would let the quietest regime swamp the calibration set with cheap, easy-to-score
-  cases and bias the whole metric toward "calibrated when nothing is happening."
+- HOLDs are scored too, sampled. Scoring only trades taken cannot reveal
+  that the system is too cautious or that its `enter` scores are noise.
+  Every HOLD is eligible, but only a deterministically sampled 25% (CAL2)
+  is resolved and scored; full enumeration would let the quietest regime
+  dominate the calibration set with easy cases.
   Inclusion rule (frozen): `sha256(context_hash ‖ regime) mod 4 == 0`;
   every HOLD row logs `sampling_probability=0.25`, its stratum, and
   included/excluded; aggregate calibration over sampled HOLDs uses
-  inverse-probability weighting (weight 4.0). The sampling rate is logged per row so the harness can reweight if the realized
-  mix drifts. Counterfactual resolution uses the frozen snapshot price and the
+  inverse-probability weighting (weight 4.0). Counterfactual resolution uses the frozen snapshot price and the
   same stop/TP rules, marked `counterfactual=true`, and is never mixed into PnL.
-- Metrics: **Brier score**, **log-loss**, and a 10-bin **reliability curve** per
+- Metrics: Brier score, log-loss, and a 10-bin reliability curve per
   question, over trailing 200 and 1000 decisions. Per-answer metric mapping
   (CAL4/CAL5, locked): `enter`/`latent_risk` (probabilities) → Brier +
   log-loss + reliability; `edge_family` (categorical) → multiclass log-loss
   + one-vs-rest Brier, accuracy descriptive-only; `conviction` (ordinal
   flat/lean/strong/max) → realized-R-bucket rank correlation (Somers' D)
   plus per-level hit-rate tables - never treated as a probability forecast.
-- **Baseline: the point-in-time base-rate predictor** - at each prediction
+- Baseline: the point-in-time base-rate predictor - at each prediction
   timestamp, the observed base rate of the outcome using only information
   available *before* t. Never a rolling window that includes future outcomes
-  (that leaks). Scored model_t vs base_rate_t, with confidence intervals
+  (that leaks future information). Scored model_t vs base_rate_t, with confidence intervals
   alongside the 0.02 R13 margin - the margin is the circuit breaker, the
   intervals are the judgment.
-- **R13 (new, hard), with a noise floor.** If Brier over the trailing 200
-  decisions is worse than the base-rate baseline **by more than a 0.02 margin**,
+- R13 (hard), with a noise floor. If Brier over the trailing 200
+  decisions is worse than the base-rate baseline by more than a 0.02 margin,
   entries halt and the stage demotes one level (doc 10 §10.2). Exits continue.
-  Resume needs human review. The margin and a minimum-sample gate both exist
-  because a raw "any amount worse" comparison is not statistically meaningful on
-  a rare-event question: unflagged adverse events are uncommon by design (that is
-  the point of the risk table), so a trivial baseline can look artificially good on
-  a small sample purely from low variance, and a couple of unlucky calls could
-  otherwise trip R13 on noise rather than a real calibration failure. **R13 is
-  evaluated only once the window holds ≥20 realized outcomes of the resolving
-  class** (≥20 unflagged-event resolutions for `latent_risk`; ≥20 closed or
-  sampled-counterfactual resolutions for `enter`) **in addition to** the 200-
-  decision window. Below that count, the daily summary reports
-  `R13: insufficient sample` rather than a pass/fail verdict, and entries are not
-  gated on it. This trades a small amount of protection early in a paper window
-  for not being unable to ever clear promotion because of sampling noise - R5,
-  S3, and R6 remain live regardless and catch the cases R13 is too data-hungry
-  to catch quickly.
-- Expect miscalibration and design for it: instruction-tuned models are measurably
-  overconfident, and post-training makes calibration *worse* rather than better
-  (ECE +13.1%, Brier +6.5% vs base models). The decision table in doc 03 §3.2
-  therefore leans on *bands and consensus*, never on a raw probability value.
-- Calibration drift is monitored per regime. A model calibrated in `range` and
-  broken in `volatile` is the ordinary case, not the exception - that is regime
-  blindness, and it is only visible if the metrics are sliced by regime.
+  Resume needs human review. The margin and a minimum-sample gate exist
+  because a raw "any amount worse" comparison is not meaningful on a
+  rare-event question: unflagged adverse events are uncommon by design, so
+  a trivial baseline can look good on a small sample from low variance, and
+  a couple of unlucky calls could trip R13 on noise. R13 is evaluated only
+  once the window holds ≥20 realized outcomes of the resolving class
+  (≥20 unflagged-event resolutions for `latent_risk`; ≥20 closed or
+  sampled-counterfactual resolutions for `enter`) in addition to the
+  200-decision window. Below that count, the daily summary reports
+  `R13: insufficient sample` rather than a pass/fail verdict, and entries
+  are not gated on it. R5, S3, and R6 remain live regardless and cover
+  what R13 is too data-hungry to catch quickly.
+- Miscalibration is expected: instruction-tuned models are measurably
+  overconfident, and post-training worsens calibration (ECE +13.1%, Brier
+  +6.5% vs base models). The decision table in doc 03 §3.2 therefore uses
+  bands and consensus, never a raw probability value.
+- Calibration drift is monitored per regime. A model calibrated in `range`
+  and broken in `volatile` is common and is visible only when metrics are
+  sliced by regime.
 
 ## 11.1a Regime change and evidence decay (deterministic, frozen)
 
-Slicing calibration by regime (§11.1) is measurement. This section is
-treatment: what happens when the regime itself changes, and how old
-evidence loses weight. No online learning, no agent-set thresholds, no
-hidden discretionary detector.
+Slicing calibration by regime (§11.1) is measurement. This section covers
+what happens when the regime itself changes and how old evidence loses
+weight. There is no online learning, no agent-set threshold, and no
+discretionary detector.
 
 1. Regime signal. The frozen per-snapshot regime bucket trend|range|
    volatile from ADX(14) + 1h-vol bucket (doc 12; also JEV state
@@ -202,23 +197,23 @@ hidden discretionary detector.
    retains its normal inclusion weight (1 normally, 4 for an included
    CAL2 HOLD) - UNKNOWN never erases inverse-probability weighting. The
    gap is logged, and UNKNOWN days never count toward the two-day change
-   persistence and never create a transition. Absent is not neutral, but
-   it is also not a change.
+   persistence and never create a transition. A missing bucket is not
+   neutral, and it is not a change.
 7. New version / fresh window. A finite-H adoption, an H change, or a
    regime-signal definition change each bump the calibration config
    version and open a fresh paper window. The calibration harness
    carries an explicit version/artifact identity containing at least the
    regime definition version, H, and the weighting rule version; a change
    to any of these is observable and triggers the fresh-window rule.
-   Regime CHANGES themselves never version anything - they are data, and
-   the decay rule handles them by construction.
+   Regime changes themselves never version anything; they are data, handled
+   by the decay rule.
 
 ## 11.2 Shadow and challenger evaluation
 
 Everything not live runs in shadow, permanently:
 
-- **Champion** - the live configuration. One only.
-- **Challengers** - up to 3 concurrent variants (threshold set, feature set, model,
+- Champion - the live configuration. One only.
+- Challengers - up to 3 concurrent variants (threshold set, feature set, model,
   prompt/question version). Each consumes the same frozen snapshots, produces
   decisions, and is scored on simulated fills using the doc 06 paper fill model (`paper_fill_v1`,
   wrapped by `cost_v2` for v3 sleeves, doc 06 §6.0a).
@@ -231,8 +226,8 @@ Everything not live runs in shadow, permanently:
   training/validation/holdout windows, cost budget, result, promotion status,
   human signature. Unauditable experiments do not promote.
 - A challenger that would have breached any R-rule is disqualified on the spot and
-  logged. "It would have made money by taking more risk than we permit" is not a
-  result; it is a disqualification.
+  logged. Making money by taking more risk than permitted is not a
+  result.
 
 ## 11.2a Forward replication program (2026-09-30, additive to §11.2)
 
@@ -246,27 +241,26 @@ so the §11.2 cap of three challengers does not apply to them. Full protocol:
 
 ## 11.3 The promotion gate (the only path into the live decision path)
 
-A challenger may be proposed for promotion only when **all** of the following hold:
+A challenger may be proposed for promotion only when all of the following hold:
 
-1. **≥ 200 decisions and ≥ 100 closed simulated trades** in shadow. Short windows
-   guarantee out-of-sample decay. (Single authoritative minimum: the earlier
-   "60 closed trades" draft is superseded - the CAL7 primary-metric validity
-   floor of 100 governs.)
-2. **Forward-only evaluation with walk-forward discipline.** The challenger was
+1. ≥ 200 decisions and ≥ 100 closed simulated trades in shadow. Short
+   windows guarantee out-of-sample decay. The CAL7 primary-metric validity
+   floor of 100 closed trades is the single authoritative minimum.
+2. Forward-only evaluation with walk-forward discipline. The challenger was
    defined before the data it is evaluated on existed. Time-series splits are
    walk-forward with purged/embargoed boundaries where labels overlap, and the
    final verdict comes from an untouched holdout never used for selection.
    Retro-fitting a variant to a window already on disk is prohibited and is
    detectable from the definition timestamp in the journal.
-3. **Net of costs** - the paper fill model plus its share of AI spend. Gross
-   results are not reported and not considered.
-4. **Search budget declared.** The number of variants tried in this family is
-   recorded, and the required improvement scales with it. Trying 50 variants and
-   promoting the best of 50 is how you promote noise. Note that Deflated Sharpe
-   and PBO do **not** protect against this on their own - a contrived oracle with
-   Sharpe 35 passed both in published testing - so the search count is recorded
-   as a fact and reviewed by a human rather than laundered through a statistic.
-5. **Beats the champion on the primary metric and does not lose on the guardrails**:
+3. Net of costs: the paper fill model plus its share of AI spend. Gross
+   results are not reported or considered.
+4. Search budget declared. The number of variants tried in this family is
+   recorded, and the required improvement scales with it (promoting the best
+   of 50 variants promotes noise). Deflated Sharpe and PBO do not protect
+   against this on their own - a contrived oracle with Sharpe 35 passed both
+   in published testing - so the search count is recorded as a fact and
+   reviewed by a human.
+5. Beats the champion on the primary metric and does not lose on the guardrails:
    primary = risk-adjusted return net of all costs; guardrails = max drawdown,
    trade count (over-trading check), calibration (Brier), and R-rule proximity.
    Primary metric frozen (CAL7): net Sharpe (all-in costs incl. AI share) with
@@ -277,8 +271,8 @@ A challenger may be proposed for promotion only when **all** of the following ho
    variance-ratio work is a different methodology). Return sampling frozen:
    DAILY portfolio returns, marked-to-market at the 16:00 ET equity close
    (FX sleeve at the 17:00 ET rollover), zero-return days INCLUDED (a flat
-   book is still an observation), no overlapping windows, no annualization
-   games (×sqrt(252) on daily, stated), cash earns exactly 0, open positions
+   book is still an observation), no overlapping windows, no ad hoc
+   annualization (×sqrt(252) on daily, stated), cash earns exactly 0, open positions
    marked at the close - never at intra-day favorable prints. Ties break toward the
    champion; any window cherry-picking (start/end chosen after seeing
    results) voids the run. Search correction (CAL8): Holm step-down at
@@ -292,28 +286,27 @@ A challenger may be proposed for promotion only when **all** of the following ho
    bootstrap (same resampling as the CAL7 CI); family = ONE pooled Holm
    over the union of ALL variants declared across ALL families evaluated
    in the promotion run (per-family declarations from step 4 feed the pool;
-   there are no separate per-family Holms whose error rates could combine
-   unaccounted - "union over families" means a single global family, not
-   prose about separate corrections); Holm-adjusted p < 0.05 required.
-6. **A non-LLM baseline is beaten.** The challenger must beat the frozen
+   there are no separate per-family Holms; "union over families" means a
+   single global family); Holm-adjusted p < 0.05 required.
+6. A non-LLM baseline is beaten. The challenger must beat the frozen
    statistical baseline (doc 12: exact universe, features, entries, exits,
    costs - indicators + regime + risk table, no JEV, no research plane) on the
-   same window, including under 1.5×/2×/3× cost stress. If it does not, the AI layer is costing money to
-   subtract value, and the response is to remove it rather than tune it.
-7. **Human review and sign-off**, recorded in doc 07's sign-off log with name,
+   same window, including under 1.5×/2×/3× cost stress. If it does not, the AI layer subtracts value and
+   is removed rather than tuned.
+7. Human review and sign-off, recorded in doc 07's sign-off log with name,
    date, challenger ID, and the window it was judged on.
 
 Promotion then executes as: stop the process → swap config → bump
-`question_set_version` → **fresh paper window** (doc 05, locked) → re-enter the
+`question_set_version` → fresh paper window (doc 05, locked) → re-enter the
 stage gates in doc 10. A promoted change does not inherit its predecessor's stage.
 
-**Forbidden, explicitly:** automatic promotion, auto-tuning of thresholds,
+Forbidden: automatic promotion, auto-tuning of thresholds,
 online/continual learning on the live path, agent self-modification of prompts,
 tools, or skills, and any change to R1–R17 by anything other than a doc edit.
 
 ## 11.3a Sleeve gates (v3) - how a sleeve becomes a champion candidate
 
-**A-gate (historical, harness):** all of the following on the frozen
+A-gate (historical, harness): all of the following on the frozen
 pre-registration, recorded in the trial ledger:
 1. Holdout net Sharpe (daily, `cost_v2` 1×) with 95% stationary-bootstrap
    CI lower bound > 0; point estimate > 0 at 2× cost.
@@ -321,7 +314,7 @@ pre-registration, recorded in the trial ledger:
 3. Versus the vol-matched passive benchmark (doc 12 §12.6): net Sharpe not
    lower (point estimate) AND max drawdown not larger. A sleeve that
    neither beats passive risk-adjusted nor reduces its drawdown adds
-   nothing a buy-and-hold account would not.
+   nothing over buy-and-hold.
 4. DSR ≥ 0.95 with ledger N; PBO ≤ 0.2 when variants exist; history
    length ≥ MinTRL; t ≥ 3 for non-literature signals; haircut rule met.
 5. Transferability (§11.0d); participation caps respected; excluded-event
@@ -329,7 +322,7 @@ pre-registration, recorded in the trial ledger:
 6. For AI-assisted sleeves: the paired no-AI variant exists and the AI
    component is judged separately under §11.3b.
 
-**B-gate (G0a shadow on live data):** the sleeve runs forward with harness
+B-gate (G0a shadow on live data): the sleeve runs forward with harness
 fills from the day it passes A-gate. Minimum window: 60 sessions and
 30 trades for daily-frequency sleeves; 3 rebalances for monthly sleeves
 (judged on tracking, not Sharpe). Passing: realized shadow results inside
@@ -338,7 +331,7 @@ percentiles of block-bootstrapped backtest paths of equal length),
 modeled costs within 1.5× of live-quote cost estimates, zero operational
 anomalies unexplained in the journal.
 
-**Champion selection:** among B-gate passers, the human picks the G0b
+Champion selection: among B-gate passers, the human picks the G0b
 champion using the pre-registered primary metric; ties break toward the
 simpler sleeve (fewer parameters, lower turnover).
 
@@ -361,19 +354,18 @@ Doc 06 §6.2 writes an auto-field reflection row per closed trade. On top:
   `lessons.jsonl`, and produces at most **3 hypothesis cards**.
 - Cards are queued for human review. They are not implemented, shadowed,
   or costed until a human approves a pre-registration.
-- The cap of 3 exists so the loop cannot generate work faster than a human
-  can judge it. An unbounded self-improvement loop is a spend bug and a
-  governance bug at the same time.
+- The cap of 3 keeps the loop from generating work faster than a human
+  can judge it.
 
 ## 11.5 What "done" means
 
-- [ ] (v3) Trial ledger implemented; every harness run writes it,
+- [ ] Trial ledger implemented; every harness run writes it,
       including failures; DSR/Holm read N from it.
-- [ ] (v3) Statistics module: walk-forward purge/embargo, CPCV, PBO, DSR,
+- [ ] Statistics module: walk-forward purge/embargo, CPCV, PBO, DSR,
       MinTRL, stationary bootstrap, HAC Sharpe - each with fixture tests.
-- [ ] (v3) Contamination guard: an LLM-involved evaluation window that
+- [ ] Contamination guard: an LLM-involved evaluation window that
       starts before cutoff + 30 d is rejected by the harness.
-- [ ] (v3) A-gate and B-gate report generators; first reports for T1/I1.
+- [ ] A-gate and B-gate report generators; first reports for T1/I1.
 - [ ] Calibration harness scores `enter` and `latent_risk` including
       counterfactual HOLDs (needed only once a `jev` sleeve exists).
 - [ ] Reliability curves weekly, sliced by regime (same condition).

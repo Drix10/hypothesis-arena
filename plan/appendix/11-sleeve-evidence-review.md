@@ -10,7 +10,7 @@ for Goyal-Welch-Zafirov only the abstract and excerpts were verified. Alpaca's
 post-June-2026 PDT behaviour on paper accounts was not confirmed (irrelevant
 at ~$100k equity).
 
-## Headline
+## Summary
 
 A months-long paper test cannot prove a Sharpe of 0.5-1.0 is real: at 95%
 one-sided confidence it takes about 2.7 years at Sharpe 1.0, 4.8 years at 0.75
@@ -191,6 +191,10 @@ allocation from raw levels (curve slope, PMI, unemployment). Use vintage data
 (ALFRED) and release timestamps; revised FRED series are look-ahead.
 
 ## Sequence recommended by the review
+
+Where `10-sleeve-integration-plan.md` differs, it governs: the netting router
+is not on the critical path there.
+
 
 1. Sleeve contract, virtual ledgers, netting router, router-owned protective
    orders, client_order_id encoding, virtual dividends, kill inputs (critical

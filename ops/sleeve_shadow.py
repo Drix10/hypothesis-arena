@@ -253,7 +253,7 @@ def run(d, now, verify=False, http_get=sip_fetch.default_http_get,
     return bad, summary
 
 
-# Per-sleeve kill limits (plan/appendix/10 section 5.6): a sleeve run at a 10%
+# Per-sleeve kill limits (plan/appendix/10 section 7): a sleeve run at a 10%
 # annual volatility target halves at -1.5x and freezes at -2x that volatility
 # from its own peak. Shadow ledgers cannot be halted, so the state is reported
 # (sleeves/status.json, monitor) for the operator and for promotion decisions.

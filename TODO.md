@@ -6,18 +6,19 @@ Legend: `[BLOCKED]` waits on another box.
 Each box names its doc 07 id; one box is one commit theme (AGENTS.md rule 7).
 A box is checked only with evidence (commit and test output, or a report path).
 
-## Current state (verified 2026-09-29)
+## Current state (verified 2026-09-30)
 
-- Plan: frozen (docs 00–13, manifest, `plan/appendix/`); freeze-check PASS.
-- Kernel: JEV filter built and gated; P3.5 A-G done; H1 built; R18/R19 veto arms, candidate validator and escaped alerts landed (K4/K6/K7/K11). P3.5 open (live drills).
-- Strategy: `baseline_v1` negative (S2, doc 12 12.7). T1 `trend_etf_v1` ran through the harness on SIP daily bars 2016-2026: FAIL on the 2023-09..2026-08 holdout (A2). S3/S4/S6 released; S5 economics open.
-- S7-C: CLOSED (hosted CI green on the PR head, all six jobs).
-- G0: NOT STARTED. Live ordering: NOT AUTHORIZED.
+- Plan: frozen (docs 00-13, manifest, `plan/appendix/`); freeze-check PASS.
+- Kernel: JEV filter built and gated; P3.5 slices A-G done; H1 built with the libcurl paper transport (live smoke PASS on Alpaca paper), WS stream, R18/R19, candidate ingest, `g0_paper_loop`, early-close calendar and torn-journal-line recovery. P3.5 is open: live-paper drills (K10), the 24 h soak (K9) and stop-cancel-before-close (K5).
+- Paper run: `g2` with the passive core; the operator is running the 24 h soak (K9). Forward ledgers, JEV twins and the long-history harness are built (Track F/L); the long-history study has not run on real data.
+- Strategy: `baseline_v1` negative (S2, doc 12 §12.7). T1, T2, I1, E1 and E2-det all failed their A-gate on the frozen holdout (A2-A6); no sleeve is a champion candidate. S3/S4/S6 released; S5 economics open.
+- Ops: O6 credential rotation done; S7-C closed (hosted CI green, all six jobs).
+- G0b: not started. Live ordering: not authorized.
 
 ## Phase R - rebaseline (docs)
 
 - [x] R1 Critique recorded (in git history).
-- [x] R2 Docs 00–13 + manifest rewritten; §6.1b, §8.4 internals, X archive
+- [x] R2 Docs 00-13 + manifest rewritten; §6.1b, §8.4 internals, X archive
       moved verbatim to `plan/appendix/`; freeze-check PASS.
 - [x] R3 TODO archived + rebuilt; AGENTS/README/ARCHITECTURE aligned.
 - [x] R4 Operator approval of the plan text (doc 07 sign-off log, 2026-09-29).
@@ -31,8 +32,8 @@ A box is checked only with evidence (commit and test output, or a report path).
 - [x] O1 CI: run on every push + `workflow_dispatch`; add `test_baseline`,
       `test_candidate` (pytest pinned in a strategy requirements file),
       `test_jev_filter`, and `kernel/tests/test_jev_filter.cpp` (doc 03 locked decision).
-- [x] O2 Secret scanning (`.gitleaks.toml`, `scripts/pre-commit-secrets.sh`, CI job `secrets`; history clean): gitleaks pinned by SHA-256 as a CI job + a
-      pre-commit hook (pattern from `anthropics/financial-services`).
+- [x] O2 Secret scanning (`.gitleaks.toml`, `scripts/pre-commit-secrets.sh`, CI job `secrets`; history clean):
+      gitleaks pinned by SHA-256, as a CI job and a pre-commit hook.
 - [x] O3 freeze-check alignment: verify manifest keys
       (`plan_freeze`, `strategy_book_version`, `live_constraints`, …);
       `xxd` fallback; `kernel/build.sh` refuses to run as root (chmod-000 checks would be false green).
@@ -129,7 +130,7 @@ A box is checked only with evidence (commit and test output, or a report path).
   - Done: `ProtectedOrder.protection = OTO_STOP` + `gtc`, strict one-leg stop proof, stop-only repair order, `CloseAtClose` (time_in_force cls).
   - Done: `exec/moc_plan` sequencing with the stop-fills-first, MOC-reject, cutoff-missed and unknown-state drills (14 checks); live paper smoke accepts the OTO order with its stop leg and a cls order.
   - Done: wiring: `exit_intraday_v1` and `exit_event_v1` candidates become OTO stop-only orders (event is GTC); `exit_trend_v1` and `exit_profile_v1` stay bracket; unknown profiles are held; 5 decide checks and 6 loop checks over the real transport.
-  - **Live finding (2026-09-29 15:33 UTC)**: Alpaca **rejects both MOC and market sells while an OTO stop is live** (moc_sell transport_ok=0, market_sell transport_ok=0 with stop.protected=1). Exit logic must cancel the stop first, then close. Router change + mock drill needed before K10.
+  - Live finding (2026-09-29 15:33 UTC): Alpaca rejects both MOC and market sells while an OTO stop is live (moc_sell transport_ok=0, market_sell transport_ok=0 with stop.protected=1). Exit logic must cancel the stop first, then close. Router change and mock drill needed before K10.
 - [x] K6 `ingest/candidates.cpp`: CID recompute, sleeve approval,
       allowlist, freshness, long-only side policy, adversarial vectors.
 - [x] K7 `ops/alert_relay.py` (needs ALERT_WEBHOOK_URL at deploy): outbound-only alert adapter (no inbound, no commands, redacted).
@@ -153,7 +154,7 @@ A box is checked only with evidence (commit and test output, or a report path).
   - Done: exit proceeds are booked before the order is sent, keyed by cid and estimated from the live mark +1% (broker cash reconciles the rest next session).
   - Decision: no MOC or timed exits for the passive core (its exits are explicit SELL candidates during the session); early-close days (13:00 ET) are listed in `early_close_YYYY` arrays of the calendar and honored by the data-age gate; a torn final journal line is trimmed on recovery (bytes kept in `journal.jsonl.torn`, MEDIUM alert `journal-torn-tail`); `ops/deploy/session_calendar.json` covers 2026-2028.
   - Open: STAGE signature and approved.json (G0-STAGE) remain.
-- [ ] K-exit P3.5 CLOSED (K1–K7 + K10 green).
+- [ ] K-exit P3.5 CLOSED (K1-K7 + K10 green).
 
 ## Track P - research plane (parallel)
 
@@ -189,7 +190,7 @@ The paper run is started with `bash ops/deploy/start.sh ~/g2` (see `ops/deploy/R
 - [ ] G0b Broker paper: one champion sleeve through the kernel on Alpaca
       paper [BLOCKED on K-exit + a B-gate pass + G0-STAGE].
 - [ ] G0-ops Daily summary, weekly replay, §6.2a drills on the live loop.
-- [ ] G0-exit 30 clean G0b days + doc 10 §10.2 G0→G1 criteria +       sign-off.
+- [ ] G0-exit 30 clean G0b days + doc 10 §10.2 G0→G1 criteria + sign-off.
 
 ## Phase 5+ - live stages (not authorized)
 
@@ -198,4 +199,4 @@ The paper run is started with `bash ops/deploy/start.sh ~/g2` (see `ops/deploy/R
 - [ ] G1-P Port-on-promotion: champion signal in C++ + cross-language
       vectors (doc 04).
 - [ ] G1 G1_TINY manifest: 1 liquid US ETF, R×0.25, cash, long only.
-- [ ] G2 / G3 per doc 07 §7.8–7.9.
+- [ ] G2 / G3 per doc 07 §7.8-7.9.

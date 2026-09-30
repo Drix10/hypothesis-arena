@@ -1,20 +1,19 @@
 # 02 - Strategy Book: Alpha Sleeves (freeze v3, `strategy_book_version: sb1`)
 
-> Legacy filename. Until freeze v3 this doc held the X-lists signal system.
-> That material is **NON-PRODUCTION / HISTORICAL** and now lives verbatim in
+> Legacy filename. This doc previously held the X-lists signal system; that
+> material is HISTORICAL / NON-PRODUCTION and lives in
 > `appendix/02-x-lists-archive.md` (X stays out of production: its §2.6).
-> The code-phase freeze-check update renames this file; until then the
-> path is kept so the frozen gate keeps verifying the archive banner.
-> Status label for everything in the archive: HISTORICAL / NON-PRODUCTION.
+> The path is kept because `scripts/freeze-check.sh` verifies the archive
+> label here.
 
-This is the missing center of the freeze-v2 plan: **what the fund actually
-trades, why it might work, and how we will know if it does not.** Every
-sleeve below is a hypothesis with an evidence grade, a pre-registration
-draft, and kill criteria. None is authorized to trade until it passes the
-doc 11 gates. Parameters are literature defaults frozen at
-pre-registration; variants count against the trial ledger (doc 11 §11.0).
+This doc defines what the fund trades, why it might work, and how we will
+know if it does not. Every sleeve below is a hypothesis with an evidence
+grade, a pre-registration draft, and kill criteria. None is authorized to
+trade until it passes the doc 11 gates. Parameters are literature defaults
+frozen at pre-registration; variants count against the trial ledger
+(doc 11 §11.0).
 
-## 2.0 The funnel (every sleeve walks it, no shortcuts)
+## 2.0 The funnel (every sleeve, no shortcuts)
 
 ```
 idea (research factory or human) → pre-registration (frozen spec + variant
@@ -25,7 +24,7 @@ minimum window → champion candidate → G0b paper orders through the kernel
 ```
 
 A sleeve that fails any gate is recorded with its numbers and archived.
-It is never "improved" into passing: a new idea is a new pre-registration.
+It is not modified until it passes: a new idea is a new pre-registration.
 
 ## 2.1 Evidence grades (used below)
 
@@ -37,10 +36,9 @@ It is never "improved" into passing: a new idea is a new pre-registration.
   test itself answers a question the fund needs answered.
 - **D** - speculative. Research factory only.
 
-A published effect is haircut before it is believed: average
-post-publication decay is ≈58% (McLean–Pontiff), and new factors need
-t ≥ 3 (Harvey–Liu–Zhu). Expected-return statements in this doc are
-ranges for planning, never promises.
+Published effects are haircut: average post-publication decay is ≈58%
+(McLean–Pontiff), and new factors need t ≥ 3 (Harvey–Liu–Zhu).
+Expected-return statements in this doc are planning ranges only.
 
 ## 2.2 Sleeve spec template (every sleeve fills every field)
 
@@ -66,7 +64,7 @@ known failure modes · kill criteria · minimum evaluation windows · status.
   crisis-alpha from exiting risk assets in trends down.
 - **Universe (5 = kernel cap):** VTI (US equity), VEU (ex-US equity), VNQ
   (US REITs), IEF (7–10y Treasuries), DBC (commodities). Cash leg: BIL
-  (T-bills). Common history starts 2007 in the literature; the free SIP feed only reaches back to 2016-01-04 (see doc 09 9.1a).
+  (T-bills). Common history starts 2007 in the literature; the free SIP feed reaches back only to 2016-01-04 (doc 09 §9.1a).
 - **Signal (primary):** on the last trading day of the month, asset held
   for the next month iff its month-end close > the mean of its last 10
   month-end closes; else its slot is cash.
@@ -81,8 +79,8 @@ known failure modes · kill criteria · minimum evaluation windows · status.
 - **Sizing:** equal weight 1/5 of sleeve capital per slot (fewest free
   parameters); whole shares; the kernel's risk-budget hierarchy still
   caps each position (doc 03 §3.3 steps 3–6).
-- **Turnover/capacity:** ~2–4 trades/month; capacity irrelevant at our
-  scale.
+- **Turnover/capacity:** ~2–4 trades/month; capacity is not a constraint at
+  this scale.
 - **AI involvement:** none in the signal. The research factory may
   propose variants; each is a new trial.
 - **Failure modes:** whipsaw in range-bound years; correlated drawdown
@@ -130,8 +128,9 @@ known failure modes · kill criteria · minimum evaluation windows · status.
   cap); exit at the close via market-on-close before the broker's MOC
   cutoff; protective stop leg attached at entry (OTO stop-only) at
   entry − 3 × 30-min ATR. The MOC must reconcile with the live stop
-  (doc 06 §6.0: stop cancelled only after MOC ack; a stop fill makes the
-  MOC an over-sell that the cash account rejects - both paths journaled).
+  (doc 06 §6.0: the stop is cancelled only after the MOC ack; a stop fill
+  makes the MOC an over-sell that the cash account rejects; both paths
+  are journaled).
 - **Exit profile `exit_intraday_v1`**; sizing: full sleeve tranche.
 - **Cash-account mechanics:** buy with settled cash, sell the same day is
   permitted; the proceeds settle T+1, so two alternating capital tranches
@@ -172,10 +171,9 @@ known failure modes · kill criteria · minimum evaluation windows · status.
 - **Grade C.** PEAD disappeared for large caps around 2006 (Martineau)
   but is contested by 2025 studies; press-release text is as informative
   as the surprise for the *announcement-day* return (arXiv 2509.24254),
-  which we cannot trade competitively (T1 tier). Our window starts the
-  next session. The prior is weak; this sleeve exists because it
-  answers the fund's central question: **does AI reading add incremental
-  edge?**
+  which we cannot trade competitively (latency tier T1, doc 01 §1.4). Our window starts the
+  next session. The prior is weak; the sleeve exists to answer one
+  question: does AI reading add incremental edge?
 - **Design:** paired test, same events, same entry/exit:
   E2-det (deterministic features only: XBRL actuals vs prior-year, filing
   timing) vs E2-ai (E2-det + reader-tier extracted guidance direction
@@ -198,7 +196,7 @@ known failure modes · kill criteria · minimum evaluation windows · status.
   improves risk-adjusted returns and keeps drawdowns inside R5.
 - **Grade B−.** Moreira–Muir (2017) find gains; Cederburg et al. (2020)
   find weak out-of-sample benefit across many portfolios. Primary role
-  here is **risk control** (keep the book's drawdown inside R5), judged
+  here is risk control (keep the book's drawdown inside R5), judged
   on drawdown/Sharpe of the sleeve it overlays.
 - **Rule:** exposure multiplier = min(1, 8% / annualized 20-day realized
   vol of the sleeve's return stream); applied at rebalance only. Never
@@ -218,13 +216,13 @@ known failure modes · kill criteria · minimum evaluation windows · status.
 
 ### B0 `baseline_v1` - frozen negative control
 
-Doc 12. Kept, never edited, never promoted: it measured negative in S2
-and the failure is diagnosed there (exit/horizon mismatch). It remains
-the regression control for the harness itself.
+Doc 12. Never edited, never promoted. It measured negative in S2; the
+cause (exit/horizon mismatch) is diagnosed there. It is the regression
+control for the harness itself.
 
 ## 2.4 Portfolio construction
 
-- **G0b runs exactly ONE champion sleeve through the kernel at a time**
+- G0b runs exactly one champion sleeve through the kernel at a time
   (`EXEC_UNIVERSE_MAX = 5`); every other sleeve runs in G0a shadow with
   harness fills on live data. Multi-sleeve live allocation is a G2+
   design that first needs a versioned universe-cap change (doc 13).
@@ -234,8 +232,8 @@ the regression control for the harness itself.
   cash (cash account), M1 applied at the book level.
 - Order of testing (not a promise of promotion): T1 → I1 → E1 → T2 →
   E2 (forward) → M1 on the survivors. T1 is the first champion candidate
-  because it is simple, robust, low-turnover, long-only by nature, and
-  fits the kernel cap.
+  because it is simple, low-turnover, long-only by nature, and fits the
+  kernel cap.
 
 ## 2.5 What "done" means (strategy book)
 

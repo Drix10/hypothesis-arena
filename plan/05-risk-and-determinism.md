@@ -1,28 +1,25 @@
-# 05 - Risk and Determinism (hard rules, freeze v3 `risk_version: R1-R19+v3`)
+# 05 - Risk and Determinism (hard rules, `risk_version: R1-R19+v3`)
 
 Violation of any numbered rule halts paper trading until human review and
-demotes a live stage (doc 10 §10.2). No auto-override exists by design, and
-no agent can reach any of it. Freeze v3 revisions are marked (v3); unmarked
-text is the freeze-v2 contract unchanged.
+demotes a live stage (doc 10 §10.2). No auto-override exists, and no agent
+can reach any of these rules.
 
 ## 5.1 Position and exposure limits
 
-- R1. (v3) Max 5 concurrent positions (= `EXEC_UNIVERSE_MAX`). One open
-  position per symbol - a second intent on a held symbol is HOLD until the
-  first closes. The freeze-v2 "max 2 in the same direction" clause applies
-  only to books that may short (shadow research books); a long-only book
-  controls concentration through R2, R7, and the sleeve/portfolio risk
-  budget instead (a same-direction cap of 2 would forbid any long-only
-  book of 3+ positions). Exposure math counts filled exposure PLUS pending
-  executable exposure (unfilled entries reserve budget). Account inputs are
-  first-class: equity, settled cash, unsettled proceeds, open-order
-  notional, realized/unrealized PnL - from the broker adapter.
+- R1. Max 5 concurrent positions (= `EXEC_UNIVERSE_MAX`). One open
+  position per symbol: a second intent on a held symbol is HOLD until the
+  first closes. A same-direction cap applies only to books that may short
+  (shadow research books); a long-only book controls concentration through
+  R2, R7, and the sleeve/portfolio risk budget. Exposure math counts filled
+  exposure plus pending executable exposure (unfilled entries reserve
+  budget). Account inputs come from the broker adapter: equity, settled
+  cash, unsettled proceeds, open-order notional, realized/unrealized PnL.
   Snapshot-time formulas (K6, frozen): `pending_notional` = sum of
   open-order notional (entry + unacked); `reserved_risk` = pending_notional
-  × per-symbol risk fraction; in a cash account `margin_requirement` = 0
-  and `available buying power` = settled cash − pending buy notional
-  (v3; the margin formula remains for shadow books only). Pending exposure
-  counts toward every cap below.
+  × per-symbol risk fraction. In a cash account `margin_requirement` = 0
+  and available buying power = settled cash − pending buy notional (the
+  margin formula applies to shadow books only). Pending exposure counts
+  toward every cap below.
 - R2. Single position ≤ 25% notional/equity. Total exposure ≤ 75%
   notional/equity. (Notional = size × price; equity at snapshot time; both
   frozen in the snapshot, never re-read at send. Pending counts toward
@@ -34,52 +31,53 @@ text is the freeze-v2 contract unchanged.
   long-only book; kept for shadow books.)
 - R5. Drawdown > 10% from peak → HALT all entries (exits only) until
   review. Peak = max(daily_close_hwm, intraday_hwm), both persisted;
-  evaluated on snapshot equity each cycle. Design consequence (v3): sleeve
-  and book volatility targets (doc 02 M1) are set so a 10% drawdown is a
-  tail event, not a routine one.
+  evaluated on snapshot equity each cycle. Sleeve and book volatility
+  targets (doc 02 M1) are set so a 10% drawdown is a tail event, not a
+  routine one.
 - R6. Realized volatility > 3× 20-day baseline → halve sizes until review.
-  Like-with-like only: both sides are stdev of 1 h log returns (baseline =
-  trailing 480 points, current = trailing 24). Data-age gate (frozen): the
+  Both sides are stdev of 1 h log returns (baseline = trailing 480 points,
+  current = trailing 24). Data-age gate (frozen): the
   latest input bar must fall within the last 2 EXPECTED hourly bars per
-  the venue session calendar (doc 01) - weekends and holidays are
-  excluded BY THE CALENDAR, feed gaps count against the budget. A stale R6
+  the venue session calendar (doc 01). Weekends and holidays are
+  excluded by the calendar; feed gaps count against the budget. A stale R6
   input makes R6 UNAVAILABLE and entry is HOLD.
-- R7. Correlation gate at entry + drift rule after. Entry that would create
-  a same-direction pair with Pearson > 0.9 (1 h closes, trailing 30) is
-  HOLD. Insufficient samples, zero variance, or missing bars → correlation
-  UNAVAILABLE → entry HOLD (never assume zero correlation). Freshness
-  (frozen): the latest close must be within the last 2 expected hourly
-  bars per the venue calendar AND at least 25 of the last 30 expected
-  session hours must be present. If drift creates the breach later, remove
-  the position maximizing (VaR_reduction / max(sacrificed_unrealized_PnL,
-  epsilon)) with epsilon = $1; ties → older position, then lexicographic
-  symbol. If no removal reduces VaR, HOLD new entries and escalate.
+- R7. Correlation gate at entry, drift rule after. An entry that would
+  create a same-direction pair with Pearson > 0.9 (1 h closes, trailing 30)
+  is HOLD. Insufficient samples, zero variance, or missing bars →
+  correlation UNAVAILABLE → entry HOLD (zero correlation is never assumed).
+  Freshness (frozen): the latest close must be within the last 2 expected
+  hourly bars per the venue calendar AND
+  at least 25 of the last 30 expected session hours must be present.
+  If drift creates the breach later, remove the position maximizing
+  (VaR_reduction / max(sacrificed_unrealized_PnL, epsilon)) with
+  epsilon = $1; ties → older position, then lexicographic symbol. If no
+  removal reduces VaR, HOLD new entries and escalate.
 - R8. `max` budget requires the doc 03 §3.3 max-gate or downgrade. Applies
-  only when a sleeve's filter policy is `jev`; the always-take path
-  sizes at base budget only (no 2×R without a gate that can grant it).
+  only when a sleeve's filter policy is `jev`; the always-take path sizes
+  at base budget only (no 2×R without a gate that can grant it).
 - R9. Sessions, broker rules, and corporate plumbing are hard vetoes via
   the `broker_compliance_policy` adapter table (broker, account type,
-  effective date, day-trade/short/session/settlement rules -
-  effective-date-aware; regulation changes are data updates). No entries
-  outside 09:30–16:00 America/New_York (exchange calendar); no
-  extended-hours orders in v1. Day-trade counting (v3): the FINRA
-  pattern-day-trader framework was eliminated by SEC approval on
-  2026-04-14 (effective 2026-06-04; broker implementation deadline
-  2027-10-20) - a table row with effective dates, not a code path; cash
-  accounts are governed by R18. Shorts: live HOLD always (R19); shadow
-  books require shortable + borrow + SSR + margin checks. Corporate
-  actions: splits, dividends, ticker changes, mergers, halts normalize
-  BEFORE the feature engine; until the adjustment layer exists any symbol
-  with a pending corporate event is untradeable. Before any live stage:
-  the LIVE JURISDICTION GATE (doc 10 §10.1a).
-- R18. (v3) **Settled-cash rule (cash account).** Every buy must be funded
-  by settled cash net of pending buys; a lot bought with unsettled
-  proceeds may not be sold before those proceeds settle (good-faith
-  rule); no buy whose payment depends on selling the same security
-  (free-riding). Settlement dates come from the exchange calendar (T+1
-  for US equities). Violations HOLD the order, never "fix it later".
-  *Owner:* `exec/` settlement ledger. *Default:* HOLD.
-- R19. (v3) **Jurisdiction instrument allowlist.** Live orders only for
+  effective date, day-trade/short/session/settlement rules; regulation
+  changes are data updates). No entries outside 09:30–16:00
+  America/New_York (exchange calendar); no extended-hours orders in v1.
+  Day-trade counting: the FINRA pattern-day-trader framework was
+  eliminated by SEC approval on 2026-04-14 (effective 2026-06-04; broker
+  implementation deadline 2027-10-20). It is a table row with effective
+  dates, not a code path; cash accounts are governed by R18. Shorts: live
+  HOLD always (R19); shadow books require shortable + borrow + SSR +
+  margin checks. Corporate actions (splits, dividends, ticker changes,
+  mergers, halts) normalize BEFORE the feature engine; until the
+  adjustment layer exists, any symbol with a pending corporate event is
+  untradeable. Before any live stage: the LIVE JURISDICTION GATE (doc 10
+  §10.1a).
+- R18. **Settled-cash rule (cash account).** Every buy must be funded by
+  settled cash net of pending buys; a lot bought with unsettled proceeds
+  may not be sold before those proceeds settle (good-faith rule); no buy
+  whose payment depends on selling the same security (free-riding).
+  Settlement dates come from the exchange calendar (T+1 for US equities).
+  Violations HOLD the order. *Owner:* `exec/` settlement ledger.
+  *Default:* HOLD.
+- R19. **Jurisdiction instrument allowlist.** Live orders only for
   instruments on the signed allowlist attached to the stage manifest
   (default: US-listed common stock and ETFs; long only; no margin, short,
   options, futures, FX spot/CFD, leveraged/inverse products). Anything
@@ -99,16 +97,14 @@ text is the freeze-v2 contract unchanged.
   returns, position-weighted; breach = portfolio VaR > 5% equity. The
   engine also carries historical expected shortfall and precomputed stress
   scenarios (gap, correlation shock, liquidity stress); C++ consumes
-  bounded precomputed values - no stochastic model on the hot path.
-- (v3) Sizing is risk-budget based everywhere (doc 03 §3.3 hierarchy;
-  sleeve slot weights in doc 02 are caps inside that hierarchy). The
-  freeze-v2 "conviction sizes: lean 5%, strong 10–15%, max 25% notional"
-  line is RETIRED - it contradicted doc 03 §3.3 (conviction never
-  authorizes size) and survived the v3 question-set edit by mistake.
+  bounded precomputed values, with no stochastic model on the hot path.
+- Sizing is risk-budget based everywhere (doc 03 §3.3 hierarchy; sleeve
+  slot weights in doc 02 are caps inside that hierarchy). Conviction never
+  authorizes size.
 
 ## 5.1b Autonomy rules (R10–R17, hard)
 
-- **R10. AI spend circuit breaker.** Projected 30-day AI spend evaluated
+- **R10. AI spend circuit breaker.** Projected 30-day AI spend is evaluated
   hourly against the stage cap (doc 10 §10.4). ≥60% → trim, ≥80% → cheap +
   SOFT kill, ≥100% → MEDIUM kill + demote. *Default:* throttle research,
   never exits; JEV only affects sleeves that configured it.
@@ -132,9 +128,9 @@ text is the freeze-v2 contract unchanged.
 - **R15. Runaway research caps.** Per cycle: ≤40 LLM calls, ≤120 tool calls,
   ≤250k tokens, ≤8 min wall clock, ≤25 graph depth. 3 consecutive aborts
   on one symbol pause that symbol; majority-of-watchlist aborts pause the
-  plane. *Default:* abort, publish nothing, never retry within interval.
+  plane. *Default:* abort, publish nothing, no retry within the interval.
 - **R16. Kill-switch hierarchy.** SOFT / MEDIUM / HARD per doc 10 §10.3.
-  No agent can invoke or override any level. Exits, stops, reconcile
+  No agent can invoke or override any level. Exits, stops, and reconcile
   survive all three.
 - **R17. No automatic capital escalation.** No code path raises a stage.
   Promotion is a human signing a `PROMOTION_MANIFEST` with the process
@@ -143,40 +139,45 @@ text is the freeze-v2 contract unchanged.
 
 ## 5.1c Incremental risk DAG (frozen shape)
 
-Portfolio risk is a dependency DAG. L0 frozen inputs (the `RiskSnapshot`:
-positions, pending orders, equity/settled cash/PnL, ctx-derived flags, kill
-level, stage, allowlist) → L1 derived-once measurements (K6 formulas,
-exposure sums with pending, drawdown vs HWMs, vol ratio, correlations,
-VaR/stress, churn and flip state, settlement availability) → L2 rule
-predicates (R1–R19 and every threshold test; no rule reads another rule's
-verdict) → L3 one `VetoVerdict` (frozen precedence, all co-causes in
-reasons_all) + `BuildEngineInputs`. Invariants: deterministic, no RNG, no
-clock reads, allocation-free on the execution path, integer money. Slice B
-(`EvaluateVeto`, 153+ suite) is functionally correct; any refactor or v3
-extension (R18/R19, always-take) must reproduce every existing verdict
-bit-identically before landing.
+Portfolio risk is a dependency DAG:
 
-## 5.2 Leverage / stop table (locked, v3)
+- L0: frozen inputs (the `RiskSnapshot`: positions, pending orders,
+  equity/settled cash/PnL, ctx-derived flags, kill level, stage,
+  allowlist).
+- L1: derived-once measurements (K6 formulas, exposure sums with pending,
+  drawdown vs HWMs, vol ratio, correlations, VaR/stress, churn and flip
+  state, settlement availability).
+- L2: rule predicates (R1–R19 and every threshold test; no rule reads
+  another rule's verdict).
+- L3: one `VetoVerdict` (frozen precedence, all co-causes in reasons_all)
+  + `BuildEngineInputs`.
 
-- Live (G1+): **1×, cash account, long only, every stage.** No margin.
+Invariants: deterministic, no RNG, no clock reads, allocation-free on the
+execution path, integer money. Slice B (`EvaluateVeto`, 153+ suite) is
+functionally correct; any refactor or extension (R18/R19, always-take)
+must reproduce every existing verdict bit-identically before landing.
+
+## 5.2 Leverage / stop table (locked)
+
+- Live (G1+): 1×, cash account, long only, every stage. No margin.
 - Shadow research books may simulate shorting or leverage only when
   labeled non-promotable research; they never feed a promotion.
 - Every order intent carries broker-native protection or it is rejected by
   `risk/veto.cpp`. Exit profiles are versioned per sleeve:
   `exit_profile_v1` (1.5×ATR(14) stop floored at 0.1%, TP 2R, calendar
-  time_exit - `baseline_v1` only; diagnosed as horizon-mismatched in
+  time_exit; `baseline_v1` only, diagnosed as horizon-mismatched in
   doc 12), `exit_trend_v1`, `exit_intraday_v1`, `exit_event_v1` (doc 02).
   Profile variants are pre-registered and shadow-tested, never live-tuned.
 
 ## 5.3 Determinism contract
 
 - D1. Same `context_hash` + same candidate + same filter answers (if any)
-  → same decision. Replay proves it weekly on sampled rows.
-- D2. No RNG in the decision path. Tie-breaks by fixed documented orders.
-- D3. Model/prompt/skill versions pinned per deployment and logged per
-  row; mid-session updates forbidden. Runtime self-modification of
+  → same decision. Replay checks this weekly on sampled rows.
+- D2. No RNG in the decision path. Tie-breaks use fixed documented orders.
+- D3. Model/prompt/skill versions are pinned per deployment and logged per
+  row; mid-session updates are forbidden. Runtime self-modification of
   prompts, tools, or skills is forbidden.
-- D4. Portfolio state snapshotted at decision time; execution-time drift
+- D4. Portfolio state is snapshotted at decision time; execution-time drift
   only narrows (re-check at send; shrink-or-hold, never grow).
 - D5. Research non-determinism is contained: replay uses logged
   `features.jsonl` and `candidates.jsonl`, never a re-run of agents or
@@ -197,7 +198,7 @@ bit-identically before landing.
   (unprotected: re-establish or flatten, alert), PARTIAL (no new risk
   until resolved), PROTECTIVE_ORDER_MISSING (establish or flatten, never
   naked). Per-symbol drift > 1% with no pending orders → adopt + alert;
-  with pending → defer 30 s. (v3) Settlement ledger reconciles with the
+  with pending → defer 30 s. The settlement ledger reconciles with the
   broker's cash/settled balances each cycle; mismatch = entries HOLD.
 - S3. Backtest/shadow/live divergence: a sleeve whose realized results
   diverge from its own backtest distribution beyond the pre-registered
@@ -213,14 +214,14 @@ bit-identically before landing.
   > 25% → treat the emitting source/sleeve as failed and disable it.
 - S8. Provider/LLM outage: research degrades to harvest-only; entries
   needing research context HOLD. Outage is `research_available=false` /
-  `jev_available=false`, NEVER `disagreement=true`.
+  `jev_available=false`, never `disagreement=true`.
 - S9. Broker outage: entries stop; exits attempt REST; unresolvable drift
   → HARD kill rather than trading blind.
 - S10. Spend-counter loss → assume the highest tier reached in the last
-  24 h until rebuilt. Unknown spend is high spend.
+  24 h until rebuilt. Unknown spend is treated as high spend.
 - S11. Clock skew over threshold → entries HOLD; exits and reconcile go on.
 
-Degraded modes (locked; a mode never widens autonomy, only narrows it;
+Degraded modes (locked; a mode only narrows autonomy, never widens it;
 transitions are journaled):
 - `FULL` - everything live.
 - `DEGRADED_RESEARCH` - research plane down; sleeves that need no research
@@ -240,11 +241,12 @@ transitions are journaled):
   intent or HOLD reason, chained hash. Append-only, daily backup.
 - Hash chains detect accidents, not attackers: every 1000 decisions the
   journal head is Ed25519-signed and the checkpoint stored off-host.
-- Weekly: verify hash chain + replay 100 sampled rows.
+- Weekly: verify the hash chain and replay 100 sampled rows.
 
 ## Locked decisions
 
-- Rules R1–R19 + stop rules + §5.1a definitions are code constants.
+- Rules R1–R19, the stop rules, and the §5.1a definitions are code
+  constants.
 - Agents cannot read, write, or influence any rule in this document.
 - Absent data is never treated as neutral data, anywhere in the system.
 - Live = 1×, cash account, long only, allowlisted instruments (R18/R19).

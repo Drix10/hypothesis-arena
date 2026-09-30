@@ -4,16 +4,14 @@
 
 An AI-assisted **systematic, multi-sleeve** fund that trades US-listed
 equities and ETFs, whose every money decision is made by deterministic,
-replayable code under hard risk rules, and and whose AI is used only where
+replayable code under hard risk rules, and whose AI is used only where
 the evidence says it helps:
 
 1. **Research throughput** - an offline research factory in which agents
    propose hypotheses, write pre-registrations, write and run backtest
    code on trusted local data, and draft reports; every trial is logged
    and gated statistically before a human sees a promotion request
-   (doc 08 §8.7, doc 11). This is the model real quant shops have moved
-   to (agentic signal research feeding a human investment committee),
-   not LLMs deciding trades.
+   (doc 08 §8.7, doc 11). LLMs do not decide trades.
 2. **Typed extraction from primary documents** - SEC filings and official
    releases read by a reader tier that has no code execution and no
    network, producing schema-capped facts that a deterministic resolver
@@ -22,9 +20,9 @@ the evidence says it helps:
    champion path only after it proves a positive paired delta against
    always-take (doc 03, doc 11).
 
-It is **autonomous in research, decision, and execution** inside a box,
-and **never autonomous in capital escalation** (doc 10). What it cannot
-do is give itself more money, more instruments, or more rope.
+It is autonomous in research, decision, and execution inside fixed
+limits, and never autonomous in capital escalation (doc 10). It cannot
+give itself more money or more instruments.
 
 Inputs and output:
 - **Input A (slow, rich):** free primary data - SEC EDGAR (8-K, 10-Q/K,
@@ -38,29 +36,29 @@ Inputs and output:
 - **Output:** BUY / SELL-to-close / HOLD + size + protective stop, from a
   named strategy sleeve, executed on paper or live under the stage.
 
-**The edge must be earned, not assumed.** Published evidence on end-to-end
-LLM trading is poor and mostly dissolves once look-ahead and cost are
-controlled (doc 09 §9.0). Freeze v2's statistical baseline measured
-negative (doc 12). Every sleeve therefore enters as a pre-registered
+The edge must be earned, not assumed. Published evidence on end-to-end
+LLM trading is poor and mostly disappears once look-ahead and cost are
+controlled (doc 09 §9.0). The statistical baseline measured negative
+(doc 12). Every sleeve therefore enters as a pre-registered
 hypothesis and must pass the doc 11 gate before it touches the paper
 champion book.
 
-## 1.2 Operator and jurisdiction (LOCKED 2026-09-28)
+## 1.2 Operator and jurisdiction (locked 2026-09-28)
 
 The operator is an India-resident individual. This fixes what can be
-traded live and therefore what paper evidence is worth collecting:
+traded live and what paper evidence is worth collecting:
 
 - Funding route: RBI Liberalised Remittance Scheme (LRS), USD 250,000
-  per financial year per person. LRS explicitly prohibits remittances for
-  **margin trading** and for **trading foreign exchange abroad**.
+  per financial year per person. LRS prohibits remittances for
+  margin trading and for trading foreign exchange abroad.
 - Consequences (binding on every live stage, R18/R19):
-  - **Cash account only** - no margin, therefore **no short selling** and
-    **no leverage** (1× everywhere).
-  - **No forex spot, CFDs, or FX margin products** live. Forex exposure,
+  - Cash account only: no margin, therefore no short selling and
+    no leverage (1× everywhere).
+  - No forex spot, CFDs, or FX margin products live. Forex exposure,
     if ever wanted, only through US-listed currency ETFs and only after
     the jurisdiction gate confirms them (doc 10).
-  - **No options, futures, or leveraged/inverse products** in v1 live.
-  - US equity **T+1 settlement** and cash-account rules (Reg T good-faith
+  - No options, futures, or leveraged/inverse products in v1 live.
+  - US equity T+1 settlement and cash-account rules (Reg T good-faith
     and free-riding) bind intraday turnover (R18).
 - Tax/reporting items (US withholding on dividends with a W-8BEN, Indian
   TCS on LRS remittances, foreign-asset reporting in the Indian return)
@@ -69,14 +67,14 @@ traded live and therefore what paper evidence is worth collecting:
   advice; G1 requires a qualified professional's written confirmation
   attached to the promotion manifest.
 
-## 1.3 Venue and data (LOCKED 2026-09-28)
+## 1.3 Venue and data (locked 2026-09-28)
 
 - **US equities/ETFs: Alpaca** - paper (G0) and live (G1+, subject to the
   jurisdiction gate). Alpaca accepts Indian residents for international
   accounts, USD base currency, funded by bank wire under LRS. REST +
   WebSocket; trading API limit 200 requests/minute/key; bracket/OCO/OTO
   orders; market-on-close via `time_in_force=cls`.
-- **Forex: OANDA v20 practice - BLOCKED** (India ineligible; Addendum 39).
+- **Forex: OANDA v20 practice, blocked** (India ineligible; Addendum 39).
   FXCM demo fallback is also out: forex spot is not a legal live target
   (§1.2), so paper forex trading would produce non-transferable evidence.
   FX research continues offline from FRED exchange rates and short rates
@@ -91,10 +89,10 @@ traded live and therefore what paper evidence is worth collecting:
   v1. Calendar missing = closed (fail closed).
 - **Compliance as data:** broker/regulatory rules live in the
   `broker_compliance_policy` table keyed by effective date (doc 05 R9).
-  Example already in force: the FINRA pattern-day-trader framework was
-  eliminated by SEC approval on 2026-04-14 (effective 2026-06-04, broker
-  implementation by 2027-10-20). It changes a table row, not code - and a
-  cash account is governed by settlement rules, not PDT, anyway.
+  Example: the FINRA pattern-day-trader framework was eliminated by SEC
+  approval on 2026-04-14 (effective 2026-06-04, broker implementation by
+  2027-10-20). That changes a table row, not code; a cash account is
+  governed by settlement rules, not PDT, anyway.
 - **Macro calendar:** FRED/ALFRED release calendar + Fed/ECB official
   calendars; ALFRED vintages for anything replayed.
 - **Earnings calendar:** EDGAR-derived (8-K item 2.02 history + filing
@@ -104,16 +102,15 @@ traded live and therefore what paper evidence is worth collecting:
 
 | Tier | Horizon | Needs | Verdict for this deployment |
 |---|---|---|---|
-| T0 | µs–ns | colocation, direct exchange feeds, DMA, queue position | **Out of scope.** Latency-arbitrage rents go to the fastest; we are not in that race. |
-| T1 | ms–s event reaction | sub-second news ingestion + order entry | **Not competitive.** EDGAR polling, internet REST at 200 req/min, IEX-only real-time data, and an India–US path lose every first-mover race. |
-| T2 | minutes–hours intraday | reliable bars, close auction access, careful execution | **Reachable.** Candidate: market intraday momentum (doc 02 sleeve I1). |
-| T3 | days–months | daily data, low turnover | **Reachable and most robust.** Trend, sector momentum, EDGAR event sleeves, macro risk overlay. |
+| T0 | µs–ns | colocation, direct exchange feeds, DMA, queue position | Out of scope. Latency-arbitrage rents go to the fastest. |
+| T1 | ms–s event reaction | sub-second news ingestion + order entry | Not competitive. EDGAR polling, internet REST at 200 req/min, IEX-only real-time data, and an India–US path lose every first-mover race. |
+| T2 | minutes–hours intraday | reliable bars, close auction access, careful execution | Reachable. Candidate: market intraday momentum (doc 02 sleeve I1). |
+| T3 | days–months | daily data, low turnover | Reachable and most robust. Trend, sector momentum, EDGAR event sleeves, macro risk overlay. |
 
 The C++ kernel's sub-millisecond local budget (doc 04 §4.4) stays: it buys
-determinism, auditability, and reliable exits - not alpha. "HFT mix" in
-this project means: **a fast deterministic execution core running T2/T3
-strategies with institutional-grade risk, reconciliation, and cost
-accounting.** Revisiting T0/T1 requires a legal entity, a DMA broker,
+determinism, auditability, and reliable exits, not alpha. "HFT mix" in
+this project means a fast deterministic execution core running T2/T3
+strategies with strict risk, reconciliation, and cost accounting. Revisiting T0/T1 requires a legal entity, a DMA broker,
 paid direct feeds, colocation, and a doc 01 scope change - the doc 07
 distraction firewall holds it out.
 
@@ -129,14 +126,14 @@ distraction firewall holds it out.
 | Capital stage, kill switches, spend | Permit or forbid; never expand | Stage chain + C++ constants + human signature (doc 10) |
 | Validation + promotion | Score, gate, judge | Offline harness + human sign-off (doc 11) |
 
-Hot path never blocks on an LLM. Risk gates are local and unconditional -
+The hot path never blocks on an LLM. Risk gates are local and unconditional:
 they run even if every model and data source is down (default: HOLD).
 Agents never size, send, amend, or cancel an order, and never see equity
 or PnL. The boundary is enforced by OS permissions (doc 08, R11).
 
 ## 1.6 Explicitly OUT of scope (do not build)
 
-1. No Selenium or browser automation in the trading system. Ever.
+1. No Selenium or browser automation in the trading system.
 2. No content syndication (LinkedIn/blog) anywhere in the fund.
 3. No FPGA/GPU, no colocation, no T0/T1 latency competition (§1.4).
 4. No venues beyond Alpaca in v1. OANDA/FXCM stay out (§1.3).
@@ -152,15 +149,15 @@ or PnL. The boundary is enforced by OS permissions (doc 08, R11).
 10. No chat-gateway agent frameworks on any host that can reach capital
     (Hermes Agent, OpenClaw and similar). Alerts are outbound-only
     (doc 06 §6.4); nothing accepts inbound commands.
-11. No automatic capital escalation. Ever (doc 10).
+11. No automatic capital escalation (doc 10).
 12. No crypto.
 
 ## 1.7 Success criteria
 
-Phase-1 (G0 paper) success is economic AND operational:
+Phase-1 (G0 paper) success is economic and operational:
 
 - **Economic:** at least one sleeve passes the doc 11 sleeve gate in
-  backtest AND in G0a shadow on live data: net-of-all-cost Sharpe with a
+  backtest and in G0a shadow on live data: net-of-all-cost Sharpe with a
   lower confidence bound above zero, beats cash and the vol-matched
   passive benchmark, survives 2× cost stress, trial-count-adjusted.
 - **Transferability:** every paper number was produced under the live

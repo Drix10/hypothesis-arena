@@ -1,11 +1,10 @@
 # Appendix 06b - Close ownership, incident identity, and recovery record (frozen)
 
-Moved VERBATIM from doc 06 §6.1b in the freeze-v3 rebaseline (2026-09-28).
+Moved verbatim from doc 06 §6.1b in the freeze-v3 rebaseline (2026-09-28).
 This is the H1 implementation contract as accepted through the audit
-audit rounds (Addendums 108–131, in git history).
+rounds (Addendums 108-131, in git history).
 Doc 06 keeps the one-paragraph contract; this file keeps every rule.
-Nothing here was edited; a change to any rule is a doc edit + version
-bump + fresh paper window, exactly as before the move.
+A change to any rule is a doc edit, a version bump and a fresh paper window.
 
 ## 6.1b Close ownership + incident identity (frozen)
 
@@ -241,7 +240,7 @@ non-empty lines are corruption (refuse, never rewrite).
 `FileExists` stays the regular-file probe; `StatPath` maps
 ENOENT/ENOTDIR to ABSENT and every other stat failure to
 CORRUPT (fail closed, absent-vs-corrupt preserved).
-- Daily rhythm honesty: the ops-day clock advances only after
+- Daily rhythm: the ops-day clock advances only after
 the 00:00 chain verification succeeds (a failed verification
 retries the next cycle, never skips a day). The clean-cycle
 HARD truncations report failed writes instead of ignoring
@@ -250,15 +249,14 @@ them.
 accumulates decimal digits with a checked bound (oversized input
 refuses before any signed overflow), then the 0..1000000 window
 applies as before.
-- HALT lifecycle honesty: a failed HALT write latches HARD
+- HALT lifecycle: a failed HALT write latches HARD
 in-memory (entries blocked) and reports the stop as UNPROVEN -
 the caller exits nonzero and the supervisor/operator owns
 recovery. No comment or log may claim an in-process retry that
 the entry point does not perform.
 - Clock split: wall clock owns audit timestamps/epochs/day
 accounting; a monotonic clock owns S2 cadence/elapsed timeouts.
-- Single-process ownership: one live runner per state directory
-- Phase-4 prerequisite. The mutual-exclusion mechanism is an OS
+- Single-process ownership: one live runner per state directory (Phase-4 prerequisite). The mutual-exclusion mechanism is an OS
 process-lifetime ownership primitive held open for the whole
 process life (`flock(LOCK_EX|LOCK_NB)` on POSIX, an exclusive
 no-share open handle on Windows): a dead holder releases it in

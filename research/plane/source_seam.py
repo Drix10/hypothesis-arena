@@ -4,7 +4,7 @@
   sources. The five adapters (EDGAR/FRED/Treasury/BLS/BEA) are that
   implementation (pure I/O, no LLM, harvest-envelope shaped); this seam
   is the single orchestration point around them.
-- ARCHITECTURE.md §5 describes the frozen P1 pipeline (collect.py ->
+- ARCHITECTURE.md §4 describes the frozen P1 pipeline (collect.py ->
   data/signals), which keeps running. In Phase 2.5 there is one poll
   path per source: adapter singletons owned here for the seam's
   lifetime (plane/runner.py owns the seam per process).

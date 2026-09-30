@@ -1,9 +1,9 @@
 # 13 - C++ deterministic kernel build (Phase 3)
 
-Phase 2 is frozen (`50ea369` accepted). The JEV sidecar is not modified
-further unless Phase-3 integration exposes an actual contract defect.
-This document is the Phase-3 build sequence. Order is load-bearing:
-**boundary validator first, risk/sizing last.**
+Phase 2 is frozen (`50ea369` accepted). The JEV sidecar changes only if
+Phase-3 integration exposes a contract defect. This document is the Phase-3
+build sequence. The order matters: boundary validator first, risk and sizing
+last.
 
 ```
 Raw AnswerSet JSON
@@ -27,8 +27,8 @@ JEVAnswerSetV3 (typed object)
 Deterministic decision engine (vetoes, table, sizing, exits, kills)
 ```
 
-Once the object crosses the boundary, the rest of the kernel **never parses
-arbitrary JEV JSON again**. Everything downstream consumes the typed object.
+Once the object crosses the boundary, the rest of the kernel never parses
+arbitrary JEV JSON again. Everything downstream consumes the typed object.
 
 ## 13.0 The three inequalities (locked)
 
@@ -78,14 +78,14 @@ elevated 2xR tier (conviction `max` nominates it; the engine authorizes).
 Confidence is quarantined: no accessor exists and no kernel path reads it
 (grep-gated).
 
-## 13.5 P3.5 - Risk engine, sizing, exits, kills (docs 04–06 order)
+## 13.5 P3.5 - Risk engine, sizing, exits, kills (docs 04-06 order)
 
 Only after the JEV filter gate is green. Build slices in this exact order; each
 slice is pure-first (no I/O in decision logic), fixture-tested, and
 green before the next starts. No JEV/sidecar changes, no research plane,
 G0_PAPER only (§13.6).
 
-- Slice A - request authority (prereq, doc 07 ruling): ValidationRequest
+- Slice A - request authority (prerequisite, doc 07 ruling): ValidationRequest
   becomes private-immutable (const fields, no setters, no mutable
   accessors) with KernelState friendship; request_for() is the sole
   construction authority, copying an authorized request is allowed but
@@ -97,9 +97,9 @@ G0_PAPER only (§13.6).
   boundary (not just grepping it): compile-FAIL snippets for direct
   construction, direct field mutation, and mutable-accessor acquisition
   (each failing for the intended reason), compile-PASS for
-  request_for() and validate_jev(const ValidationRequest&). Grep is
+  request_for() and validate_jev(const ValidationRequest&). The grep is
   policy; the negative compile test is the proof.
-- Slice B - `risk/veto.cpp` (doc 05 R1–R17 + doc 03 §3.2 table): pure
+- Slice B - `risk/veto.cpp` (doc 05 R1-R17 + doc 03 §3.2 table): pure
   Snapshot+AnswerSet → HOLD/PROCEED + frozen reason; stage multiplier
   applied here after sizing; K6 snapshot formulas; R14/R13 inputs from
   validated state. Gate [correctness]: veto unit suite from doc 05 cases.
@@ -111,7 +111,7 @@ G0_PAPER only (§13.6).
   Gate [drill]: §4.5 + §6.5 kill drills.
 - Slice E - STAGE chain (doc 10 §10.1): re-read per cycle boundary,
   hash-chain verify, unverifiable → G0_PAPER. Gate [correctness]: corruption test.
-- Slice F - `feed/broker.cpp` (doc 04 §4.2.2): lock-free ring, gap
+- Slice F - `feed/feed.cpp` (doc 04 §4.2.2): lock-free ring, gap
   flags, reconnect backoff, session marking (closed = normal).
   Gate [soak]: 24 h soak, flat RSS, kill/reconnect test (§4.5).
 - Slice G - `ctx/context.cpp` (doc 04 §4.2.3): frozen Snapshot over
@@ -128,14 +128,14 @@ G0_PAPER only (§13.6).
   reconcile drills (exits proven alive). Gate [correctness + drill]:
   §6.5 implementation and drill rows green. H1 green CLOSES P3.5
   (with §4.5 correctness + drill rows).
-- Slice H2 - Phase 4 operational evidence (NOT P3.5): the live paper
+- Slice H2 - Phase 4 operational evidence (not P3.5): the live paper
   loop, 30 clean days, zero R violations, real outage drills with
   exits alive, out-of-band notification actually received. Gate
   [operational]: doc 07 Phase 4 exit. H2 owns all time-series evidence;
   it runs after P3.5 closes and never retro-blocks it. The 30-day bar
-  is unchanged - it simply belongs to the correct phase.
+  is unchanged.
 
-Gate classes (so long evidence never silently serializes the build):
+Gate classes:
 [correctness] = unit/fixture suites, deterministic, minutes;
 [drill] = fault-injection or procedure runs against built slices;
 [soak]/[operational] = wall-clock evidence (F 24 h feed soak, H2 30 d).
@@ -159,14 +159,13 @@ Soak/operational evidence tracked per gate class, never retro-blocking.
 
 ## 13.7 Battle-testing ladder (gap-analysis mapping, frozen ownership)
 
-The research lesson set vs existing gates - reconciled, not duplicated.
-Every reliability property has exactly one owner and one measurable test.
+Research lessons mapped to existing gates. Every reliability property has exactly one owner and one measurable test.
 
 | Research lesson | Existing gate | Missing gate | Owning slice |
 |---|---|---|---|
 | parser strictness | filter vectors (type/int-domain/expiry cases) | - (covered) | filter (closed) |
-| rejection-shape matrix | Slice C 78-check suite (§4.5 rows) | - (covered) | Slice C (closed) |
-| veto unit battery | Slice B 153+ suite + case-29 row | - (covered) | Slice B (closed) |
+| rejection-shape matrix | Slice C rejection suite (§4.5 rows) | - (covered) | Slice C (closed) |
+| veto unit battery | Slice B veto suite + case-29 row | - (covered) | Slice B (closed) |
 | decision determinism | 32 cross-language vectors + veto composition suite | - (covered) | filter (closed) |
 | simulated market-feed delay/drop | - | feed-gap + transport-drop injection vs §6.2a broker rows | Slice F |
 | JEV/provider timeout/drop | - | provider-timeout injection vs §6.2a JEV rows | H1 |
@@ -179,29 +178,30 @@ Every reliability property has exactly one owner and one measurable test.
 | feed soak | - | 24 h soak, flat RSS, kill/reconnect | Slice F (soak gate) |
 | 30-day operation | - | H2 operational evidence (Phase 4, never retro-blocks) | H2 |
 
-No overlapping tests proving the same thing twice: a lesson with an
-existing gate is cited, not rebuilt. New gates attach to the listed slice
+No test proves the same thing twice: a lesson with an existing gate is
+cited, not rebuilt. New gates attach to the listed slice
 and must be green before that slice closes (soak/operational per the §13.5
 sequencing rule).
 
 ## 13.8 P3.5 remaining scope after freeze v3 (Track K, doc 07 §7.3)
 
-Status verified 2026-09-28: slices A–G done; H1 router/journal/broker/
-runner built and audited through the Round-5 follow-ups (router 209,
-runner ~1045 Linux, broker 126, drills 120, normal + hardened +
-sanitizer); `kernel/runner/main.cpp` wires `deps.transport = nullptr`, so
-nothing has been sent. Remaining boxes, in order:
+Status 2026-09-30: slices A-G and H1 are built; `kernel/runner/main.cpp` is
+the read-only entry and `g0_paper_loop` places paper orders through the
+transport below. `TODO.md` boxes K1-K13 hold the state. Open: MOC fill and
+reconcile smoke with a held position (K1), stop-cancel-before-close (K5;
+Alpaca rejects MOC and market sells while an OTO stop is live), the 24 h
+soak (K9) and the §6.2a drills on live paper (K10). Scope, in order:
 
-- **P3.5-T transport** (first; the hard blocker). Decision record comparing
-  (a) libcurl + system TLS linked behind the transport seam and (b) a
-  minimal `mirotrade` broker-gateway process speaking the shaped
-  observation protocol over a local pipe. Criteria: audited surface,
-  fail-closed on every TLS/HTTP/WS error, bounded buffers, no credential
-  exposure to other identities, 200 req/min budget with 429 back-off, WS
-  reconnect = re-subscribe + REST reconcile. TLS from scratch forbidden.
-  Gate [correctness + drill]: fault-injection suite + Alpaca paper smoke
+- P3.5-T transport (K1). Decision record comparing (a) libcurl + system TLS
+  linked behind the transport seam and (b) a minimal `mirotrade`
+  broker-gateway process speaking the shaped observation protocol over a
+  local pipe. Criteria: audited surface, fail-closed on every TLS/HTTP/WS
+  error, bounded buffers, no credential exposure to other identities, 200
+  req/min budget with 429 back-off, WS reconnect = re-subscribe + REST
+  reconcile. TLS from scratch is forbidden. Gate [correctness + drill]:
+  fault-injection suite + Alpaca paper smoke
   (submit/protect/query/cancel/reconcile/MOC).
-  **Decision (2026-09-29): (a) libcurl.** The seam is a plain function
+  Decision (2026-09-29): (a) libcurl. The seam is a plain function
   pointer, so (a) is one translation unit (`broker/http_curl.cpp`, ~150
   lines) behind it; (b) adds a second process, a pipe protocol and an
   identity to audit for no gain at this request rate. The transport
@@ -215,28 +215,29 @@ nothing has been sent. Remaining boxes, in order:
   account, protected bracket, query, cancel, cancel observed, 401 class.
   The live reply carries no order-level take_profit/stop_loss objects; the
   two typed legs are the protection proof (fixture in `kernel/fixtures`).
-  Open: 429 back-off drill, WS `trade_updates` stream, MOC and reconcile
-  smoke, fault-injection suite.
-- **Always-take path** (doc 04 4b): versioned filter-policy input to
+  The fault-injection suite and the WS `trade_updates` client are built.
+  Open: MOC and reconcile smoke.
+- Always-take path (K2, doc 04 4b): versioned filter-policy input to
   `BuildEngineInputs`; bit-identical verdicts to the filtered path where
   the filter passes; compile/grep gate that `none` cannot read an
   answer artifact. The filter table is untouched.
-- **Snapshot v2 + settlement ledger + R18** (doc 04 5c, doc 05): new
+- Snapshot v2 + settlement ledger + R18 (K3, K4; doc 04 5c, doc 05): new
   committed vectors; v1 vectors unchanged and still verified.
-- **R19 allowlist + approved sleeves** from the stage manifest (doc 10).
-- **OTO stop-only protection + MOC sequencing** (doc 06 §6.0): adapter
+- R19 allowlist + approved sleeves from the stage manifest (K4, K12; doc 10).
+- OTO stop-only protection + MOC sequencing (K5; doc 06 §6.0): adapter
   shape extension, legs proof for the 1-leg OTO case, stop-before-MOC and
   MOC-reject drills.
-- **Candidate ingest** (doc 04 2b): CID recompute, sleeve approval,
+- Candidate ingest (K6; doc 04 2b): CID recompute, sleeve approval,
   allowlist, freshness, long-only side policy - adversarial vectors.
-- **Outbound-only alert adapter** (doc 06 §6.4).
-- **Live journal growth bound** (tracked item from H1 becomes a box).
-- **H1 drills on the real transport** (every doc 06 §6.2a row).
-- **Port-on-promotion** (before G1, not P3.5): champion signal in C++ with
+- Outbound-only alert adapter (K7; doc 06 §6.4).
+- Live journal growth bound (K8).
+- H1 drills on the real transport (K10; every doc 06 §6.2a row).
+- Port-on-promotion (before G1, not P3.5): champion signal in C++ with
   committed cross-language vectors (doc 04).
 
 P3.5 closes when the first seven boxes and the real-transport drills are
-green. 
+green.
+
 ## Exit criteria (Phase 3 -> Phase 4)
 
 - [x] JEV filter built once: `jev_filter.hpp`, 32 cross-language vectors,

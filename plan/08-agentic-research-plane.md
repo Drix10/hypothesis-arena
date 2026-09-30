@@ -3,15 +3,15 @@
 Two planes, one boundary:
 
 - **Live research plane** - reads the world on a schedule and writes
-  **typed, bounded features** into the context the kernel freezes. It has
+  typed, bounded features into the context the kernel freezes. It has
   no other output into the trading tree.
-- **Research factory** (v3, §8.7) - offline. Agents propose hypotheses,
+- **Research factory** (§8.7) - offline. Agents propose hypotheses,
   write pre-registrations, write and run backtest code on trusted local
   datasets, and draft reports for human triage. It never touches live
   state, credentials, or the trading tree.
 
 Neither can size, send, amend, or cancel an order, and no agent output can
-ever relax a risk rule. Freeze v3 changes are marked (v3).
+relax a risk rule.
 
 ## 8.1 The one-way boundary (locked, read this first)
 
@@ -44,90 +44,90 @@ ever relax a risk rule. Freeze v3 changes are marked (v3).
 
 ## 8.2 Framework choice (locked) + the v3 security pattern
 
-**Chosen stack (unchanged pins):** LangGraph orchestrates (durable
-checkpoints, resume-after-crash, `interrupt()` for human gates); smolagents
-`CodeAgent` is confined to the research factory (v3); SQLite checkpoints in
-paper, Postgres from G2; OpenTelemetry → self-hosted Langfuse for per-run
-token/cost attribution; Pydantic validation at every boundary.
+**Stack:** LangGraph orchestrates (durable checkpoints, resume after
+crash, `interrupt()` for human gates); smolagents `CodeAgent` is confined
+to the research factory; SQLite checkpoints in paper, Postgres from G2;
+OpenTelemetry to self-hosted Langfuse for per-run token/cost attribution;
+Pydantic validation at every boundary.
 
-**Ranking (selection judgment, not benchmarks; freeze v2, unchanged):**
-LangGraph CHOSEN (orchestrator: durability 5, observability 4); smolagents
-CHOSEN for code-writing work under a Docker sandbox (token efficiency 5,
-durability 2); AG2 v1.0 rejected (breaking redesign churn); CrewAI rejected
+**Ranking (selection judgment, not benchmarks):** LangGraph chosen
+(orchestrator: durability 5, observability 4); smolagents chosen for
+code-writing work under a Docker sandbox (token efficiency 5, durability
+2); AG2 v1.0 rejected (breaking redesign churn); CrewAI rejected
 (observability behind a paid tier, no documented durable resume); Hermes
-Agent and OpenClaw **rejected on principle** - self-modifying assistants
+Agent and OpenClaw rejected on principle: self-modifying assistants
 reachable from chat apps are a remote-code-execution path into a capital
 host and violate D3.
 
-**v3 security pattern for untrusted text (adopted from the
+**Security pattern for untrusted text (adopted from the
 `anthropics/financial-services` managed-agent cookbooks - earnings-reviewer,
 kyc-screener, gl-reconciler):**
 
 | Tier | Touches untrusted docs? | Capabilities | Output |
 |---|---|---|---|
-| **Reader** | **Yes** (filings, press releases) | model call only: **no tools, no code execution, no network, no file write** | length-capped, schema-validated JSON (enums, bounded strings, numbers with source spans); any instruction inside a document is data |
+| **Reader** | Yes (filings, press releases) | model call only: no tools, no code execution, no network, no file write | length-capped, schema-validated JSON (enums, bounded strings, numbers with source spans); any instruction inside a document is data |
 | **Resolver/Verifier** | No | deterministic Python: re-derives every claimed number from the canonical record text/XBRL by span; rejects anything unverifiable | `inference`-level candidates with verified provenance |
 | **Orchestrator** | No | graph control, trusted local stores (read-only) | node routing, budgets |
 | **Emitter** (only writer) | No | writes `features.jsonl` via the frozen emit path | complete bundles |
 
 Handoffs between agents are typed tool calls or schema-validated records
-with allowlisted targets - never parsed out of model text that sits
+with allowlisted targets, never parsed out of model text that sits
 downstream of a reader (the financial-services orchestrator documents that
-exact injection path). Harness-side schema validation runs on every reader
+injection path). Harness-side schema validation runs on every reader
 output before anything else sees it.
 
-**Why this replaces the freeze-v2 `extract` CodeAgent:** model-written
-Python with network egress, running over attacker-influenceable filings,
-is a larger surface than the job needs. The deterministic parser is the
-authority and the LLM output is advisory, so the reader needs to read,
-not to act.
+The reader replaces a model-written-Python `extract` agent: code with
+network egress running over attacker-influenceable filings is a larger
+surface than the job needs. The deterministic parser is the authority and
+the LLM output is advisory, so the reader reads and does not act.
 
-**Container spec (locked - "runs in Docker" is not a spec; v3: applies to
-the research factory and to any sandboxed harvest worker):** smolagents
-`CodeAgent` runs with `executor_type="docker"` only: non-root user, read-only
-rootfs, dropped capabilities, explicit CPU/RAM limits, and network egress limited
-to the Phase-0 allow-listed endpoints (source APIs + the model provider, nothing
-else). The prompt is NEVER the network boundary: enforcement lives in the
+**Container spec (locked; applies to the research factory and to any
+sandboxed harvest worker):** smolagents `CodeAgent` runs with
+`executor_type="docker"` only: non-root user, read-only rootfs, dropped
+capabilities, explicit CPU/RAM limits, and network egress limited to the
+Phase-0 allow-listed endpoints (source APIs + the model provider, nothing
+else). The prompt is never the network boundary: enforcement lives in the
 sandbox firewall/proxy (container netns + egress proxy with an exact
 destination allowlist), and §8.6 proves it with an unauthorized-destination
 probe (a worker attempting a non-allowlisted host must fail at the network
-layer, counted). Import allowlist (LOCKED 2026-09-18, exact - nothing else imports): stdlib
+layer, counted). Import allowlist (locked, exact - nothing else imports): stdlib
 `json, re, datetime, urllib, xml, html, math, statistics, collections,
 itertools, hashlib, base64` + `requests` + `bs4` (BeautifulSoup) + `lxml`
 (parser only) + `pydantic` + `pandas` (frames parsing, no eval) + `feedparser`
 (RSS). No `subprocess`, no `os.system`, no `socket` raw, no `pickle`, no
 `yaml.load` (safe_load only if yaml ever added - it is not on the list).
 
-OS isolation design (LOCKED 2026-09-18, extended v3), no shared groups:
+OS isolation design (locked), no shared groups:
 `mirotrade` runs the C++ kernel and transport and owns journal/`HALT`/stage
-chain/broker keys (mode 600). `mirostrat` (v3) runs the deterministic
+chain/broker keys (mode 600). `mirostrat` runs the deterministic
 sleeve engine and owns `candidates.jsonl` only; no credentials, no
 network except the market-data read path. `miroresearch` runs the live
 plane and owns `features.jsonl` + `signals.jsonl` only; no read on other
 homes, no sudo, no docker group (the supervisor drives containers).
 `mirojev` runs the optional JEV sidecar: read-only snapshot in,
 Ed25519-signed artifact out, owns the JEV credential + signing key.
-`mirofactory` (v3) runs the research factory on a copy of research
+`mirofactory` runs the research factory on a copy of research
 datasets; no credentials of any kind except the research model key via
 the spend-governed gate, no path into `/srv/mirohedge` trading dirs.
 `mirohuman` (you) signs manifests; no process runs as you. Credentials
 live in the owning identity's home, never in git, never world-readable.
-`LocalPythonExecutor` is **forbidden** on any host or container that can
+`LocalPythonExecutor` is forbidden on any host or container that can
 reach trading credentials, the journal, `HALT`, or the stage chain.
 
 ## 8.3 Agent topology - live plane (`research_graph_version: g1` → g2)
 
 `research_graph_version: g1` is the running graph (matches
-`plan/system-manifest.yaml`). The v3 node semantics below are g2; the
-manifest bumps to g2 in the same commit that lands them (doc 07 P1).
+`plan/system-manifest.yaml`). The reader-tier `extract` and verifier
+`critique` semantics below are g2; the manifest bumps to g2 in the same
+commit that lands them (doc 07 P1).
 
 | Node | Job | Output | Default on failure |
 |---|---|---|---|
 | `harvest` | Pull doc-09 sources on their cadences. Pure I/O, no LLM. | raw records + `observed_at_ns` | Source `stale`; never blocks |
-| `extract` (v3: reader tier) | Deterministic parser first (authoritative); for kinds with a registered reader skill (e.g. 8-K EX-99.1 guidance, doc 02 E2), the reader tier produces capped JSON, then the resolver verifies every field by source span | verified `inference` candidates + parser `source` candidates | Drop + count |
+| `extract` (g2: reader tier) | Deterministic parser first (authoritative); for kinds with a registered reader skill (e.g. 8-K EX-99.1 guidance, doc 02 E2), the reader tier produces capped JSON, then the resolver verifies every field by source span | verified `inference` candidates + parser `source` candidates | Drop + count |
 | `fuse` | Deterministic: join to symbols, dedupe, bucket | joined features | Drop + count |
 | `hypothesize` | LLM: falsifiable thesis per watchlist symbol into the digest (never into kernel state): claim, 3–5 pillars, explicit invalidation triggers, catalyst dates (thesis-tracker structure) | digest entry | Empty thesis - never a crash |
-| `critique` (v3: verifier) | Re-verifies each pillar's factual claims against canonical records (gl-reconciler critic pattern); names the strongest disconfirming evidence; flags pillars whose facts do not verify | `critique_text`, `critique_disagreement` advisory flag | `critique_disagreement=true` |
+| `critique` (g2: verifier) | Re-verifies each pillar's factual claims against canonical records (gl-reconciler critic pattern); names the strongest disconfirming evidence; flags pillars whose facts do not verify | `critique_text`, `critique_disagreement` advisory flag | `critique_disagreement=true` |
 | `emit` | Schema-validate, bound, write `features.jsonl` atomically | `features.jsonl` | Nothing written; last file ages out via TTL |
 
 - Checkpointed after every node; a crash resumes at the last completed
@@ -155,13 +155,13 @@ spend governor's research category (doc 10 §10.4).
    reader tier has no capabilities to abuse; outputs are schema-capped;
    every number is span-verified deterministically; numbers only become
    features through enums/buckets/counts; prose never sizes; R15 bounds
-   spend. Not claimed: that a clever injection cannot bias a *thesis*.
+   spend. Residual: an injection can still bias a thesis.
 2. **Correlated model failure.** One model misreading a regime hits every
    symbol. Controls: per-symbol evidence, R2 caps, per-regime calibration
    slices, and `latent_risk` scored independently of `enter` (sleeves
    with `filter = jev` only). No cross-symbol averaging dilutes a HOLD.
-3. **Temporal contamination of LLM outputs (v3).** A model that has seen
-   the future in training can "predict" it. Controls: pinned knowledge
+3. **Temporal contamination of LLM outputs.** A model that has seen the
+   future in training can "predict" it. Controls: pinned knowledge
    cutoff per model, post-cutoff-only evaluation, forward shadow as the
    primary evidence (doc 11 §11.0c).
 4. **Feature schema evolution.** `schema_version` bumps on any change;
@@ -185,9 +185,8 @@ process supervisor independently:
 
 A cycle that aborts is not retried within the same interval. The budget
 ledger's durability, digest, migration, trust-model, and trusted-config
-rules moved verbatim to `appendix/08-ledger-integrity-and-trust-record.md`
-and remain binding (coherent multi-object forgery bottoms out at host
-integrity - named, not solved by prose).
+rules are in `appendix/08-ledger-integrity-and-trust-record.md` and are
+binding (coherent multi-object forgery bottoms out at host integrity).
 
 ## 8.5 Feature contract v2 (locked - the only thing that crosses the boundary)
 
@@ -195,19 +194,18 @@ integrity - named, not solved by prose).
 `emit` writes one bundle: `research_epoch` + `bundle_id` + `watermarks` +
 feature list + `BUNDLE_COMMIT`, staged as temp + fsync + atomic rename with
 a manifest row (bundle_id, research_epoch, feature count, map sha, commit).
-MANIFEST STATUS (explicit): the manifest mechanism is DESIGN FROZEN but
-IMPLEMENTATION DEFERRED to Phase 2.5 - the research-plane writer does not
-exist yet, so no writer produces the separate generation manifest and the
-P1.5 reader (`collector/ctx_read.py`) does NOT consume one. What the reader
-enforces TODAY is the bundle-internal `commit is True` flag plus the strict
-envelope/lineage/kind checks. Do not describe the reader as manifest-backed
-until Phase 2.5 implements the writer side. The frozen guarantee stands:
-partial emit + crash + restart can never expose half a bundle (R6). Watermarks are replay-critical metadata, not
-decoration: `{"entity_map_version", "entity_map_sha256", source watermarks,
+The writer is `research/plane/emit.py`, which appends the manifest row and
+resolves the latest complete generation. The P1.5 reader
+(`collector/ctx_read.py`) does not consume the manifest; it enforces the
+bundle-internal `commit is True` flag plus the strict envelope/lineage/kind
+checks, and is not manifest-backed. Partial emit + crash + restart never
+exposes half a bundle (R6). Watermarks are replay-critical metadata:
+`{"entity_map_version", "entity_map_sha256", source watermarks,
 last-observation timestamps}`. The reader hashes the actual map file and
-requires an exact sha256 match - version strings alone are not pinning. C++ consumes the last *complete* bundle
-only - a runaway-aborted cycle that never reaches `emit` publishes nothing,
-so partial epochs can never mix (R15). Thesis/critique prose is NOT a feature:
+requires an exact sha256 match; version strings alone are not pinning. C++
+consumes the last complete bundle only - a runaway-aborted cycle that never
+reaches `emit` publishes nothing, so partial epochs never mix (R15).
+Thesis/critique prose is not a feature:
 it goes to `research_digest.jsonl` (human + critique-node reading, advisory
 only, never into JEV state - doc 03 §3.4).
 
@@ -230,39 +228,39 @@ only, never into JEV state - doc 03 §3.4).
 ```
 
 Hard rules on this record:
-- **Bundle vs feature ownership (explicit).** Bundle-level: `schema_version`,
+- **Bundle vs feature ownership.** Bundle-level: `schema_version`,
   `research_epoch`, `bundle_id`, `commit`, `watermarks`, `history`, `features`.
   Feature-level: `feature_id`, `kind`, `symbols`, `observed_at_ns`,
   `ingested_at_ns`, `ttl_s`, `value`, `effect`, `evidence`,
   `confidence_bucket`, `source_id`, `provenance_url`, `canonical_hash`,
-  `canonical_hashes`, `entity_ref`. The §8.5 example shows both levels
-  together for readability; the reader validates each level separately and
+  `canonical_hashes`, `entity_ref`. The example above shows both levels
+  together; the reader validates each level separately and
   rejects cross-level smuggling.
-- **LLM outputs are always advisory candidates, never evidence.** `extract`
+- **LLM outputs are advisory candidates, never evidence.** `extract`
   / `hypothesize` / `critique` may propose `source`-shaped records, but a
   deterministic resolver recomputes `evidence`, `effect`, `observed_at_ns`,
   entity binding, and `canonical_hash` from the canonical source record
   before anything is emitted: facts actually present become deterministic
   `source` features, everything else stays `inference`/CONTEXT. No LLM
   output can directly declare `evidence=source` (R1).
-- **Evidence levels, not vibes.** `source` = deterministic parser over a
+- **Evidence levels.** `source` = deterministic parser over a
   primary source (only these are TRIGGER-eligible). `derived` = deterministic
   transform of source facts. `inference` = model-produced: CONTEXT-only until
   the producing *rule* earns promotion by measured track record - never the
-  individual claim. Schema-valid but fabricated is still fabricated; levels
-  are what stop it reaching entries.
+  individual claim. Levels, not schema validity, keep fabricated
+  records from reaching entries.
 - **`effect` is assigned by a deterministic interpretation table per kind**
   (frozen with the schema), never invented per-record. C++ derives
   `disagreement` from opposite TRIGGER effects (doc 03 §3.4).
 - **`confidence_bucket` is computed** (source reliability × timestamp quality ×
   parser confidence × corroboration), never self-reported by the model.
 - **No free-form floats.** Values are enums, booleans, counts, or buckets.
-- **No prose** in this file, at all. The reader enforces an explicit f2
+- **No prose** in this file. The reader enforces an explicit f2
   field allowlist (required + `feature_id`/`canonical_hashes`/`entity_ref`)
-  and rejects unknown fields - a prose-key denylist alone cannot guarantee
-  "no prose", so unknown keys fail closed. Prose lives in the digest.
-- **Plausibility, not just shape.** Schema validation proves structure; these
-  three semantic checks prove the record means what it claims (all P1.5
+  and rejects unknown fields: a prose-key denylist alone cannot guarantee
+  no prose, so unknown keys fail closed. Prose lives in the digest.
+- **Plausibility.** Schema validation proves structure; these three
+  semantic checks prove the record means what it claims (all P1.5
   ctx-reader enforced, rejection reasons logged):
   1. *Entity binding* - every `symbols[]` entry must resolve through the
      versioned map `collector/entity_map.json` (`map_version`, sha256-pinned
@@ -270,11 +268,10 @@ Hard rules on this record:
      The reader replays the exact pinned version - never a newer map.
      Features may carry `entity_ref` (e.g. `{"cik": ...}`); when present,
      map contradiction (CIK resolves to a different ticker than claimed)
-     rejects. Without a ref, P1.5 enforces resolvability; full upstream
-     contradiction validation arrives with the research plane.
+     rejects. Without a ref, the reader enforces resolvability only.
      Unmapped or contradictory binding → reject (TRIGGER) or cap at
      CONTEXT (derived).
-  2. *Frozen-feed detection* - nominal covers are explicit, never derived
+  2. *Frozen-feed detection* - nominal covers are explicit, not derived
      from polling cadence (`plausibility_v1`):
 
      ```
@@ -291,20 +288,18 @@ Hard rules on this record:
      the overnight allowlist (`calendar_ahead` with phase pre/blackout,
      scheduled `macro_release`, forex any open `session`). Scheduled
      pre-market releases pass; unscheduled overnight equity events reject.
-  A perfectly deterministic system deciding from wrong-but-valid data is the
-  failure these rules exist to prevent.
 - **Lineage.** Every feature carries `canonical_hash` chaining to the exact
   canonical row(s) (SQLite `content_hash`) it derives from. Single-source:
   `canonical_hash` IS that row's hash and `canonical_hashes` holds just it.
   Multi-source derived: `canonical_hashes` is the sorted list of all input
   hashes and `canonical_hash = hex(sha256("‖".join(sorted_hashes)))`.
-  The combination rule is part of f2, not implementation choice.
+  The combination rule is part of f2.
   Research-plane features without resolvable lineage are rejected like
   schema failures.
 - Max 64 features per snapshot, newest first. Overflow dropped, counted, logged.
 - `ctx/` rejects any record failing schema, bounds, or R12 timestamp checks, and
   increments `features_rejected`. The rejection rate is computed per bundle;
-  operational >5%/hour alerting is deferred to Phase 2.5 (the stub reader does
+  operational >5%/hour alerting is deferred to Phase 2.5 (the reader does
   not run continuously).
 - Source health is `source_status` per source (healthy/stale/failed/
   not_scheduled/unavailable/na - doc 03 §3.4), not a single absent-list.
@@ -322,7 +317,7 @@ Hard rules on this record:
 - [ ] Egress proven at the network layer for sandboxed workers.
 - [ ] Bundle atomicity proven under kill -9 mid-`emit`.
 - [ ] Langfuse shows per-node token + dollar attribution for a full day.
-- [ ] (v3) Reader tier proven capability-free: a document containing tool
+- [ ] Reader tier proven capability-free: a document containing tool
       calls, code, URLs, and instructions produces only schema-valid JSON
       or a rejection - never an action; the verifier rejects any number
       without a matching source span.
@@ -330,10 +325,9 @@ Hard rules on this record:
 
 ## 8.7 Research factory (v3)
 
-The factory is where AI is used in this fund: the same loop real
-quant shops now run (agents propose signals, write the code, and backtest
-before a human sees them; outputs pass the same thresholds as human
-research), bounded by our governance.
+The factory is where AI is used in this fund: agents propose signals,
+write the code, and backtest before a human sees them; outputs pass the
+same thresholds as human research.
 
 Loop (every step logged to the trial ledger, doc 11 §11.0a):
 1. **Intake** - hypothesis cards from the weekly reflection (≤ 3 per
@@ -358,10 +352,10 @@ Loop (every step logged to the trial ledger, doc 11 §11.0a):
 Factory rules:
 - Runs as `mirofactory`, on dataset copies, with no credentials except the
   research-model key behind the spend gate (category `experiment`).
-- Import allowlist (LOCKED 2026-09-18, exact): stdlib `json, re, datetime,
+- Import allowlist (locked, exact): stdlib `json, re, datetime,
   urllib, xml, html, math, statistics, collections, itertools, hashlib,
   base64` + `requests` + `bs4` + `lxml` (parser only) + `pydantic` +
-  `pandas` (no eval) + `feedparser`; v3 adds `numpy` for the factory only.
+  `pandas` (no eval) + `feedparser`; the factory also allows `numpy`.
   No `subprocess`, no `os.system`, no raw `socket`, no `pickle`, no
   `yaml.load`. Factory code has no network at all (the fetch tools live in
   the harness, not in generated code).
@@ -374,7 +368,7 @@ Factory rules:
 - Roles and pins: `reader` (extraction), `thesis` (hypothesize),
   `verifier` (critique), `factory` (code/pre-registration drafting), and
   optional `jev`. Each role pins `model_id`, provider, revision,
-  **knowledge cutoff date**, temperature, reasoning mode, skill-file hash,
+  knowledge cutoff date, temperature, reasoning mode, skill-file hash,
   tool-schema hash, container image digest, dependency lock hash (D3).
   An unpinned call is a build failure.
 - Selection is a measured bake-off per role on a fixed, post-cutoff
@@ -382,9 +376,9 @@ Factory rules:
   catch rate on seeded false claims), cost per task under the governor's
   pricing table, and latency. Candidates include the currently authorized
   research model and other provider-available models (e.g. Anthropic
-  Claude Haiku/Sonnet-class for reader/verifier roles). No model is chosen
+  Claude Haiku/Sonnet-class for reader/verifier roles). Models are not chosen
   by reputation or leaderboard rank.
-- **Skills as pinned method files (v3):** each LLM role's method (e.g.
+- **Skills as pinned method files:** each LLM role's method (e.g.
   earnings guidance extraction, falsifiable-thesis structure, macro-rates
   context, catalyst calendar) is a versioned skill file adapted from the
   `financial-services` skill structure, hashed into the role pin, and
@@ -396,7 +390,7 @@ Factory rules:
 - LangGraph orchestrates the live plane; smolagents CodeAgent runs only in
   the research factory, in a Docker sandbox with no network.
 - Untrusted text is read only by a capability-free reader tier whose
-  output is schema-capped and deterministically verified (v3).
+  output is schema-capped and deterministically verified.
 - Observability is self-hosted Langfuse + OpenTelemetry. No paid tier for
   core operation.
 - Agents produce validated feature bundles (`features.jsonl`) plus the
@@ -405,7 +399,7 @@ Factory rules:
 - Agents cannot size, order, veto, resume, or promote.
 - Self-modifying / self-improving agent frameworks are banned from any
   capital host (D3, doc 11).
-- Version pins (LOCKED 2026-09-18, human-accepted): `langgraph==1.1.6`,
+- Version pins (locked, human-accepted): `langgraph==1.1.6`,
   `smolagents==1.26.0`, self-hosted Langfuse (`langfuse==4.15.4` client).
   Upgrades re-pin with measured regression results, never release
   announcements; any upgrade is a D3 version bump with a fresh paper

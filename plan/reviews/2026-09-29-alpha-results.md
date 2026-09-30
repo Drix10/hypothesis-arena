@@ -28,12 +28,12 @@ $100k book over the sample.
 - Small-cap event effects exist in the literature but the spread and turnover
   they need at our size consume them under a conservative fill model.
 - N=19 with a floored DSR variance makes every further trial harder to pass;
-  more variants on the same data is not a strategy.
+  more variants on the same data are not a new strategy.
 
 ## Decisions
 
 1. No sleeve is a G0b champion. G0b, as defined, does not start.
-2. The paper loop is finished as infrastructure and can run with the
+2. The paper loop is built as infrastructure and can run with the
    non-alpha `core_passive_v1` sleeve to validate operations (fills,
    reconciliation, drills, alerts). That evidence does not count toward the
    G0 to G1 criteria.

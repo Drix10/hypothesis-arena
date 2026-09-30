@@ -1,9 +1,8 @@
 # Appendix 08 - Budget/spend ledger integrity and trust-model record (frozen)
 
-Moved VERBATIM from doc 08 §8.4 in the freeze-v3 rebaseline (2026-09-28).
+Moved verbatim from doc 08 §8.4 in the freeze-v3 rebaseline (2026-09-28).
 Doc 08 keeps the R15 contract table; this file keeps the ledger
-durability, digest, migration, trust-boundary, and trusted-config rules.
-Nothing here was edited.
+durability, digest, migration, trust-boundary and trusted-config rules.
 
 Budget-ledger durability (frozen): the per-(cycle,symbol) counters live in
 SQLite with a cycle registry alongside. A missing counters row for a cycle
@@ -64,8 +63,8 @@ lag (auto-recovery required: 116 hardening tests pin it) from
 coherent forgery; they are observationally identical. Closing that
 would need a non-readable secret or external anchor (HSM, TPM,
 remote transparency log, OS-mediated key) - none exists in Phase-D
-scope, and a same-disk key file or SQLite triggers would be theater
-against a disk-write actor (readable secrets don't bind; triggers
+scope, and a same-disk key file or SQLite triggers would not stop
+a disk-write actor (readable secrets don't bind; triggers
 don't authenticate the writer). That actor is host-compromise class
 (it can equally patch the plane source itself), so coherent
 multi-object forgery bottoms out at host/filesystem integrity - the

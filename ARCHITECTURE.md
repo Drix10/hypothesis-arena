@@ -1,360 +1,295 @@
 # ARCHITECTURE: codebase guide
 
 AI-assisted systematic fund: US-listed equities and ETFs, cash account, long
-only. Forex is research-only (OANDA blocked, RBI LRS
-prohibits forex and margin trading abroad). No crypto.
+only, paper only. Forex is research-only (OANDA is blocked; RBI LRS prohibits
+forex and margin trading abroad). No crypto.
 
-Status: plan frozen (alpha-first), P3.5 H1
-built with the paper transport verified read-only, five sleeves backtested and
-none past an economic gate, G0 not started, paper only.
+Status: plan frozen (alpha-first). Kernel P3.5 H1 is built with a verified
+Alpaca paper transport. Five sleeves are backtested and none passed an
+economic gate. G0b has not started.
 
-`plan/` is the source of truth; this file describes the tree. It had 544
-tracked files on 2026-09-28 and the per-family lists below predate the H1 and
-strategy additions, so `git ls-files` wins where they differ.
+`plan/` is the source of truth; this file describes the tree. `git ls-files`
+lists every tracked file (380 on 2026-09-30) and wins over the lists below
+where they differ.
 
-Labels: FROZEN (no change without a human contract-defect ruling; `kernel/`
-implementation and collector production code are byte-identical to the Round 9
-baseline except the additive optional keys in `collector/config.py`, see
-the git history) · ACTIVE (current work surface) ·
-FUTURE (not implemented) · HISTORICAL (read-only audit trail).
+Labels: FROZEN (no change without a human contract-defect ruling), ACTIVE
+(current work surface), FUTURE (not implemented), HISTORICAL (read-only audit
+trail).
 
-## 1. Root files (7 tracked + 1 ignored companion)
+## 1. Root files
 
-Tracked: `.env.example`, `.gitattributes`, `.gitignore`, `AGENTS.md`,
-`ARCHITECTURE.md`, `README.md`, `TODO.md`. Ignored, not counted: `.env`
-(real values).
+Tracked: `.env.example`, `.gitattributes`, `.gitignore`, `.gitleaks.toml`,
+`AGENTS.md`, `ARCHITECTURE.md`, `README.md`, `TODO.md`. `.env` holds real
+values and is git-ignored.
 
-- `AGENTS.md` - session rules: read ARCHITECTURE and plan/00-INDEX first; plan
-  is the source of truth; update TODO per task; no secrets; one commit, one
-  theme; fail closed.
-- `ARCHITECTURE.md` - this file.
+- `AGENTS.md` - session rules.
 - `README.md` - status table, quick start, repo map.
 - `TODO.md` - the live build ledger. History lives in git.
-- `.env` / `.env.example` - ACTIVE canonical config. `.env` is
-  git-ignored real values; `.env.example` is the tracked template
-  (`MIRO_CONTACT` required; provider, broker and BEA keys optional).
+- `.env` / `.env.example` - canonical config. `.env.example` is the tracked
+  template (`MIRO_CONTACT` required; provider, broker and BEA keys optional).
   Sole loader: `collector/config.py::_load_dotenv` (root file, allowlisted
   keys, exported environment wins); research Python reads it through
   `collector.config.load()`. Tested in `collector/tests/test_config.py`.
-  There is no second env file or loader (`sandbox/provider.env` retired,
-  `01b6e47`).
-- `.gitignore` - ACTIVE. Ignores `.env`, data/, logs, build artifacts.
-- `.gitattributes` - ACTIVE. Pins `*.sh` to LF.
+- `.gitignore` ignores `.env`, data, logs and build artifacts. `.gitattributes`
+  pins `*.sh` to LF. `.gitleaks.toml` configures secret scanning.
 - `scripts/freeze-check.sh` - read-only gate: the repo must match
   `plan/system-manifest.yaml` (versions, pins, risk rules, component
-  presence). Exit 0 = PASS. `pre-commit-secrets.sh` (gitleaks hook) and
+  presence). Exit 0 is PASS. `pre-commit-secrets.sh` (gitleaks hook) and
   `sign-stage.sh` (human STAGE sign-off) sit beside it.
 - `.github/workflows/ci.yml` - six jobs on every push, pull request and
   manual dispatch: `stdlib` (collector suites), `evidence` (isolation,
-  sources, five adapters, seam, harness suites), `plane` (plane, hardening,
+  sources, adapters, seam, strategy and ops suites), `plane` (plane, hardening,
   emit, seam-graph), `kernel` (`WITH_CURL=1 build.sh` + freeze-check),
   `kernel-sanitizer` (ASan+UBSan), `secrets` (gitleaks over full history).
 
 ## 2. plan/ (13 docs + manifest + appendix/ + reviews/)
 
-The plan is built around a legal live scope, a strategy book, a validation
-standard and the shortest path to paper. Where a note below conflicts with a
-doc, the doc wins. Notes: doc 02 is the strategy book (X archive in
-`appendix/02-x-lists-archive.md`), doc 03 JEV is an optional filter, doc 05
-adds R18/R19, doc 06 §6.1b and doc 08 §8.4 internals moved to `appendix/`,
-doc 10 adds the jurisdiction gate, doc 11 adds the trial ledger and
-contamination control, doc 12 demotes `baseline_v1` to a negative control.
+The plan covers the legal live scope, the strategy book, the validation
+standard and the shortest path to paper. Where a note here conflicts with a
+doc, the doc wins.
 
-- `00-INDEX.md` - reading order + doc authority map. Read first.
-- `01-vision-and-scope.md` - fund scope; locks the venue: Alpaca paper
-  (US stocks and ETFs); broker WS + 15-min REST reconcile; no FIX. Forex is
-  research-only.
-- `02-strategy-book.md` - alpha system contract; X-lists tail
-  DISABLED in v1 (§2.6).
-- `03-jev-decision-layer.md` - JEV contract: one candidate-bound
+- `00-INDEX.md` - reading order and doc authority map. Read first.
+- `01-vision-and-scope.md` - fund scope; venue is Alpaca paper (US stocks and
+  ETFs); broker WS + 15-min REST reconcile; no FIX.
+- `02-strategy-book.md` - alpha system contract; the X-lists tail is disabled
+  in v1 (§2.6; archive in `appendix/02-x-lists-archive.md`).
+- `03-jev-decision-layer.md` - JEV: an optional filter, one candidate-bound
   contract, 4 questions, exit profile v1, case 29.
-- `04-cpp-deterministic-core.md` - kernel contract §4.2 broker-feed
-  staleness, §4.5 ingest.
-- `05-risk-and-determinism.md` - R1–R19 (code constants) + §5.1c DAG.
-- `06-execution-and-ops.md` - ops: §6.4 HALT friction, §6.5 paper fill
-  model (10bp drag), exits local and never source-gated.
-- `07-build-roadmap.md` - phase sequencing incl. Phase-0 boxes and
-  P3.5 (open; veto + ingest slices landed, sizing/execution not started).
+- `04-cpp-deterministic-core.md` - kernel contract (§4.2 broker-feed
+  staleness, §4.5 ingest).
+- `05-risk-and-determinism.md` - R1-R19 (code constants) and the §5.1c DAG.
+- `06-execution-and-ops.md` - ops: §6.4 HALT friction, §6.5 paper fill model
+  (10bp drag), exits local and never source-gated. §6.1b moved to `appendix/`.
+- `07-build-roadmap.md` - phase sequencing, Phase-0 boxes and P3.5.
 - `08-agentic-research-plane.md` - research-plane contract: §8.2 OS
-  identities, §8.3a cadence, §8.4 hardening, §8.5 schema f2, §8.6
-  deployment exit boxes.
+  identities, §8.3a cadence, §8.4 hardening (internals in `appendix/`), §8.5
+  schema f2, §8.6 deployment exit boxes.
 - `09-osint-and-free-data.md` - source contract: §9.1 Tier-A table
-  (broker, EDGAR, FRED/ALFRED, Treasury/BLS/BEA, session calendars,
-  earnings calendar) + Tier B/C/D posture; §9.4 "done" = poller + TTL
-  + heartbeat + measured p50/p99 per Tier-A source.
-- `10-capital-gates-and-spend-control.md` - G0/G1 $150, G2 $400,
-  G3 $1000 + 60/80/100% tiers; stage definitions; G0_PAPER only.
-- `11-calibration-and-self-improvement.md` - promotion needs measured
-  edge + human sign-off; §11.1a regime/decay.
-- `12-statistical-baseline.md` - `baseline_v1`, the primary edge.
-- `13-cpp-kernel-build.md` - kernel build record; the JEV filter and §13.7 battle ladder.
-- `system-manifest.yaml` - freeze pins (v3/f2/baseline_v1/
-  exit_profile_v1/g1, JEV revision/provider). freeze-check enforces it.
+  (broker, EDGAR, FRED/ALFRED, Treasury/BLS/BEA, session calendars, earnings
+  calendar), Tier B/C/D posture; §9.4 "done" = poller + TTL + heartbeat +
+  measured p50/p99 per Tier-A source.
+- `10-capital-gates-and-spend-control.md` - G0/G1 $150, G2 $400, G3 $1000,
+  60/80/100% tiers, stage definitions, jurisdiction gate; G0_PAPER only.
+- `11-calibration-and-self-improvement.md` - promotion needs measured edge and
+  human sign-off; trial ledger, contamination control, §11.1a regime/decay.
+- `12-statistical-baseline.md` - `baseline_v1` (negative control) and the
+  benchmark set.
+- `13-cpp-kernel-build.md` - kernel build record: JEV filter, slices, §13.7
+  battle-testing ladder.
+- `system-manifest.yaml` - freeze pins (v3/f2/baseline_v1/exit_profile_v1/g1,
+  JEV revision/provider). freeze-check enforces it.
+- `appendix/` - binding implementation records (06b close ownership, 08
+  ledger integrity, 09 collector O7 exception, 02 X archive) and the testing
+  program (`10-sleeve-integration-plan.md`, `11-sleeve-evidence-review.md`).
+- `reviews/` - dated status records (`2026-09-29-alpha-results.md`).
 
-## 3. kernel/ (tests co-located)
+## 3. kernel/ (C++17, tests co-located)
 
-Root: `build.sh` (the gate: normal/hardened/sanitize modes, every suite
-below, all grep-gates; exit 0 = PASS) · `jev_wire.hpp` (strict JSON,
-canonical JSON, SHA-256/512, Ed25519 verify, Python-repr floats) ·
-`jev_filter.hpp` (the candidate-bound answer validator and decision table;
-single entry point for model answers).
+`build.sh` is the gate: normal, hardened and sanitizer modes, every suite,
+all grep-gates; exit 0 is PASS. It refuses to run as root. `WITH_CURL=1`
+adds the libcurl transport.
 
-- `tests/`: `test_jev_filter.cpp` - interop suite on the committed
-  `jev_vectors/` only (never invokes Python; build-gated). Also
-  `transport_faults.py`, `ws_faults.py`, `e2e_mock_venue.py`,
-  `soak_mock.py` (mock-venue drills).
-- `ingest/` (4): `features.hpp`/`features.cpp` - f2 validation,
-  retention, rate window; zero-malloc (vocabulary grep + `FindAscii`
-  discipline). `test_features.cpp` - rejection/boundary/retention/rate
-  suite. `test_noalloc.cpp` - wrapped-malloc counter proof (0 allocs).
-- `risk/` (3): `veto.hpp`/`veto.cpp` - `EvaluateVeto` (RiskSnapshot →
-  HOLD/PROCEED + frozen reason; fixed-storage verdict, `__int128`
-  widening; must never read model answers - token-gated incl.
-  comments). `test_veto.cpp` - veto suite incl. composed veto+table
-  rows and case-29 pending-risk isolation.
-- `fixtures/`: Alpaca reply fixtures (`alpaca_account.json`,
-  `alpaca_bars_hourly_sip.json`, `alpaca_bracket_reply.json`).
-- `vectors/`: `c1_wire.jsonl` (candidate wire lines), `snapshot_v2_*`
-  and `v2_canonical.hex` (context snapshot vectors).
-- `jev_vectors/` (64): 32 signed answer artifacts with expectations
-  (`<name>.artifact.json` + `<name>.expect.json`), generated by
-  `research/strategy/gen_jev_vectors.py`, asserted identically in Python
-  and C++. Presence and count pinned by freeze-check.
+- `jev_wire.hpp`, `jev_filter.hpp` - strict/canonical JSON, SHA-256/512,
+  Ed25519 verify, Python-repr floats; the candidate-bound answer validator
+  and decision table, the only entry for model answers.
+- `jev_vectors/` - 32 signed answer artifacts (`<name>.artifact.json` +
+  `<name>.expect.json`) generated by `research/strategy/gen_jev_vectors.py`
+  and asserted identically in Python and C++. Count pinned by freeze-check.
+- `ingest/` - `features` (f2 validation, retention, rate window; zero-malloc)
+  and `candidates` (CID recompute, sleeve approval, allowlist, freshness,
+  long-only policy), each with a suite; `test_noalloc.cpp` proves zero
+  allocations.
+- `risk/` - `veto` (`EvaluateVeto`: RiskSnapshot to HOLD/PROCEED with a frozen
+  reason; never reads model answers), `sizing`, `measure`, `engine_inputs.hpp`.
+- `ctx/` - `context.cpp`, `snapshot.hpp`: frozen Snapshot and `context_hash`.
+- `feed/` - feed state machines: tick recording, gap flags, reconnect schedule, session marking (pure logic, no I/O).
+- `kill/` - `switch`: SOFT/MEDIUM/HARD kill levels.
+- `stage/` - STAGE file verification and hash chain.
+- `log/` - `journal`: hash-chained journal written before every order.
+- `exec/` - `router` (order identity, intent/ack machine, reconcile),
+  `decide` (the no-filter path: candidate gate, sizing, veto to OrderIntent),
+  `moc_plan` (stop-before-MOC sequencing).
+- `broker/` - Alpaca paper adapter, `http_curl` transport, `ws_stream`
+  (`trade_updates`), `smoke_paper` and `live_drill` (live paper checks).
+- `runner/` - `runner` (recovery, cycle, HALT), `main.cpp` (read-only
+  production entry), `paper_loop` and `paper_loop_main` (`g0_paper_loop`:
+  account, candidates, Decide, SubmitIntent), `account`, `approved`
+  (approved.json loader), `bars`, `calendar` (holidays, early closes),
+  `events`, `settle` (T+1 book), `store`.
+- `fixtures/` - Alpaca reply fixtures. `vectors/` - candidate wire lines and
+  snapshot v2 vectors.
+- `tests/` - `test_jev_filter.cpp` (interop suite on the committed vectors;
+  never invokes Python) and mock-venue drills: `transport_faults.py`,
+  `ws_faults.py`, `e2e_mock_venue.py`, `soak_mock.py`.
 
-## 4. collector/ (FROZEN production code + additive config extension;
-tests co-located)
+## 4. collector/ (FROZEN production code; tests co-located)
 
-Production ingestion path: the poller that turns outside data into
-`data/signals/<day>.jsonl`. (Second live-access point:
-`research/sources/` readiness probes + the earnings veto gate -
-see §5. The collector is the production path; sources/ probes are
-evidence and gating, not the poller.)
+Production ingestion: the poller that turns outside data into
+`data/signals/<day>.jsonl`. `research/sources/` holds readiness probes and
+the earnings veto gate; those are evidence and gating, not the poller.
 
-Reconciliation (Phase-2.5 seam, plan/08 §8.3 governs): the five
-accepted research adapters (EDGAR/FRED/Treasury/BLS/BEA) ARE
-the graph harvest implementation - pure I/O, no LLM - orchestrated
-once by `research/plane/source_seam.py`, which owns the single
-adapter singletons, stamps, heartbeats, and the canonical mapping
-into resolver/f2. The tracked production composition is
-`research/plane/runner.py::build_production_runner`: one
-Runner owns one Seam + one graph app for the process lifetime and
-binds ALL THREE seam-owned graph callbacks - `harvest`,
-`parser_extract` (adapter rec → lineage-bound parser candidate),
-and `resolve_emit` (`canonical_for` = seam store lookup,
-`source_watermarks` = seam watermarks). The caller supplies only
-unrelated deps (LLM providers, fuse, budgets, spend); supplying any
-seam-owned callback is a ConfigError. The graph's own emit node is
-the sole publisher caller; the emitted bundle path surfaces on the
-cycle output. Restart/resume: memory is cache-only; canonical
-lookup falls back to the durable seam_canonical projection (same
-DB, same commit as the authority ingest; absent → fail closed) and
-history tails recover from durable accepted bundles
-(`restore_from_bundles`, shape/monotonicity re-validated,
-bounded); no durable state → warming tail with no frozen-feed
-coverage claimed. The frozen P1 collector path above is untouched
-and keeps running; within Phase 2.5 there is exactly one poll path
-per source. Nothing in the seam trades.
+Phase-2.5 seam (plan/08 §8.3): the five research adapters
+(EDGAR/FRED/Treasury/BLS/BEA) are the graph harvest implementation, pure I/O
+with no LLM, orchestrated once by `research/plane/source_seam.py`. It owns
+the adapter singletons, stamps, heartbeats and the canonical mapping into
+resolver/f2. `research/plane/runner.py::build_production_runner` composes one
+Runner (one Seam + one graph app per process) and binds the three seam-owned
+graph callbacks `harvest`, `parser_extract` and `resolve_emit`. The caller
+supplies only unrelated deps (LLM providers, fuse, budgets, spend); supplying
+a seam-owned callback is a ConfigError. The graph's emit node is the sole
+publisher. On restart, canonical lookup falls back to the durable
+`seam_canonical` projection (absent means fail closed) and history tails
+recover from durable accepted bundles (`restore_from_bundles`); with no
+durable state the tail is warming and claims no frozen-feed coverage. Each
+source has exactly one poll path. Nothing in the seam trades.
 
 - `collect.py` - poller. UA-bearing fetch, per-source TTL/heartbeat,
-  `needs_key` gating, stale→expire (absent ≠ neutral), >50% poll
-  failure over 24h disables + alerts. Reads: `sources.json`,
-  `session_calendar.json`, config. Writes: `data/signals/`.
-- `config.py` - canonical env loader (see §1) + `load()` states
-  (`CONFIG_OK` / `MISSING_REQUIRED_CONFIG` exit 2 / per-source
-  `SKIPPED_OPTIONAL_CONFIG`).
-- `classify.py` / `pregrade.py` - TRIGGER/CONTEXT/NULL classification
-  + grading. Reads poller output. Writes: classified records.
-- `jev.py` - JEV sidecar: candidate-bound state, pinned revision/provider, Ed25519
-  sign/verify, spend ceiling, retry-once-HOLD; no key → HOLD.
-- `ctx_read.py` - frozen bundle/feature reader (`read_latest`);
-  validity owned here exclusively (research `schema.py` never
-  re-validates). Also imported by plane emit + tests (import ≠ change).
-- `entity_map.json` - entity resolution map (config).
-- `sources.json` - source registry (incl. `needs_key: FRED_API_KEY`,
-  keyless EDGAR/Fed/ECB/Treasury/BLS entries).
-- `session_calendar.json` - session/holiday seed (fail-closed veto input).
-- `soak.py` / `soak_check.py` - soak harness and its acceptance check.
-- `audit.py` - collector self-audit helper.
-- `tests/` (6): `test_collect` (poller/TTL/heartbeat/singleton);
-  `test_config` (dotenv/config states); `test_ctx` (reader);
-  `test_jev` (sign/verify, HOLD, ceiling); `test_pipeline` (28-check
-  end-to-end); `test_soak_check` (soak gate). All mocked IO, no
-  network. CI `stdlib` job. Failing hosted = pre-existing frozen
-  failure (proven path-independent, Addendum 30).
+  `needs_key` gating, stale to expire (absent is not neutral), more than 50%
+  poll failure over 24h disables and alerts. Reads `sources.json`,
+  `session_calendar.json` and config; writes `data/signals/`.
+- `config.py` - canonical env loader and `load()` states (`CONFIG_OK`,
+  `MISSING_REQUIRED_CONFIG` exit 2, per-source `SKIPPED_OPTIONAL_CONFIG`).
+- `classify.py`, `pregrade.py` - TRIGGER/CONTEXT/NULL classification and grading.
+- `jev.py` - JEV sidecar: candidate-bound state, pinned revision/provider,
+  Ed25519 sign/verify, spend ceiling, retry-once-HOLD; no key means HOLD.
+- `ctx_read.py` - bundle/feature reader (`read_latest`); validity is owned
+  here (research `schema.py` never re-validates).
+- `soak.py`, `soak_check.py`, `audit.py` - soak harness, its acceptance check
+  and a self-audit helper.
+- `entity_map.json`, `sources.json`, `session_calendar.json` - config.
+- `tests/` - `test_collect`, `test_config`, `test_ctx`, `test_jev`, `test_o7`,
+  `test_pipeline`, `test_soak_check`. Mocked IO, no network; CI `stdlib` job.
 
-## 5. research/ (ACTIVE)
+## 5. research/
 
-### plane/ (18)
+### plane/ (ACTIVE)
 
-- `runner.py` - TRACKED production composition
-  (`build_production_runner`): owns one Seam + graph app per
-  process, binds the three seam-owned callbacks
-  (harvest/parser_extract/resolve_emit), requires the heartbeat
-  sink, resolves the MIRO_CANONICAL_DB-honoring lineage DB +
-  bundle outdir + pinned map, restores durable history. Caller
-  supplies unrelated deps only; seam-owned overrides refused.
-- `source_seam.py` - Phase-2.5 harvest seam (plan/08 §8.3): five
-  adapter singletons, real pacing (sleep/monotonic), stamps +
-  heartbeats, frozen-collector canonical lineage (shared records
-  table, authority hash), durable canonical projection +
-  bundle-history recovery for restart, seam-owned watermarks +
-  parser extract. Exactly one poll path per source.
+- `runner.py` - production composition (see §4); resolves the lineage DB
+  (honors `MIRO_CANONICAL_DB`), bundle outdir and pinned map.
+- `source_seam.py` - harvest seam: adapter singletons with real pacing,
+  stamps and heartbeats, canonical lineage, durable projection, watermarks,
+  parser extract.
+- `graph.py` - 6-node `run_cycle`; per-epoch budget threads; single run per
+  process; aborted checkpoints are terminal; an abort publishes nothing.
+- `workers.py` - model workers; `make_raw_provider` (missing config raises
+  `ConfigBlocked`, never direct; proxy-pinned OpenRouter transport).
+- `timeout.py` - `run_in_process` kill ladder.
+- `spend.py` - `SpendGovernor` (G0/G1 $150 tiers; reservation/settle under a
+  tier lock; `LedgerUnavailable`).
+- `budgets.py`, `r15.py` - R15 cycle registry and caps.
+- `attribution.py` - unknown-spend reconciliation and per-node/model/day log.
+- `locks.py`, `digest.py` - marker/state layer and same-transaction content
+  digests (never rebuilt).
+- `emit.py`, `publish.py`, `retention.py` - atomic bundle emit,
+  `read_latest` (uses `collector.ctx_read`), production publish, 7-day prune.
+- `cadence.py` - cadence and cost gating.
+- `resolver.py` - deterministic evidence resolver (LLM advisory only).
+- `event_direction.py` - deterministic event direction table (`event_direction_v1`).
+- `schema.py` - f2 constants and builders (validity owned by
+  `collector/ctx_read.py`).
 
-- `graph.py` - 6-node `run_cycle`; per-epoch budget threads;
-  single-run-per-process guard; aborted checkpoints terminal.
-  Reads: budgets/spans/checkpoints. Writes: checkpoints, bundles.
-  Failure: abort → emit publishes nothing.
-- `workers.py` - model workers; `make_raw_provider` (model_id +
-  egress_proxy + api_base/api_key; missing → `ConfigBlocked`, never
-  direct; httpx transport-pinned proxy). OpenRouter via OpenAI-compat.
-- `timeout.py` - `run_in_process` kill ladder (streaming Pipe IPC,
-  bounded frames, TERM→KILL reap, stale-thread + IPC-cap rejects).
-- `spend.py` - `SpendGovernor` (G0/G1 $150 tiers; reservation/settle,
-  tier-locked single-lock persist, `LedgerUnavailable`).
-- `budgets.py` - R15 `cycles` registry (`counters-deleted` deny).
-- `attribution.py` - unknown-spend reconciliation (evidence-first,
-  `reconcile-over-reservation` reject; per-node/model/day log).
-- `locks.py` - marker/state FS layer (only FileNotFoundError =
-  absent; `marker-deleted`/`tier-state-unreadable` denies; roots).
-- `r15.py` - R15 caps + `.seen` sidecar (witness-first).
-- `digest.py` - content digests, schema v3, same-txn
-  (`digest-mismatch`/`digest-deleted`, never rebuilt).
-- `emit.py` - atomic bundle emit (temp+fsync+rename+manifest) +
-  `read_latest` (uses `collector.ctx_read`).
-- `publish.py` - production publish (resolver+emit; bounded map loads).
-- `retention.py` - retention (failure raises; 7-day prune).
-- `cadence.py` - cadence/cost gating (5-min I/O cycles; per-symbol
-  re-run rules; 30-min TTL; throttle doubling).
-- `resolver.py` - deterministic evidence resolver (LLM advisory only;
-  recomputes load-bearing fields from canonical records).
-- `schema.py` - frozen f2 constants/builders (shape truth; validity
-  owned by `collector/ctx_read.py`).
-- `__init__.py` - package marker.
+### sources/ (ACTIVE)
 
-### sources/ (5)
+Adapters `edgar.py`, `fred.py`, `treasury.py`, `bls.py`, `bea.py`, plus
+`tier_a.py` (Tier-A readiness probe; the FRED gate proves auth and metadata
+only), `calendars.py` (fail-closed session gate), `earnings.py` (EDGAR
+earnings veto gate, +-3d, unknown means suppress) and `tier_a_evidence.json`
+(committed measurement, not runtime input). Host-side probes use direct
+`urllib`/httpx and do not pass through Squid; worker containers egress only
+through Squid.
 
-Readiness probes + gates (evidence + veto logic; NOT the P1
-production poller - that is `collector/collect.py`). The five
-accepted adapters additionally serve as the Phase-2.5 graph harvest
-implementation (see §4 reconciliation - exactly one poll path per
-source, owned by the seam). Egress, stated exactly:
-`sandbox/` worker containers egress ONLY via Squid (proven 5/5);
-host-side probes here (`tier_a.py`, `earnings.py`, live-provider
-probe driver) use DIRECT `urllib`/httpx from the build host and do
-NOT transit Squid - the live-provider call itself runs its shipped
-transport-pinned proxy path via loopback-published Squid. Two paths,
-documented separately, never conflated.
+### strategy/ (ACTIVE)
 
-- `tier_a.py` - Tier-A readiness probe (live EDGAR/Fed GETs p50/p99;
-  FRED→BLOCKED w/o key; calendar gate). The FRED gate as shipped is
-auth/metadata readiness ONLY (`/fred/series?series_id=GDP` 200 =
-key verified live, NOT observation-data proof); real observation
-retrieval + ALFRED vintage replay are the upcoming gated task.
-Evidence JSON; exit 0 always.
-- `calendars.py` - fail-closed session presence-gate
-  (`CalendarMissing` → zero records). Evaluation downstream in ctx.
-- `earnings.py` - EDGAR-derived earnings veto gate (8-K 2.02 + 10-Q/K
-  windows, ±3d; unknown→suppress) + `__main__` live probe (p50/p99).
-  Implementation+probe PROVEN; TTL/heartbeat wiring OPEN (§9.4).
-- `__init__.py` - package marker.
-- `tier_a_evidence.json` - committed Tier-A measurement (immutable
-  audit evidence, not runtime input).
+The backtest harness and sleeves: `ledger` (hash-chained trial ledger),
+`costs`/`costs_v2`, `settlement`, `backtest`, `portfolio`, `benchmarks`,
+`stats`, `gates`, `prereg`, `data`, `sip_fetch`, `bulk_bars`, `universe`,
+`candidate`/`candidate_wire`, `jev_filter` and `gen_jev_vectors`,
+`baseline_v1`, the runners `a_run*` (T1, T2, I1, E1, PEAD), data modules
+(`insider_data`, `pead_data`, `fsds_fetch`), the S5 evaluation (`s5_*`),
+`long_history` (Track L) and `sleeves/` (`core_passive`, `trend`,
+`sector_mom`, `intraday_mom`, `insider`, `pead`).
 
-### tests/ (7 files + battery)
+Records: `prereg/` (pre-registrations), `ledger/` (trials and checkpoint),
+`reports/` (A-gate reports), `lessons/lessons.jsonl` (Tier-D output),
+`requirements.txt` (pinned plane deps).
 
-- `test_plane.py` (108) - graph/R15/cadence/attribution/workers.
-- `test_hardening.py` (116) - fail-closed regressions, Rounds 1–9.
-- `test_emit.py` (19) - bundles/manifest/reader.
-- `test_isolation.py` - 4 protected paths denied (also a deployment
-  probe via setpriv; CI `evidence` job).
-- `test_sources.py` - calendar gate (3) + earnings veto (6);
-  CI `evidence` job.
-- `test_source_seam.py` (25) - harvest→authority→resolver→reader
-  legs, stdlib evidence job.
-- `test_seam_graph.py` (7) - tracked production Runner end-to-end
-  + restart recovery, plane job (langgraph).
+### sandbox/ (worker isolation and live probes)
 
-### sandbox/ (worker isolation machinery)
+`setup-identities.sh` (OS identities and deny/allow probes),
+`egress-proxy/squid.conf` and `egress-probe.sh`, `Dockerfile`,
+`config-probe.py`, `kill-probe.py`, the `kill9_*` resume proof,
+`langfuse/docker-compose.yml`, and live probes for Alpaca paper, BEA, FRED
+vintages and the provider.
 
-Direct children:
+### tests/
 
-- `setup-identities.sh` - 4 OS identities + `/srv/mirohedge` tree +
-  deny/allow probes (8/8) + repo isolation check (4/4).
-- `egress-proxy/squid.conf` - exact `dstdomain` allowlist.
-- `egress-probe.sh` - allowlist transits / non-allowlist 403s at proxy /
-  direct egress unroutable (5/5) + idempotent proxy bring-up.
-- `Dockerfile` - worker image (digest-pinned base).
-- `config-probe.py` - fail-closed constructors (5/5, no mocks).
-- `kill-probe.py` - WALL_S ladder on Linux (4/4).
-- `kill9-resume.sh` + `kill9_worker.py` + `kill9_reconcile.py` +
-  `kill9_verify.py` - 40-epoch SIGKILL→resume proof (both branches).
-- `langfuse/docker-compose.yml` - self-hosted attribution stack
-  (evidence-only placeholder creds; production replaces).
+Suites for the plane (`test_plane`, `test_hardening`, `test_emit`,
+`test_source_seam`, `test_seam_graph`), isolation and sources, each adapter,
+the harness (`test_stats`, `test_ledger`, `test_gates`, `test_costs_v2`,
+`test_settlement`, `test_portfolio`, `test_prereg` and others), every sleeve,
+the JEV filter, and the ops tools. CI job assignment is in
+`.github/workflows/ci.yml`.
 
-### research root
+## 6. ops/ (ACTIVE)
 
-- `lessons/lessons.jsonl` - ACTIVE Tier-D output (12/12 graded).
-- `requirements.txt` - ACTIVE pinned plane deps (`==` only).
+Paper-run and forward-ledger tooling; see
+`plan/appendix/10-sleeve-integration-plan.md` and `ops/deploy/README.md`.
 
-## 6. data/ (UNTRACKED runtime, never committed)
+- `deploy/` - `start.sh` (builds, asks for the STAGE phrase, starts the loop
+  and background jobs), `session_calendar.json` (2026-2028, with early
+  closes), `approved.json.example`.
+- `emit_candidates.py` - core passive candidates from SIP daily bars.
+- `alert_relay.py` - outbound-only alert relay.
+- `monitor.py` - live view.
+- `sleeve_shadow.py`, `event_shadow.py`, `macro_shadow.py`, `jev_twin.py`,
+  `jev_shadow.py` - forward replication ledgers and the log-only JEV shadow.
+- `forward_register.py`, `sleeve_eval.py` - trial-ledger registration and the
+  paired evaluator with checkpoints.
+- `long_history_fetch.py`, `long_history_run.py` - Track L data and run.
 
-`canonical.db`, `classified/`, `signals/`, `soak/`, `state/` -
-collector/plane runtime outputs. Local-only by `.gitignore`.
+## 7. data/ (untracked runtime, never committed)
 
-## 7. Cross-component flows
+`canonical.db`, `classified/`, `signals/`, `soak/`, `state/`: collector and
+plane runtime output, ignored by `.gitignore`.
 
-Production (P1 frozen path): Tier-A/B source → `collector/collect.py`
-(TTL/heartbeat/keys) → classify → `data/signals/<day>.jsonl` →
-plane `graph.py` (LLM context via `workers.py`, spend-governed,
-checkpointed) → emit bundles → kernel
-`risk/veto` → optional `jev_filter` → paper fills
-(doc 06 §6.5). Production (Phase-2.5 seam path, plan/08 §8.3): the
-five accepted adapters → `source_seam.py` harvest (canonical lineage
-via frozen classify into the shared records table) → graph nodes
-(seam `parser_extract` binds authority lineage to candidates) →
-graph emit (seam-bound `resolve_emit`: store lookup + watermarks)
-→ emit bundle → frozen `ctx_read`. Gating overlay:
-earnings veto + session calendar suppress entries; exits never gated.
-Failure overlay: DOWN → stale heartbeat → features expire (absent ≠
-neutral); calendar missing → zero entries; unknown spend → block →
-reconcile/fresh-cycle; misconfig → `ConfigBlocked`; aborts publish
-nothing; digests never rebuild.
+## 8. Cross-component flows
 
-Money-affecting ownership: reservation/settle = `spend.py` under tier
-lock; size = frozen §3.2 table via typed object only; exits = local
-(doc 06); stages = doc 10 (demotion automatic, promotion never by code);
-spend ceilings = `jev.py` + doc 10 tiers; attribution = `attribution.py`
-mirror (missing ledger raises, never $0).
+Collector path: Tier-A/B source, `collector/collect.py` (TTL/heartbeat/keys),
+classify, `data/signals/<day>.jsonl`, plane `graph.py` (LLM context via
+`workers.py`, spend-governed, checkpointed), emit bundles, kernel `risk/veto`,
+optional `jev_filter`, paper fills (doc 06 §6.5). Seam path (plan/08 §8.3):
+the five adapters, `source_seam.py` harvest (canonical lineage through
+`classify` into the shared records table), graph nodes (seam `parser_extract`
+binds authority lineage to candidates), graph emit (seam-bound
+`resolve_emit`), emit bundle, `ctx_read`. Paper loop: strategy candidates
+(`ops/emit_candidates.py`), `g0_paper_loop`, Decide, journal row, order on
+Alpaca paper, reconcile.
 
-## 8. Status ledger
+Gating: the earnings veto and session calendar suppress entries; exits are
+never gated. Failure: a down source leaves a stale heartbeat and features
+expire (absent is not neutral); a missing calendar means zero entries;
+unknown spend blocks until reconciled or a fresh cycle; misconfiguration
+raises `ConfigBlocked`; an abort publishes nothing; digests are never rebuilt.
 
-- Plan: docs 00–13 rewritten 2026-09-28; approved by the operator in chat
-  2026-09-29 (doc 07 sign-off log).
-- Harness (`research/strategy/`): ledger, `cost_v2`, settlement, portfolio,
-  benchmarks, statistics, gates, prereg, `sip_fetch`, `a_run`, sleeve
-  modules under `sleeves/`; pre-registrations in `research/prereg/`,
-  ledger in `research/ledger/`, gate reports in `research/reports/`;
-  `ops/` holds the alert relay, the forward replication ledgers
-  (`sleeve_shadow`, `event_shadow`, `macro_shadow`, `jev_twin`,
-  `sleeve_eval`, `forward_register`) and the long-history track
-  (`long_history_fetch`, `long_history_run`); see
-  `plan/appendix/10-sleeve-integration-plan.md`.
-- FROZEN: `kernel/` impl, collector production code (`config.py`
-  carries the additive `RESEARCH_MODEL_ID` loader key per Addendum 32
-  - the only exception), `plan/`, JEV
-  contracts, `research/` memos, round addenda, evidence JSON artifacts.
-- ACTIVE: `research/plane`, `sources`, `tests`, `sandbox`,
-  `lessons.jsonl`, `requirements.txt`, `TODO.md`, `README.md`, this
-  file, CI wiring, `.env.example` (additive consumed keys only).
-- FUTURE: Slice D; live capital past G0_PAPER; production broker
-  pollers + H1 execution (order router/journal/ack/reconcile);
-  production earnings poller→graph consumer wiring (source-level
-  TTL/heartbeat PROVEN); 7-day run; profit/calibration feeds
-  (G-stage); registry publication (optional); P3.5 sizing/execution.
-  (The five-adapter poller→feature seam - EDGAR/FRED/Treasury/BLS/
-  BEA harvest→parser→resolve→bundle→ctx - is SHIPPED, pending audit
-  acceptance; live soak/p50-p99 per source stays OPEN by design.)
-- Current credentials (ONLY): OpenRouter, FRED/ALFRED, BEA, Alpaca
-  paper - all to be rotated after the 2026-09-28 chat exposure (doc 07
-  O6). OANDA practice BLOCKED (India ineligible, Addendum 39); forex is
-  research-only (no FX venue search). No other keys exist.
+Money-affecting ownership: reservation/settle is `spend.py` under the tier
+lock; size comes from the frozen §3.2 table via the typed object only; exits
+are local (doc 06); stages are doc 10 (demotion automatic, promotion never by
+code); spend ceilings are `jev.py` and the doc 10 tiers; attribution is the
+`attribution.py` mirror (a missing ledger raises, never reads as $0).
+
+## 9. Status
+
+- FROZEN: `kernel/` implementation and the JEV contracts, collector
+  production code (`config.py` carries the additive `RESEARCH_MODEL_ID`
+  loader key, Addendum 32, the only exception), `plan/` (edited only by
+  operator-approved doc edits), evidence JSON artifacts.
+- ACTIVE: `research/plane`, `sources`, `strategy`, `sandbox`, `tests`, `ops/`,
+  `TODO.md`, `README.md`, this file, CI wiring, `.env.example` (additive
+  consumed keys only).
+- FUTURE: capital past G0_PAPER; netting router; the 7-day research run;
+  production earnings poller-to-graph wiring; profit/calibration feeds
+  (G-stage); registry publication (optional). Live soak and p50/p99 per
+  source stay open by design.
+- Credentials in use: OpenRouter, FRED/ALFRED, BEA, Alpaca paper (rotated
+  2026-09-30, doc 07 O6). OANDA practice is blocked (India ineligible,
+  Addendum 39); there is no FX venue. No other keys exist.
