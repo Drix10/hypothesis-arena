@@ -1508,6 +1508,31 @@ int main() {
         }
         Check(qty == "40", "m-flatten-qty-40");
     }
+    // 14b. A real 64-hex intent id still gets a flatten EXIT (the suffix
+    // is appended to a truncated id; the venue id budget is 64).
+    {
+        Rig r;
+        std::string cid;
+        const std::string longid(64, 'a');
+        Check(!CrashImage(r.dir, longid.c_str(), "AAPL", 0, 0, 100, 5, 40, &cid)
+                   .empty(),
+              "ml-image");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "ml-recover");
+        g_kill.spend_tier = 3;  // MEDIUM
+        for (int i = 0; i < 4; ++i)
+            PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 HeldReply("filled", "40").c_str());
+        Check(g.Cycle(g_now), "ml-cycle");
+        const std::string fid = std::string(55, 'a') + "-flatten";
+        const auto* f = g.Find(fid.c_str());
+        Check(f && f->done &&
+                  f->m.state == jev::exec::RouteState::CLOSED &&
+                  f->m.exit_closed_qty == 40,
+              "ml-flattened-long-id");
+        Check(!Exists(r.dir + "/freeze.txt"), "ml-no-freeze");
+    }
     // 15. Corrupt journal refuses startup (HARD, forensics first).
     {
         Rig r;

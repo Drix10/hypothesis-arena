@@ -24,6 +24,14 @@ namespace jev {
 namespace runner {
 
 namespace {
+// Per-intent flatten id: the venue-facing id budget is 64 chars and real
+// intent ids are 64 hex, so long ids are truncated before the suffix.
+std::string FlattenId(const char* intent_id) {
+    std::string b(intent_id);
+    if (b.size() > 55) b.resize(55);
+    return b + "-flatten";
+}
+
 // Bounded tries for one protection repair (each pass queries before posting).
 constexpr int kRepairAttempts = 3;
 
@@ -1092,7 +1100,7 @@ bool G0Runner::LocalCloseCovers(const char* symbol) const {
         if (s.m.filled_qty - s.m.exit_closed_qty <= 0) continue;
         if (s.flatten_armed) return true;
         std::string fid =
-            std::string(s.intent.intent_id) + "-flatten";
+            FlattenId(s.intent.intent_id);
         if (Find(fid.c_str())) return true;
         if (JournalIntentState(cfg_.dir, fid.c_str()) == 2) {
             // Landed-closed stays covered; an OPEN entry beside a terminal row
@@ -1105,7 +1113,7 @@ bool G0Runner::LocalCloseCovers(const char* symbol) const {
     return false;
 }
 bool G0Runner::FlattenResolvedNotClosed(const Slot& s) const {
-    std::string fid = std::string(s.intent.intent_id) + "-flatten";
+    std::string fid = FlattenId(s.intent.intent_id);
     const Slot* fs = Find(fid.c_str());
     if (!fs || !fs->done) return false;
     return fs->m.state != exec::RouteState::CLOSED;
@@ -1469,7 +1477,7 @@ bool G0Runner::FlattenOnMedium(Slot& s, long long now_ns) {
     s.flatten_armed = false;
     // Restart coherence: a flatten EXIT from the dead process may already
     // exist (pre-flight dedupe makes its drive safe); never order a second.
-    std::string fid0 = std::string(s.intent.intent_id) + "-flatten";
+    std::string fid0 = FlattenId(s.intent.intent_id);
     if (fid0.size() > 64) {
         // No representable flatten id: freeze the symbol and alert (human owns
         // the position).
@@ -2902,7 +2910,7 @@ bool G0Runner::MediumPass(long long now_ns) {
         const Slot& s = slots_[i];
         if (!s.active || s.done) continue;
         std::string fid =
-            std::string(s.intent.intent_id) + "-flatten";
+            FlattenId(s.intent.intent_id);
         if (Find(fid.c_str())) {
             pending = true;  // flatten EXIT still working
             break;
@@ -3121,7 +3129,7 @@ bool G0Runner::MediumPass(long long now_ns) {
         if (IsTerminalState(s.m.state)) continue;
         if (s.m.filled_qty - s.m.exit_closed_qty <= 0) continue;
         std::string fid =
-            std::string(s.intent.intent_id) + "-flatten";
+            FlattenId(s.intent.intent_id);
         const Slot* fs = Find(fid.c_str());
         if (fs && !fs->done) covered = true;
         if (JournalIntentState(cfg_.dir, fid.c_str()) == 2)
