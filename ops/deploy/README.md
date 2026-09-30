@@ -211,3 +211,10 @@ tail -f ~/g2/logs/loop.log
   `~/g2/journal.jsonl` and `~/g2/alerts.jsonl` before starting again.
 - `ops/alert_relay.py` forwards `alerts.jsonl` to `ALERT_WEBHOOK_URL`. It is
   optional.
+
+## Automated run and check
+
+- `bash ops/deploy/reset_paper.sh` cancels all orders and closes all positions on the paper account (you run it; it is not called for you).
+- `bash ops/deploy/run.sh [dir]` starts a fresh run, then runs `check.py` every 5 minutes. On the first failure it stops the run and prints the reason.
+- `python3 ops/deploy/check.py <dir> [--watch N]` is the pass/fail check: loop alive, no freeze, no flatten/unprotected/journal alerts, journal chain intact, no traceback, and every held position has a resting sell order at the broker.
+- `kernel/tests/e2e_mock_venue.py` includes an Alpaca-like scenario (partial fill, cancel frees shares late, refused repair, one-leg OCO reply), so this class of bug fails in CI, not in a live run.

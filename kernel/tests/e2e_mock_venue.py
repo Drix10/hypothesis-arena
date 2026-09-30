@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.parse
 import zoneinfo
 
@@ -71,6 +72,16 @@ class Venue:
         self.fail_code = 429
         self.hits = []
         self.bodies = []       # accepted order POST bodies
+        # Alpaca-like lifecycle (off by default): a market bracket entry is
+        # first seen partly filled, our cancel takes the bracket legs but the
+        # venue frees their shares only after release_s, and an OCO repair is
+        # refused until then. cancel_fills: the entry completes before the
+        # cancel lands.
+        self.realistic = False
+        self.cancel_fills = False
+        self.release_s = 3.0
+        self.release_at = {}   # symbol -> monotonic time the legs' shares free
+        self.oco_refused = 0
 
 
 V = Venue()
@@ -81,7 +92,7 @@ class H(http.server.BaseHTTPRequestHandler):
         pass
 
     def _send(self, code, obj=None):
-        data = (json.dumps(obj) if obj is not None else "").encode()
+        data = (json.dumps(obj, separators=(",", ":")) if obj is not None else "").encode()
         self.send_response(code)
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
@@ -115,7 +126,8 @@ class H(http.server.BaseHTTPRequestHandler):
             if u.path == "/v2/orders" and self.command == "GET":
                 if q.get("status") == ["open"]:
                     return self._send(200, [o for o in V.orders.values()
-                                            if o["status"] in ("accepted", "new")])
+                                            if o["status"] in ("accepted", "new",
+                                                               "partially_filled")])
                 return self._send(200, [])
             if u.path == "/v2/orders" and self.command == "POST":
                 if V.mode == "outage_orders":
@@ -126,6 +138,25 @@ class H(http.server.BaseHTTPRequestHandler):
                 cid = body["client_order_id"]
                 if cid in V.orders:
                     return self._send(422, {"message": "client_order_id must be unique"})
+                if V.realistic and body.get("order_class") == "oco":
+                    if time.monotonic() < V.release_at.get(body["symbol"], 0):
+                        V.oco_refused += 1
+                        return self._send(403, {
+                            "message": "insufficient qty available for order"})
+                    V.posts += 1
+                    n = V.posts
+                    o = {"id": "%08d-2222-3333-4444-555555555555" % n,
+                         "client_order_id": cid, "symbol": body["symbol"],
+                         "qty": body["qty"], "filled_qty": "0",
+                         "side": "sell", "order_class": "oco", "type": "limit",
+                         "order_type": "limit", "status": "new",
+                         "legs": [{"id": "%08d-6666-3333-4444-555555555555" % n,
+                                   "type": "stop_limit", "status": "held",
+                                   "symbol": body["symbol"], "qty": body["qty"],
+                                   "side": "sell", "filled_qty": "0"}]}
+                    V.bodies.append(body)
+                    V.orders[cid] = o
+                    return self._send(200, o)
                 V.posts += 1
                 o = json.loads(json.dumps(BRACKET))
                 o.update({"id": "%08d-2222-3333-4444-555555555555" % V.posts,
@@ -145,6 +176,14 @@ class H(http.server.BaseHTTPRequestHandler):
                 o = V.orders.get(q["client_order_id"][0])
                 if not o:
                     return self._send(404, {"message": "order not found"})
+                if V.realistic and o["status"] == "accepted" \
+                        and o.get("order_class") in ("bracket", "oto"):
+                    q0 = int(o["qty"])
+                    got = max(1, q0 - 2) if q0 > 2 else 1
+                    o["status"], o["filled_qty"] = "partially_filled", str(got)
+                    o["filled_avg_price"] = "100.00"
+                    V.positions[o["symbol"]] = got
+                    return self._send(200, o)
                 if o["status"] == "accepted":  # fills on first look
                     o["status"], o["filled_qty"] = "filled", o["qty"]
                     d = 1 if o["side"] == "buy" else -1
@@ -152,6 +191,19 @@ class H(http.server.BaseHTTPRequestHandler):
                                                 + d * int(o["qty"]))
                 return self._send(200, o)
             if u.path.startswith("/v2/orders/") and self.command == "DELETE":
+                if V.realistic:
+                    oid = u.path.rsplit("/", 1)[1]
+                    for o in V.orders.values():
+                        if o["id"] != oid:
+                            continue
+                        if V.cancel_fills:
+                            o["status"], o["filled_qty"] = "filled", o["qty"]
+                            V.positions[o["symbol"]] = int(o["qty"])
+                        else:
+                            o["status"] = "canceled"
+                        for lg in o.get("legs") or []:
+                            lg["status"] = "canceled"
+                        V.release_at[o["symbol"]] = time.monotonic() + V.release_s
                 return self._send(204)
             self._send(404, {"message": "nope"})
 
@@ -309,6 +361,36 @@ def main():
               b.get("time_in_force") == gtc, b)
         check("oto-%s-protected-not-flattened" % prof,
               rc == 0 and V.posts == 1 and V.positions.get("SPY", 0) > 0, out)
+        shutil.rmtree(d)
+
+    # 8. Alpaca-like partial fill: the entry is first seen partly filled, the
+    # kernel cancels the remainder (which takes the bracket legs), and the
+    # venue refuses an OCO repair until the legs release their shares. The
+    # position must end up protected by the repair OCO, never flattened,
+    # frozen or alerted, whether the entry stayed partial or completed.
+    for label, fills in (("partial", False), ("filled-before-cancel", True)):
+        V.reset()
+        V.realistic, V.cancel_fills = True, fills
+        d = make_dir()
+        open(d + "/candidates.jsonl", "w").write(candidate("VTI", "BUY", 9))
+        rc, out = run_loop(binary, port, d, ticks=12)
+        ocos = [o for o in V.orders.values() if o.get("order_class") == "oco"
+                and o["status"] == "new"]
+        sells = [b for b in V.bodies if b.get("side") == "sell"
+                 and b.get("order_class") != "oco"]
+        alerts = open(d + "/alerts.jsonl").read() if os.path.exists(
+            d + "/alerts.jsonl") else ""
+        jr = open(d + "/journal.jsonl").read()
+        check("real-%s-runs" % label, rc == 0, out)
+        check("real-%s-repair-refused-then-placed" % label,
+              V.oco_refused >= 1 and len(ocos) == 1,
+              "refused=%d ocos=%d %s" % (V.oco_refused, len(ocos), out))
+        check("real-%s-not-flattened" % label,
+              not sells and "-flatten" not in jr, "%s %s" % (sells, jr[-300:]))
+        check("real-%s-no-freeze" % label,
+              not os.path.exists(d + "/freeze.txt"), "freeze")
+        check("real-%s-no-alerts" % label,
+              "flatten" not in alerts and "unprotected" not in alerts, alerts)
         shutil.rmtree(d)
 
     print("CHECKS: %d/%d PASS" % (sum(res), len(res)))
