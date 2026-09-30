@@ -53,8 +53,13 @@ bool IsSessionDay(int64_t day, const std::set<int64_t>& holidays) {
     return w != 0 && w != 6 && holidays.count(day) == 0;
 }
 
+int LastBarHour(int64_t day, const std::set<int64_t>* early) {
+    return (early && early->count(day)) ? 12 : 15;
+}
+
 int ExpectedBarsBetween(int64_t last_bar_start_utc_s, int64_t now_utc_s,
-                        const std::set<int64_t>& holidays) {
+                        const std::set<int64_t>& holidays,
+                        const std::set<int64_t>* early) {
     if (now_utc_s <= last_bar_start_utc_s) return 0;
     int64_t first_day = (last_bar_start_utc_s +
                          EtOffsetSeconds(last_bar_start_utc_s)) / 86400;
@@ -63,7 +68,7 @@ int ExpectedBarsBetween(int64_t last_bar_start_utc_s, int64_t now_utc_s,
     int n = 0;
     for (int64_t day = first_day; day <= last_day; ++day) {
         if (!IsSessionDay(day, holidays)) continue;
-        for (int hour = 9; hour <= 15; ++hour) {
+        for (int hour = 9; hour <= LastBarHour(day, early); ++hour) {
             int64_t local_start = day * 86400 + hour * 3600;
             // The offset at the bar's own instant (DST boundaries fall
             // overnight, never inside the session).

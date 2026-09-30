@@ -626,6 +626,51 @@ int main() {
               "jcap-size");
         std::remove(path);
     }
+    // Torn-tail recovery: only a newline-less final line is trimmed.
+    {
+        const char* path = "torn_tail_tmp.jsonl";
+        std::remove(path);
+        std::remove("torn_tail_tmp.jsonl.torn");
+        std::string prev = jev::journal::GenesisPrev();
+        for (int i = 0; i < 3; ++i) {
+            jev::journal::Row r;
+            std::string pay(64, 'b');
+            Check(jev::journal::FormatRow(i, 2000 + i, "intent", "t1",
+                                          pay.c_str(), prev.c_str(), &r),
+                  "torn-format");
+            Check(jev::runner::JournalAppend(path, r), "torn-append");
+            prev = r.row_hash;
+        }
+        Check(jev::runner::JournalTrimTornTail(path) == 0,
+              "torn-clean-is-noop");
+        Check(jev::runner::JournalTrimTornTail("torn_no_such_file") == 0,
+              "torn-absent-is-noop");
+        {
+            std::FILE* f = std::fopen(path, "ab");
+            std::fputs("3|2003|intent|t1|abc", f);  // cut mid-row, no newline
+            std::fclose(f);
+        }
+        std::vector<jev::journal::Row> rows;
+        Check(!jev::runner::JournalLoad(path, &rows), "torn-load-refuses");
+        Check(jev::runner::JournalTrimTornTail(path) == 1, "torn-trimmed");
+        Check(jev::runner::JournalLoad(path, &rows) && rows.size() == 3 &&
+                  jev::runner::JournalVerifyFile(path),
+              "torn-chain-intact-after-trim");
+        Check(jev::runner::FileSizeBytes("torn_tail_tmp.jsonl.torn") > 0,
+              "torn-bytes-preserved");
+        Check(jev::runner::JournalTrimTornTail(path) == 0,
+              "torn-second-trim-noop");
+        {   // A complete but corrupt row is NOT trimmed.
+            std::FILE* f = std::fopen(path, "ab");
+            std::fputs("garbage|row\n", f);
+            std::fclose(f);
+        }
+        Check(jev::runner::JournalTrimTornTail(path) == 0 &&
+                  !jev::runner::JournalLoad(path, &rows),
+              "torn-complete-bad-row-still-refused");
+        std::remove(path);
+        std::remove("torn_tail_tmp.jsonl.torn");
+    }
     // 0. Event seam units: SSE framing + classification + shaping.
     {
         jev::runner::SseParser p;

@@ -337,6 +337,47 @@ bool JournalLoad(const char* path, std::vector<journal::Row>* out) {
     return true;
 }
 
+int JournalTrimTornTail(const char* path) {
+    if (StatPath(path) != PathKind::REGULAR) return 0;
+    std::FILE* f = std::fopen(path, "rb");
+    if (!f) return -1;
+    std::string all;
+    char buf[4096];
+    std::size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) {
+        all.append(buf, n);
+        if (all.size() > g_journal_cap) { std::fclose(f); return -1; }
+    }
+    bool rd_err = std::ferror(f) != 0;
+    std::fclose(f);
+    if (rd_err) return -1;
+    if (all.empty() || all.back() == '\n') return 0;
+    std::size_t nl = all.rfind('\n');
+    std::size_t keep = (nl == std::string::npos) ? 0 : nl + 1;
+    std::string sidecar = std::string(path) + ".torn";
+    std::FILE* t = std::fopen(sidecar.c_str(), "ab");
+    if (!t) return -1;
+    std::string tail = all.substr(keep) + "\n";
+    bool ok = std::fwrite(tail.data(), 1, tail.size(), t) == tail.size();
+    ok = (std::fclose(t) == 0) && ok;
+    if (!ok) return -1;
+    std::string tmp = std::string(path) + ".trim";
+    std::FILE* w = std::fopen(tmp.c_str(), "wb");
+    if (!w) return -1;
+    ok = keep == 0 || std::fwrite(all.data(), 1, keep, w) == keep;
+    ok = (std::fflush(w) == 0) && ok;
+#ifndef _WIN32
+    ok = (::fsync(::fileno(w)) == 0) && ok;
+#endif
+    ok = (std::fclose(w) == 0) && ok;
+    if (!ok) { std::remove(tmp.c_str()); return -1; }
+#ifdef _WIN32
+    std::remove(path);
+#endif
+    if (std::rename(tmp.c_str(), path) != 0) return -1;
+    return 1;
+}
+
 bool JournalVerifyFile(const char* path) {
     std::vector<journal::Row> rows;
     if (!JournalLoad(path, &rows)) return false;

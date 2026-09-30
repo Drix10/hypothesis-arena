@@ -46,6 +46,15 @@ int main() {
     CHECK("winter-before", ExpectedBarsBetween(wlast, Utc(2026, 1, 5, 14, 59), none) == 0);
     CHECK("absurd-gap", ExpectedBarsBetween(0, Utc(2026, 9, 28, 13), none) >= 1000);
     CHECK("now-before-last", ExpectedBarsBetween(last, last - 5, none) == 0);
+    // Early close Fri 2026-11-27 (13:00 ET): last bar starts 12:00 ET = 17:00Z.
+    std::set<int64_t> early = {DaysFromCivil(2026, 11, 27)};
+    int64_t elast = Utc(2026, 11, 27, 17);
+    CHECK("early-close-no-phantom-bars",
+          ExpectedBarsBetween(elast, Utc(2026, 11, 30, 14, 59), none, &early) == 0);
+    CHECK("unlisted-early-close-stricter",
+          ExpectedBarsBetween(elast, Utc(2026, 11, 30, 14, 59), none) == 3);
+    CHECK("early-close-last-hour", LastBarHour(DaysFromCivil(2026, 11, 27), &early) == 12);
+    CHECK("normal-last-hour", LastBarHour(DaysFromCivil(2026, 11, 30), &early) == 15);
     std::printf("CHECKS: %d/%d PASS\n", count - fails, count);
     return fails ? 1 : 0;
 }

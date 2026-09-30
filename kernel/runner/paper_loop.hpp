@@ -44,6 +44,7 @@ struct LoopConfig {
     std::string dir;
     KillFeed* kill_feed = nullptr;  // optional; null = no drawdown kill wiring
     std::set<int64_t> holidays;
+    std::set<int64_t> early_closes;  // 13:00 ET closes (optional)
     ingest::CandidateTables tables;  // approved sleeves + allowlist
     int64_t risk_bp = 25;
     std::string feed = "iex";

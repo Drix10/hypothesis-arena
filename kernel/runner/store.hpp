@@ -69,6 +69,12 @@ bool ParseRowLine(const std::string& ln, journal::Row* out);
 bool RowLine(const journal::Row& r, char* out, std::size_t n);
 // Load + VerifyChain. False on any break (caller HARD-kills).
 bool JournalVerifyFile(const char* path);
+// Crash recovery for a torn final line (a write cut short before its "\n").
+// Only a tail with no newline is trimmed: the partial bytes go to
+// `<path>.torn` (appended) and the file is rewritten to the last complete
+// line. Returns 0 = nothing to do, 1 = trimmed, -1 = error (caller refuses).
+// Complete-but-bad rows are never touched; the chain check still decides.
+int JournalTrimTornTail(const char* path);
 // payload_hash input: sha256 over the kind-specific body (<=280 chars,
 // RedactionOk-gated upstream of FormatRow).
 std::string PayloadHash(const char* body);

@@ -126,10 +126,11 @@ void MeasureRisk(const LoopIO& io, const LoopConfig& cfg,
         token = next;
     }
     if (!m.count(sym)) return;
-    for (auto& kv : m) KeepRegularSession(&kv.second, cfg.holidays);
+    for (auto& kv : m) KeepRegularSession(&kv.second, cfg.holidays, &cfg.early_closes);
     const std::vector<Bar>& eb = m[sym];
     if (eb.empty()) return;
-    int stale = ExpectedBarsBetween(eb.back().start_s, now_s, cfg.holidays);
+    int stale = ExpectedBarsBetween(eb.back().start_s, now_s, cfg.holidays,
+                                  &cfg.early_closes);
     std::vector<double> closes;
     for (const Bar& b : eb) closes.push_back(b.close);
     risk::VolResult v = risk::MeasureVol(closes.data(), (int)closes.size(),
@@ -137,7 +138,8 @@ void MeasureRisk(const LoopIO& io, const LoopConfig& cfg,
     s->r6_available = v.available;
     s->r6_trip = v.trip;
 
-    auto starts = ExpectedStarts(now_s, risk::kCorrWindow, cfg.holidays);
+    auto starts = ExpectedStarts(now_s, risk::kCorrWindow, cfg.holidays,
+                             &cfg.early_closes);
     if ((int)starts.size() != risk::kCorrWindow) return;
     double a[risk::kCorrWindow], b[risk::kCorrWindow];
     AlignCloses(eb, starts, a);
@@ -149,7 +151,7 @@ void MeasureRisk(const LoopIO& io, const LoopConfig& cfg,
         if (it == m.end() || it->second.empty()) { ok = false; break; }
         AlignCloses(it->second, starts, b);
         int st2 = ExpectedBarsBetween(it->second.back().start_s, now_s,
-                                      cfg.holidays);
+                                      cfg.holidays, &cfg.early_closes);
         risk::CorrResult c = risk::MeasureCorr(a, b, risk::kCorrWindow,
                                                st2 > stale ? st2 : stale);
         if (!c.available) { ok = false; break; }

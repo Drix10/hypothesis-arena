@@ -53,6 +53,12 @@ int main(int argc, char** argv) {
         CHECK("real-calendar-reads", ReadFile(std::string(argv[1]) + "/collector/session_calendar.json", &real));
         CHECK("real-calendar-parses", ParseCalendar(real, &h) && h.size() == 10);
     }
+    {
+        std::set<int64_t> e;
+        CHECK("early-absent-ok", ParseEarlyCloses("{\"holidays_2026\":[]}", &e) && e.empty());
+        CHECK("early-parses", ParseEarlyCloses("{\"early_close_2026\":[\"2026-11-27\"]}", &e) && e.size() == 1);
+        CHECK("early-bad-fails", !ParseEarlyCloses("{\"early_close_2026\":[\"nope\"]}", &e));
+    }
     std::string none;
     CHECK("missing-file-fails", !ReadFile("/nonexistent/file", &none));
     std::printf("CHECKS: %d/%d PASS\n", count - fails, count);

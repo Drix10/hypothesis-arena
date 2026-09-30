@@ -151,7 +151,7 @@ A box is checked only with evidence (commit and test output, or a report path).
   - Done: R6/R7 from live hourly bars, ET calendar, offsets and a decisions.jsonl audit; churn counters from `submitted.log`; oversize-line and file-rotation recovery.
   - Done: working buy orders count as exposure and reserved cash (`inflight.log` supplies the reference price; an order the loop did not place halts entries); a working sell blocks a second exit; fractional positions are held as dust and never traded.
   - Done: exit proceeds are booked before the order is sent, keyed by cid and estimated from the live mark +1% (broker cash reconciles the rest next session).
-  - Decision: no MOC or timed exits for the passive core (its exits are explicit SELL candidates during the session); early-close days are not modeled (the data-age gate only gets stricter); `ops/deploy/session_calendar.json` covers 2026-2028.
+  - Decision: no MOC or timed exits for the passive core (its exits are explicit SELL candidates during the session); early-close days (13:00 ET) are listed in `early_close_YYYY` arrays of the calendar and honored by the data-age gate; a torn final journal line is trimmed on recovery (bytes kept in `journal.jsonl.torn`, MEDIUM alert `journal-torn-tail`); `ops/deploy/session_calendar.json` covers 2026-2028.
   - Open: STAGE signature and approved.json (G0-STAGE) remain.
 - [ ] K-exit P3.5 CLOSED (K1–K7 + K10 green).
 

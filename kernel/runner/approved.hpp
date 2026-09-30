@@ -18,6 +18,10 @@ bool ParseApproved(const std::string& json, ingest::CandidateTables* out);
 // Needs at least one holiday list and a valid date for every entry.
 bool ParseCalendar(const std::string& json, std::set<int64_t>* holidays);
 
+// Optional "early_close_YYYY" arrays (13:00 ET closes). Absent = empty set;
+// a malformed entry fails the parse.
+bool ParseEarlyCloses(const std::string& json, std::set<int64_t>* early);
+
 bool ReadFile(const std::string& path, std::string* out);
 
 }  // namespace runner

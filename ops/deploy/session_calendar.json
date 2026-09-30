@@ -34,5 +34,16 @@
   "2028-11-23",
   "2028-12-25"
  ],
- "note": "NYSE full-day closures. Extend before the last year ends: the loop refuses to trade in a year with no listed holiday."
+ "note": "NYSE full-day closures. Extend before the last year ends: the loop refuses to trade in a year with no listed holiday. early_close_YYYY lists 13:00 ET closes (optional; unlisted ones only make the data-age gate stricter).",
+ "early_close_2026": [
+  "2026-11-27",
+  "2026-12-24"
+ ],
+ "early_close_2027": [
+  "2027-11-26"
+ ],
+ "early_close_2028": [
+  "2028-07-03",
+  "2028-11-24"
+ ]
 }

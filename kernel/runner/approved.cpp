@@ -116,5 +116,24 @@ bool ParseCalendar(const std::string& json, std::set<int64_t>* holidays) {
     return true;
 }
 
+bool ParseEarlyCloses(const std::string& json, std::set<int64_t>* early) {
+    JVal v;
+    std::string err;
+    if (!ParseJson(json, v, err) || v.t != JVal::T::OBJ) return false;
+    std::set<int64_t> h;
+    for (const auto& kv : v.o) {
+        if (U32ToUtf8(kv.first).rfind("early_close_", 0) != 0) continue;
+        if (kv.second.t != JVal::T::ARR) return false;
+        for (const JVal& e : kv.second.a) {
+            int64_t day = 0;
+            if (e.t != JVal::T::STR || !IsoDay(U32ToUtf8(e.s), &day))
+                return false;
+            h.insert(day);
+        }
+    }
+    *early = h;
+    return true;
+}
+
 }  // namespace runner
 }  // namespace jev

@@ -218,14 +218,15 @@ bool ParseBars(const std::string& body, BarMap* out, bool* more,
 }
 
 void KeepRegularSession(std::vector<Bar>* bars,
-                        const std::set<int64_t>& holidays) {
+                        const std::set<int64_t>& holidays,
+                        const std::set<int64_t>* early) {
     std::vector<Bar> keep;
     for (const Bar& b : *bars) {
         int64_t local = b.start_s + EtOffsetSeconds(b.start_s);
         int64_t day = local / 86400;
         int hour = (int)(local % 86400) / 3600;
         int minute = (int)(local % 3600) / 60;
-        if (IsSessionDay(day, holidays) && hour >= 9 && hour <= 15 &&
+        if (IsSessionDay(day, holidays) && hour >= 9 && hour <= LastBarHour(day, early) &&
             minute == 0)
             keep.push_back(b);
     }
@@ -233,12 +234,14 @@ void KeepRegularSession(std::vector<Bar>* bars,
 }
 
 std::vector<int64_t> ExpectedStarts(int64_t now_s, int n,
-                                    const std::set<int64_t>& holidays) {
+                                    const std::set<int64_t>& holidays,
+                                    const std::set<int64_t>* early) {
     std::vector<int64_t> rev;
     int64_t day = (now_s + EtOffsetSeconds(now_s)) / 86400;
     for (int guard = 0; guard < 120 && (int)rev.size() < n; ++guard, --day) {
         if (!IsSessionDay(day, holidays)) continue;
-        for (int hour = 15; hour >= 9 && (int)rev.size() < n; --hour) {
+        for (int hour = LastBarHour(day, early); hour >= 9 && (int)rev.size() < n;
+             --hour) {
             int64_t local = day * 86400 + hour * 3600;
             int64_t start = local - EtOffsetSeconds(local + 18000);
             if (start + 3600 <= now_s) rev.push_back(start);

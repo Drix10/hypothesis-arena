@@ -69,6 +69,10 @@ int main(int argc, char** argv) {
         std::printf("g0_paper_loop: refused: calendar missing or invalid\n");
         return 2;
     }
+    if (!jev::runner::ParseEarlyCloses(text, &lc.early_closes)) {
+        std::printf("g0_paper_loop: refused: calendar early_close invalid\n");
+        return 2;
+    }
 
     jev::runner::RunnerConfig cfg;
     cfg.dir = lc.dir;

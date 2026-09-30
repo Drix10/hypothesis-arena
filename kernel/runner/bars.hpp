@@ -28,11 +28,13 @@ std::string UrlEncode(const std::string& s);
 
 // Keeps bars starting 09:00..15:00 ET on session days (drops extended hours).
 void KeepRegularSession(std::vector<Bar>* bars,
-                        const std::set<int64_t>& holidays);
+                        const std::set<int64_t>& holidays,
+                        const std::set<int64_t>* early = nullptr);
 
 // Starts of the last n completed regular-session bars at `now_s`, oldest first.
 std::vector<int64_t> ExpectedStarts(int64_t now_s, int n,
-                                    const std::set<int64_t>& holidays);
+                                    const std::set<int64_t>& holidays,
+                                    const std::set<int64_t>* early = nullptr);
 
 // closes on the expected grid; NaN where a bar is missing.
 void AlignCloses(const std::vector<Bar>& bars,

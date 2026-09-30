@@ -451,6 +451,19 @@ bool G0Runner::Recover(const char** reason) {
         if (reason) *reason = "recover-lock-held";
         return false;
     }
+    // A torn final line (crash mid-append) is trimmed to the last complete
+    // row; anything else still goes through the chain check below.
+    {
+        int tr = JournalTrimTornTail(P("journal.jsonl").c_str());
+        if (tr < 0) {
+            if (reason) *reason = kChain;
+            return false;
+        }
+        if (tr == 1)
+            Alert(P("alerts.jsonl").c_str(), "MEDIUM", "journal-torn-tail",
+                  "torn final journal line trimmed (bytes kept in journal.jsonl.torn)",
+                  deps_.now_ns(deps_.clock_ctx));
+    }
     // Journal: break = HARD, alert, refuse (doc 10).
     if (!JournalVerifyFile(P("journal.jsonl").c_str())) {
         Alert(P("alerts.jsonl").c_str(), "HARD", "journal-chain-break",
