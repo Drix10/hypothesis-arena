@@ -2,9 +2,9 @@
 
 # MiroHedge
 
-**A systematic fund for US stocks and ETFs where nothing touches money until it has beaten the boring alternative, net of every cost.**
+**Algorithmic trading system with a deterministic C++ risk engine, Alpaca paper trading and pre-registered backtesting.**
 
-*Deterministic C++ risk kernel · Alpaca paper trading · a pre-registered research harness · an honest forward-testing program for every strategy we have built.*
+*Systematic US stock and ETF strategies (trend following, momentum, insider, earnings drift), walk-forward validation with deflated Sharpe and multiple-testing control, an optional LLM trade filter, and a rule that nothing touches money until it beats the boring alternative net of every cost.*
 
 [![CI](https://img.shields.io/github/actions/workflow/status/Drix10/hypothesis-arena/ci.yml?branch=main&style=flat-square&logo=github&label=CI)](https://github.com/Drix10/hypothesis-arena/actions/workflows/ci.yml)
 ![Stage](https://img.shields.io/badge/stage-G0%20paper%20only-blue?style=flat-square)
@@ -14,7 +14,9 @@
 
 </div>
 
-**MiroHedge** is a research-first trading system. Cash account, long only, 1x, allowlisted US stocks and ETFs, paper money only. It is built around one rule: **a strategy earns the right to place an order by passing a pre-registered backtest gate, then a forward test, then a human sign-off** — and the system is designed to say "no" far more often than "yes".
+**MiroHedge** is a research-first **quantitative trading system** for US stocks and ETFs: a cash account, long only, 1x, allowlisted symbols, **paper trading on Alpaca** only. It combines a **C++17 execution and risk kernel**, a **Python backtesting and strategy-research harness**, and a forward-testing program for every strategy it has built. It is built around one rule: **a strategy earns the right to place an order by passing a pre-registered backtest gate, then a forward test, then a human sign-off**, and the system is designed to say "no" far more often than "yes".
+
+Under the hood: hash-chained order journal, risk rules R1-R19, bracket and stop-loss protection, walk-forward and purged cross-validation, deflated Sharpe ratio (DSR), probability of backtest overfitting (PBO), Holm multiple-testing correction, transaction-cost modelling, SEC EDGAR / FRED / Treasury / BLS / BEA data adapters, and an LLM filter (JEV) that is kept only if it improves results after its own cost.
 
 Trading systems fail quietly. The strategy is usually not the problem. What goes wrong is everything around it:
 
