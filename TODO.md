@@ -164,10 +164,10 @@ The paper run is started with `bash ops/deploy/start.sh ~/g2` (see `ops/deploy/R
   - [x] Shadow ledgers for core, T1, T2 (`ops/sleeve_shadow.py`, started by
         `start.sh`, monitor panel, `--verify` fidelity gate) — plan/appendix/10.
   - [x] Event sleeves E1 and I1 in the shadow ledger (`ops/event_shadow.py`); E2det PEAD not wired (no forward source for its registered signal).
-  - [x] Collector background poller (opt-in `WITH_COLLECTOR=1`). [ ] macro-lite tilt.
-  - [ ] JEV paired A/B twins per sleeve.
-  - [ ] Netting router + Tier R promotion of T1 (needs the fidelity gate).
-  - [x] Account kill inputs wired (daily loss 3% entry hold, drawdown 15% latch). [ ] per-sleeve limits.
+  - [x] Collector background poller (opt-in `WITH_COLLECTOR=1`). [x] macro-lite shadow ledger (`ops/macro_shadow.py`, needs FRED_API_KEY).
+  - [x] JEV paired A/B twins per sleeve (`ops/jev_twin.py`, needs OPENROUTER_API_KEY; live run pending).
+  - [ ] Netting router + Tier R promotion of T1 [BLOCKED on K5 exit sequence: sells of shares held by stop legs].
+  - [x] Account kill inputs wired (daily loss 3% entry hold, drawdown 15% latch). [x] per-sleeve limits reported in `sleeves/status.json`.
 - [x] G0-STAGE Sign the G0 bootstrap STAGE file (doc 10 §10.5). Signed by the operator 2026-09-29 (`scripts/sign-stage.sh ~/g0`, mode 0600).
 - [ ] G0b Broker paper: one champion sleeve through the kernel on Alpaca
       paper [BLOCKED on K-exit + a B-gate pass + G0-STAGE].

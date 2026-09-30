@@ -200,7 +200,7 @@ def _settle(d, sid, fresh, spec, verify, bad, summary, lenient=False):
 
 
 def run(d, now, verify=False, http_get=sip_fetch.default_http_get,
-        event_sleeves=True, edgar_get=None, sleep=time.sleep):
+        event_sleeves=True, edgar_get=None, sleep=time.sleep, extras=True):
     specs = sleeve_specs()
     symbols = sorted({s for u, _, _ in specs.values() for s in u})
     prices = fetch_prices(symbols, now, http_get)
@@ -214,7 +214,65 @@ def run(d, now, verify=False, http_get=sip_fetch.default_http_get,
                                      retrying(http_get), edgar_get, sleep)
         for sid, (fresh, spec) in extra.items():
             _settle(d, sid, fresh, spec, verify, bad, summary, lenient=True)
+        if extras:
+            _extras(d, now, prices, verify, bad, summary, http_get)
+    write_status(d)
     return bad, summary
+
+
+# Per-sleeve kill limits (plan/appendix/10 section 5.6): a sleeve run at a 10%
+# annual volatility target halves at -1.5x and freezes at -2x that volatility
+# from its own peak. Shadow ledgers cannot be halted, so the state is reported
+# (sleeves/status.json, monitor) for the operator and for promotion decisions.
+SOFT_DD, HARD_DD = 0.15, 0.20
+
+
+def write_status(d):
+    sd = os.path.join(d, "sleeves")
+    out = {}
+    for name in sorted(os.listdir(sd)) if os.path.isdir(sd) else []:
+        if not name.endswith(".jsonl"):
+            continue
+        try:
+            rows, _ = read_log(os.path.join(sd, name))
+        except (ValueError, OSError):
+            continue
+        if not rows:
+            continue
+        peak = max(r["equity"] for r in rows)
+        dd = 1.0 - rows[-1]["equity"] / peak
+        state = "hard" if dd >= HARD_DD else "soft" if dd >= SOFT_DD else "ok"
+        out[name[:-6]] = {"date": rows[-1]["date"], "equity": rows[-1]["equity"],
+                          "peak": peak, "drawdown": round(dd, 6), "state": state}
+    tmp = os.path.join(sd, "status.json.tmp")
+    os.makedirs(sd, exist_ok=True)
+    with open(tmp, "w") as f:
+        json.dump(out, f, sort_keys=True)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, os.path.join(sd, "status.json"))
+    return out
+
+
+def _extras(d, now, prices, verify, bad, summary, http_get):
+    """Macro-lite ledger and the JEV paired twins. Each is isolated: a failure
+    logs one line and never stops the other sleeves."""
+    try:
+        from ops import macro_shadow
+        for sid, (fresh, spec) in macro_shadow.produce(d, now, prices).items():
+            _settle(d, sid, fresh, spec, verify, bad, summary)
+    except Exception as e:  # noqa: BLE001
+        print(json.dumps({"macro_sleeve": "error: %r" % (e,)}), file=sys.stderr)
+    try:
+        from collector import jev
+        from ops import jev_twin
+        key = jev.api_key()
+        if key:
+            b, _ = jev_twin.run(d, now, key, prices=prices, verify=verify,
+                                http_get=http_get)
+            bad.extend(b)
+    except Exception as e:  # noqa: BLE001
+        print(json.dumps({"jev_twin": "error: %r" % (e,)}), file=sys.stderr)
 
 
 def main(argv, now=None):

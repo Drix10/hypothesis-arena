@@ -94,6 +94,21 @@ class Shadow(unittest.TestCase):
         finally:
             S.fetch_prices = old
 
+    def test_status_flags_drawdown_states(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "sleeves"))
+            for name, eqs in (("a", [100000, 90000]), ("b", [100000, 84000]),
+                              ("c", [100000, 79000])):
+                rows = [{"date": "2026-10-0%d" % (i + 1), "sleeve": name,
+                         "equity": e, "ret": 0.0, "target": None}
+                        for i, e in enumerate(eqs)]
+                S.append_rows(os.path.join(d, "sleeves", name + ".jsonl"), [], rows)
+            st = S.write_status(d)
+            self.assertEqual([st[k]["state"] for k in "abc"],
+                             ["ok", "soft", "hard"])
+            with open(os.path.join(d, "sleeves", "status.json")) as f:
+                self.assertEqual(json.load(f)["c"]["state"], "hard")
+
 
 if __name__ == "__main__":
     unittest.main()

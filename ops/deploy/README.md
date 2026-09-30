@@ -141,7 +141,12 @@ E1 run downloads SEC quarterly insider data sets into `~/g2/event_cache` (up to
 3 per hourly pass), so its rows start after about two passes. Pass `--no-events`
 to skip them. PEAD is not wired (its registered signal has no forward data
 source). Exit 1 means a logged row can no longer be reproduced (look-ahead or revised
-data). Optional macro/filing collector (nothing reads its output yet):
+data). Also in the same loop when the keys exist: the macro-lite ledger (`FRED_API_KEY`) and
+the JEV paired twins (`OPENROUTER_API_KEY`, real spend under the existing cap;
+`python3 ops/jev_twin.py ~/g2 --report` for the paired comparison).
+`~/g2/sleeves/status.json` flags a sleeve soft at -15% and hard at -20% drawdown.
+
+Optional macro/filing collector (nothing reads its output yet):
 `WITH_COLLECTOR=1 bash ops/deploy/start.sh ~/g2`. Plan and promotion rules: `plan/appendix/10-sleeve-integration-plan.md`.
 
 On a Linux-native checkout, `bash ops/deploy/start.sh` automates the same

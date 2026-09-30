@@ -233,8 +233,15 @@ def panel_sleeves(d, out):
             continue
         eq, last = rows[-1].get("equity"), rows[-1].get("date")
         pct = (eq / rows[0]["equity"] - 1) * 100 if rows[0].get("equity") else 0.0
-        out.append("  %-16s %s  equity %10.2f  %+6.2f%%  (%d sessions)" % (
-            n[:-6], last, eq, pct, len(rows)))
+        flag = ""
+        try:
+            with open(os.path.join(sd, "status.json")) as f:
+                st = json.load(f).get(n[:-6], {}).get("state", "ok")
+            flag = "" if st == "ok" else "  " + col("KILL-LIMIT " + st.upper(), RED)
+        except (OSError, ValueError):
+            pass
+        out.append("  %-24s %s  equity %10.2f  %+6.2f%%  (%d sessions)%s" % (
+            n[:-6], last, eq, pct, len(rows), flag))
 
 
 def panel_broker(broker, out):

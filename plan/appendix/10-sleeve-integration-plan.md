@@ -80,15 +80,30 @@ band. Promote at a 5-10% risk budget.
    forward source; rebuilding SUE elsewhere would be an unregistered signal.
 3. [done, opt-in] Collector as a background poller (`WITH_COLLECTOR=1`). The
    macro-lite tilt and event-day flags that would consume it are not built.
-4. JEV paired A/B: every sleeve's filtered twin on identical candidates,
-   prompt/context hash journaled before the outcome; success criterion
-   preregistered before any run.
-5. Netting router and Tier R promotion of T1 (after the fidelity gate).
-6. [partly done] Kill inputs: account daily loss > 3% holds entries for the
+4. [done] JEV paired A/B (`ops/jev_twin.py`): every sleeve's position adds
+   get a JEV verdict (existing spend governor, cache, pinned model, tickers
+   aliased); a filtered twin ledger `<sleeve>__jev` drops vetoed adds to BIL.
+   Decisions are journaled before use. Runs only when OPENROUTER_API_KEY is
+   set; `python3 ops/jev_twin.py ~/g2 --report` gives the paired difference.
+   The 200+ decisions / 50 bp / t>2 criterion is a working one, not
+   preregistered.
+5. [done] Macro-lite ledger (`ops/macro_shadow.py`, needs FRED_API_KEY):
+   60/40 tilted +/-10 points on the 1-year DGS2 change and 1-year VTI return.
+   Event-day flags are not produced (no dated FOMC/CPI/NFP calendar in the
+   repo).
+6. [done] Per-sleeve kill limits: `sleeves/status.json` flags a sleeve soft at
+   -15% and hard at -20% from its own peak (10% vol target x 1.5 / 2); shadow
+   ledgers cannot be halted, so it is reported (monitor) for promotion.
+7. [BLOCKED] Netting router and Tier R promotion of T1/T2. Trend and sector are
+   long-or-cash and need automated SELLs, but Alpaca refuses a sell of shares
+   held by open stop/bracket legs (finding K5, moc_plan.cpp) and the loop has
+   no cancel-legs-then-sell sequence. Building the router first would route
+   buys that can never be exited cleanly. Order: implement the exit sequence
+   (K5), then the netting layer, then promote.
+8. [done] Account kill inputs: account daily loss > 3% holds entries for the
    ET day; account drawdown >= 15% from `hwm.txt` latches (`dd-kill.latch`,
    operator deletes it to clear) into the kernel's existing MEDIUM kill, which
-   stops entries and runs the existing flatten sweep. Per-sleeve -1.5x/-2x
-   limits wait for Tier R. Practitioner conventions, not tuned values.
+   stops entries and runs the existing flatten sweep.
 
 ## 6. Known caveats
 

@@ -421,7 +421,7 @@ class Integrated(unittest.TestCase):
             with tempfile.TemporaryDirectory() as d:
                 ed = Edgar(filings())
                 for _ in range(3):
-                    bad, summ = S.run(d, NOW, http_get=alpaca, edgar_get=ed,
+                    bad, summ = S.run(d, NOW, http_get=alpaca, edgar_get=ed, extras=False,
                                       sleep=noop)
                 self.assertEqual(bad, [])
                 for sid in list(E.E1_IDS.values()) + list(E.I1_IDS.values()):
@@ -429,11 +429,11 @@ class Integrated(unittest.TestCase):
                     rows, _ = S.read_log(os.path.join(d, "sleeves", sid + ".jsonl"))
                     self.assertEqual(rows[0]["date"], FWD)
                 bad, _ = S.run(d, NOW, verify=True, http_get=alpaca,
-                               edgar_get=ed, sleep=noop)
+                               edgar_get=ed, extras=False, sleep=noop)
                 self.assertEqual(bad, [])
                 n = len(S.read_log(os.path.join(
                     d, "sleeves", "intraday_mom_pos_v1.jsonl"))[0])
-                S.run(d, NOW, http_get=alpaca, edgar_get=ed, sleep=noop)
+                S.run(d, NOW, http_get=alpaca, edgar_get=ed, extras=False, sleep=noop)
                 self.assertEqual(n, len(S.read_log(os.path.join(
                     d, "sleeves", "intraday_mom_pos_v1.jsonl"))[0]))
         finally:

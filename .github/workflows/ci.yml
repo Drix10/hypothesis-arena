@@ -88,6 +88,8 @@ jobs:
           PYTHONWARNINGS=error python3 research/tests/test_candidate_wire.py
           PYTHONWARNINGS=error python3 research/tests/test_core_passive.py
           PYTHONWARNINGS=error python3 research/tests/test_sleeve_shadow.py
+          PYTHONWARNINGS=error python3 research/tests/test_jev_twin.py
+          PYTHONWARNINGS=error python3 research/tests/test_macro_shadow.py
           PYTHONWARNINGS=error python3 research/tests/test_event_shadow.py
           PYTHONWARNINGS=error python3 research/tests/test_pead_data.py
           PYTHONWARNINGS=error python3 research/tests/test_pead_sleeve.py
