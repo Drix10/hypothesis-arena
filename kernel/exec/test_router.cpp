@@ -545,6 +545,11 @@ int main() {
               "cancel-confirm-step");
         o.adapter_responded = true;
         o.cancel_confirmed = true;
+        auto r6u = Step(r4.next, in, venue, o);  // no authoritative qty
+        Check(r6u.action == RouteAction::CONFIRM_CANCELLED &&
+                  r6u.next.state == RouteState::CANCEL_SENT,
+              "cancel-qty-unproven-reconfirms");
+        o.cancel_filled_qty = 0;
         auto r6 = Step(r4.next, in, venue, o);
         Check(r6.action == RouteAction::JOURNAL_CANCEL &&
                   r6.next.state == RouteState::CANCELLED,
@@ -722,8 +727,16 @@ int main() {
         // repair fails -> flatten immediately, then exit journaled
         auto r4f = Step(r3.next, in, venue, o);
         (void)r4f;
+        RouteObs stray = o;  // a leftover lookup answer, not a repair result
+        stray.repair_ok = false;
+        stray.repair_responded = false;
+        auto rs = Step(r3.next, in, venue, stray);
+        Check(rs.action == RouteAction::NONE &&
+                  rs.next.state == RouteState::REPAIR_SENT,
+              "stray-answer-does-not-flatten");
         RouteObs of = o;
         of.repair_ok = false;
+        of.repair_responded = true;
         auto r5 = Step(r3.next, in, venue, of);
         Check(r5.action == RouteAction::FLATTEN_NOW &&
                   r5.next.state == RouteState::EXIT_SENT,
@@ -1559,6 +1572,7 @@ int main() {
         RouteObs of2 = OpenMarket();
         of2.adapter_responded = true;
         of2.cancel_confirmed = true;
+        of2.cancel_filled_qty = 0;
         auto rf2 = Step(rn.next, in, venue, of2);
         Check(rf2.action == RouteAction::JOURNAL_CANCEL &&
                   rf2.next.state == RouteState::CANCELLED,

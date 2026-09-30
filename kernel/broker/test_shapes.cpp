@@ -126,6 +126,9 @@ int main(int argc, char** argv) {
           g_last_req.find("\"order_class\":\"oco\"") != std::string::npos &&
               g_last_req.find("\"time_in_force\":\"gtc\"") !=
                   std::string::npos);
+    CHECK("oco-stop-limit-past-stop",
+          g_last_req.find("\"stop_price\":\"1.00\",\"limit_price\":\"0.98\"") !=
+              std::string::npos);
     t3.gtc = false;
     ad.EstablishProtection(t3);
     CHECK("oco-repair-day",

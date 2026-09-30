@@ -114,6 +114,10 @@ struct RouteObs {
     bool exit_responded = false;  // close attempt resolved (else wait)
     broker::CloseResult exit_ack;  // ambiguous exit reconciles by ID
     bool repair_ok = false;  // EstablishProtection attempt confirmed
+    // The repair attempt resolved (ok or not). A stray answer for another
+    // lookup must not read as a failed repair: only this flag or repair_ok
+    // moves REPAIR_SENT.
+    bool repair_responded = false;
     // Identity tag (P1-5): observations carry the client ID they report on.
     // An established machine accepts only matching tagged observations;
     // foreign and untagged ones are ignored. IDLE has no identity yet.

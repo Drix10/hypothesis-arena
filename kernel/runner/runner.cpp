@@ -24,6 +24,9 @@ namespace jev {
 namespace runner {
 
 namespace {
+// Bounded tries for one protection repair (each pass queries before posting).
+constexpr int kRepairAttempts = 3;
+
 bool SameId(const char* a, const char* b) {
     if (!a || !b) return false;
     int i = 0;
@@ -3328,15 +3331,23 @@ bool G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
                       rcoid);
             CopyStr(po.intent_id, sizeof(po.intent_id),
                       s.intent.intent_id);
+            // A timeout or 5xx does not mean the order failed to land, and a
+            // failed repair flattens the position. So retry (bounded) under the
+            // same deterministic id: each pass queries first, so a repair that
+            // did land is adopted and never posted twice.
             bool posted = false;
-            broker::OrderQuery pre = adapter_.QueryOnce(rcoid);
-            NoteQuarantine(s, pre, "S2", now_ns);
-            if (pre.transport_ok && pre.found) {
-                s.repair_ok = pre.protection_active ||
-                              pre.bracket_class;
-            } else if (pre.transport_ok && !pre.found) {
-                s.repair_ok = adapter_.EstablishProtection(po);
-                posted = true;
+            for (int attempt = 0; attempt < kRepairAttempts && !s.repair_ok;
+                 ++attempt) {
+                broker::OrderQuery pre = adapter_.QueryOnce(rcoid);
+                NoteQuarantine(s, pre, "S2", now_ns);
+                if (pre.transport_ok && pre.found) {
+                    s.repair_ok = pre.protection_active || pre.bracket_class;
+                    break;  // the venue holds the order: its answer is final
+                }
+                if (pre.transport_ok && !pre.found) {
+                    s.repair_ok = adapter_.EstablishProtection(po);
+                    posted = true;
+                }
             }
             return posted;
         }
@@ -3628,6 +3639,14 @@ bool G0Runner::Cycle(long long now_ns) {
     for (std::size_t i = 0; i < slots_.size(); ++i) {
         Slot& s = slots_[i];
         if (!s.active || s.done || s.frozen) continue;
+        // A restart can find a slot waiting on a repair whose POST result died
+        // with the old process. Re-drive it once: the deterministic repair id
+        // is queried first, so a repair that landed is adopted, not doubled.
+        if (s.m.state == exec::RouteState::REPAIR_SENT && !s.has_repair) {
+            exec::RouteOut redrive;
+            redrive.action = exec::RouteAction::ESTABLISH_PROTECTION;
+            Dispatch(s, redrive, now_ns);
+        }
         MaybeForceQuery(s, now_ns);
         for (int it = 0; it < 12; ++it) {
             exec::RouteObs obs;
@@ -3701,6 +3720,7 @@ bool G0Runner::Cycle(long long now_ns) {
             }
             if (s.has_repair) {
                 obs.adapter_responded = true;
+                obs.repair_responded = true;
                 obs.repair_ok = s.repair_ok;
                 s.has_repair = false;
             }

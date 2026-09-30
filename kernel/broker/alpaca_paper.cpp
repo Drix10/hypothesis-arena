@@ -768,8 +768,8 @@ bool AlpacaPaperAdapter::EstablishProtection(
     const ProtectedOrder& o) {
     // Recovery-only repair: attach an OCO protection pair to an
     // already-acknowledged position. OCO legs are LIMIT orders (market OCO is
-    // invalid): TP limit at tp, stop leg as stop-limit with limit == stop
-    // (integer cents, no slippage allowance). A long's protection sells with
+    // invalid): TP limit at tp, stop leg as stop-limit with the limit 2%
+    // past the stop (integer cents). A long's protection sells with
     // tp > stop; a short's buys with stop > tp. True = both legs acked.
     if (!transport_ || o.qty_shares <= 0 || o.stop_cents <= 0) return false;
     bool is_long = (o.side == OrderSide::BUY);
@@ -798,9 +798,17 @@ bool AlpacaPaperAdapter::EstablishProtection(
     if (o.tp_cents <= 0) return false;
     if (is_long && !(o.tp_cents > o.stop_cents)) return false;
     if (!is_long && !(o.stop_cents > o.tp_cents)) return false;
-    char tp[32], sl[32];
+    char tp[32], sl[32], sll[32];
     FormatCents(tp, sizeof(tp), o.tp_cents);
     FormatCents(sl, sizeof(sl), o.stop_cents);
+    // The stop leg is a stop-limit. A limit equal to the stop never fills on
+    // a gap through the stop, so allow 2% of slippage past it (for a long the
+    // limit sits below the stop, for a short above).
+    std::int64_t slip = o.stop_cents / 50;
+    if (slip < 1) slip = 1;
+    std::int64_t lim = is_long ? o.stop_cents - slip : o.stop_cents + slip;
+    if (lim < 1) lim = 1;
+    FormatCents(sll, sizeof(sll), lim);
     char body[768];
     int w = std::snprintf(
         body, sizeof(body),
@@ -811,7 +819,7 @@ bool AlpacaPaperAdapter::EstablishProtection(
         "\"stop_loss\":{\"stop_price\":\"%s\",\"limit_price\":\"%s\"}}",
         o.symbol, (long long)o.qty_shares,
         is_long ? "sell" : "buy",  // protection opposes the position
-        o.gtc ? "gtc" : "day", o.client_order_id, tp, sl, sl);
+        o.gtc ? "gtc" : "day", o.client_order_id, tp, sl, sll);
     if (w <= 0 || w >= static_cast<int>(sizeof(body))) return false;
     HttpRequest req;
     req.method = "POST";

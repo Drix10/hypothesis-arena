@@ -2629,6 +2629,52 @@ int main() {
         }
         Check(queried_repair, "rr-repair-lookup");
     }
+    // 40c. REPAIR_SENT restart with the repair order absent at the venue (the
+    // POST died with the old process): the slot re-drives the repair once.
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-312", "AAPL", 0, 0, 100,
+                          12, 100, &cid)
+                   .empty(),
+              "rd-image");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "rd-recover");
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 BracketReply("accepted", "100").c_str());
+        Check(g.Cycle(g_now), "rd-cycle");
+        const auto* rs = g.Find("intent-312");
+        Check(rs && rs->done &&
+                  rs->m.state == jev::exec::RouteState::PROTECTED,
+              "rd-reprotected");
+        Check(CountMethod("POST", "/v2/orders") == 1, "rd-one-post");
+    }
+    // 40d. A transient repair failure (5xx) is retried under the same id; the
+    // position is protected on the second POST instead of being flattened.
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-313", "AAPL", 0, 0, 100,
+                          3, 100, &cid)
+                   .empty(),
+              "rt-image");
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "rt-recover");
+        PushRule("GET", "by_client_order_id", 200,
+                 PlainReply("filled", "100").c_str());
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 503, "{}");
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 BracketReply("accepted", "100").c_str());
+        Check(g.Cycle(g_now), "rt-cycle");
+        const auto* rs = g.Find("intent-313");
+        Check(rs && rs->done &&
+                  rs->m.state == jev::exec::RouteState::PROTECTED,
+              "rt-retried-protected");
+        Check(CountMethod("POST", "/v2/orders") == 2, "rt-two-posts");
+    }
     // 41. P1 S2 union semantics: (a) PROTECTED +100 vs broker
     // +100 = quiet; (b) local-only = drift; (c) broker-only =
     // drift; (d) short agreement = quiet.

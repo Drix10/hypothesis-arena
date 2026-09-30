@@ -765,7 +765,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             return o;
         }
         case RouteState::REPAIR_SENT: {
-            if (!obs.adapter_responded) {
+            if (!obs.repair_ok && !obs.repair_responded) {
                 o.action = RouteAction::NONE;
                 o.reason = "exec:awaiting-repair";
                 return o;
@@ -818,7 +818,15 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 // Contradictory-lower final (below the fresher floor):
                 // unattributed, never regress.
                 if (fq >= 0 && fq < o.next.filled_qty) fq = -1;
-                if (o.next.filled_qty == 0 && fq <= 0) {
+                if (o.next.filled_qty == 0 && fq < 0) {
+                    // Cancel confirmed but the final filled quantity is
+                    // absent: a market entry may have filled meanwhile, so
+                    // "nothing filled" is unproven. Confirm again.
+                    o.action = RouteAction::CONFIRM_CANCELLED;
+                    o.reason = "exec:cancel-qty-unproven";
+                    return o;
+                }
+                if (o.next.filled_qty == 0 && fq == 0) {
                     o.action = RouteAction::JOURNAL_CANCEL;
                     o.next.state = RouteState::CANCELLED;
                     o.journal_kind = "cancel";
