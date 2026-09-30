@@ -104,15 +104,14 @@ int main(int argc, char** argv) {
     io.data = [](const std::string& path, std::string* body) {
         return jev::broker::CurlData(path, body);
     };
-    {   // Credentials must work before the loop starts (a bad key would only
-        // show up as endless account_ok=0 ticks).
+    {   // Advisory credential probe. Never fatal: an outage or bad key must
+        // leave the loop running fail-safe (account_ok=0 -> no orders, alerts).
         int st = 0;
         std::string body;
-        if (!io.rest("GET", "/v2/account", &st, &body) || st != 200) {
-            std::printf("g0_paper_loop: refused: GET /v2/account failed "
-                        "(status %d): check the Alpaca paper keys\n", st);
-            return 2;
-        }
+        if (!io.rest("GET", "/v2/account", &st, &body) || st != 200)
+            std::printf("g0_paper_loop: warning: GET /v2/account status %d; "
+                        "no orders until the account is readable (check the "
+                        "Alpaca paper keys)\n", st);
     }
     jev::runner::PaperLoop loop(runner, io, lc);
     int bad_ticks = 0;

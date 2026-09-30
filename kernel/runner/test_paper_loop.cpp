@@ -107,7 +107,7 @@ static void Append(const std::string& p, const std::string& s) {
 struct Env {
     std::string dir = "plp_tmp";
     Env() {
-        std::system(("rm -rf " + dir).c_str());
+        (void)!std::system(("rm -rf " + dir).c_str());
         mkdir(dir.c_str(), 0755);
         std::string body = "G0_PAPER|human|2026-09-25T00:00:00Z|0|GENESIS";
         Write(dir + "/STAGE",
@@ -115,7 +115,7 @@ struct Env {
               "2026-09-25T00:00:00Z\ncapital_usd: 0\nattest_hash: " +
                   Sha256Hex(body) + "\n");
     }
-    ~Env() { std::system(("rm -rf " + dir).c_str()); }
+    ~Env() { (void)!std::system(("rm -rf " + dir).c_str()); }
 };
 
 int main(int argc, char** argv) {

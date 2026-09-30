@@ -1237,8 +1237,8 @@ bool G0Runner::TakeDirLock() {
     SetEndOfFile(h);
     long long os = (long long)(intptr_t)h;
 #else
-    (void)::ftruncate(fd, 0);
-    (void)::write(fd, b, n);
+    if (::ftruncate(fd, 0) != 0) { /* stamp is advisory; the flock is the lock */ }
+    if (::write(fd, b, n) < 0) { /* same */ }
     long long os = (long long)fd;
 #endif
     DirHold hd;
