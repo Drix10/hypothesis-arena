@@ -1,16 +1,16 @@
-# 10 — Capital Gates, Kill Switches, and Spend Control (freeze v3)
+# 10 - Capital Gates, Kill Switches, and Spend Control (freeze v3)
 
 Full autonomy is granted *inside a box*. This doc defines the box: which
 stage the system is in, what that stage permits, what the operator may
 legally trade, who may change any of it (a human, always), how it is shut
-down, and how much it may spend on AI to earn what it earns.
+down, and how much it may spend on AI.
 
 The system is autonomous in **research, decision, and execution**. It is
 never autonomous in **capital escalation**. Freeze v3 changes are marked.
 
 ## 10.1 The stage chain (the box): signed manifests (locked 2026-09-18, text repaired v3)
 
-A hash is not a signature — anyone holding a file can recompute it. The
+A hash is not a signature - anyone holding a file can recompute it. The
 human act and the runtime state are therefore separate objects:
 
 - **`PROMOTION_MANIFEST`** (human-owned, written with the process stopped,
@@ -93,7 +93,7 @@ legal advice.
 `R-multiplier` scales only stage exposure/position/sizing/trade-count
 limits; it never scales safety thresholds (correlation > .9, drawdown >
 10%, vol > 3×, flip lock, R15 limits, freshness windows, security bounds)
-and never scales the rules — R1–R19 always apply.
+and never scales the rules - R1–R19 always apply.
 
 | | G0_PAPER | G1_TINY | G2_SCALED | G3_FULL |
 |---|---|---|---|---|
@@ -114,7 +114,7 @@ settlement dates use the exchange calendar (R18).
 G1 symbol is a highly liquid US ETF (SPY/QQQ/IWM-class spreads and
 volume) traded by the promoted sleeve. The freeze-v2 rule required a
 forex major because of the $25k pattern-day-trader constraint; both
-premises are gone — forex is not a legal live target for the operator
+premises are gone - forex is not a legal live target for the operator
 (§10.1a), and the PDT framework was eliminated (SEC approval 2026-04-14;
 cash accounts were never governed by it). A sleeve whose champion
 universe has several symbols goes live at G1 on its single most liquid
@@ -125,7 +125,7 @@ symbol, with the promotion evidence recomputed for that restriction.
 Every box must be true **and** a human must then sign. Meeting the
 criteria grants the *right to ask*, nothing more.
 
-**G0 → G1** — the champion sleeve passed A-gate and B-gate (doc 11
+**G0 → G1** - the champion sleeve passed A-gate and B-gate (doc 11
 §11.3a) and its evidence is transferable (produced under the live
 constraint set); 30 consecutive clean G0b days; zero R-rule violations;
 replay determinism green every week (D1); tracking within the sleeve's
@@ -134,13 +134,13 @@ settlement, and isolation drills passed; port-on-promotion vectors green
 (doc 04); jurisdiction gate complete (§10.1a); if the sleeve uses
 `filter = jev`, JEV calibration ≥ base rate over ≥ 200 decisions.
 
-**G1 → G2** — 30 consecutive live days at G1; zero R-rule violations;
+**G1 → G2** - 30 consecutive live days at G1; zero R-rule violations;
 realized implementation shortfall within 1.5× `cost_v2`; live-vs-shadow
 divergence within the S3 band; AI-spend ratio computed daily in SHADOW
 (G1 has no ratio cap to enforce) with 30 days of computed-passing
 readings; calibration still ≥ baseline where applicable.
 
-**G2 → G3** — 60 consecutive live days at G2; the above sustained; max
+**G2 → G3** - 60 consecutive live days at G2; the above sustained; max
 drawdown < 5% over the window; ≥ 100 closed trades.
 
 ### Automatic demotion (no human needed, and no human can veto it)
@@ -166,8 +166,8 @@ Three levels. Agents can invoke none of them and can override none of them.
 
 | Level | Trigger | Effect | Resume |
 |---|---|---|---|
-| **SOFT** | `HALT` file; S5 JEV streak; feed stale > 30 s; spend tier 2; research plane paused past TTL | **Entries stop within 1 cycle.** Exits, stops, TP, reconcile all continue normally. Positions are managed, not abandoned. | Manual: remove file **and** restart with flag (doc 06 §6.4 — deleting the file alone does nothing) |
-| **MEDIUM** | R5 drawdown; daily loss breach; R-rule violation; calibration breach; spend tier 3 | Entries stop. **Then, conditionally:** if the venue is open and the spread is within the normal band, flatten every open position via market order now. If not (venue closed, spread abnormal, or the flatten order itself fails), do **not** force a bad-condition exit — leave the existing hard stop/TP in place exactly as under normal operation, and re-attempt the flatten every cycle until conditions allow or the position closes on its own stop/TP first. Stage demoted immediately either way. | Human review + stage re-approval |
+| **SOFT** | `HALT` file; S5 JEV streak; feed stale > 30 s; spend tier 2; research plane paused past TTL | **Entries stop within 1 cycle.** Exits, stops, TP, reconcile all continue normally. Positions are managed, not abandoned. | Manual: remove file **and** restart with flag (doc 06 §6.4 - deleting the file alone does nothing) |
+| **MEDIUM** | R5 drawdown; daily loss breach; R-rule violation; calibration breach; spend tier 3 | Entries stop. **Then, conditionally:** if the venue is open and the spread is within the normal band, flatten every open position via market order now. If not (venue closed, spread abnormal, or the flatten order itself fails), do **not** force a bad-condition exit - leave the existing hard stop/TP in place exactly as under normal operation, and re-attempt the flatten every cycle until conditions allow or the position closes on its own stop/TP first. Stage demoted immediately either way. | Human review + stage re-approval |
 | **HARD** | Journal chain break; reconcile drift unresolvable; broker auth failure; determinism failure; suspected compromise of the research-plane sandbox | Stop entries → verify broker-native protective orders exist on every open position (re-establish if missing and possible) → attempt flatten/cancel → leave broker-side protection ACTIVE → revoke credentials from the running process → trading process exits non-zero; supervisor does **not** restart it. Never revoke the only credentials that can protect a position before verifying broker-side protection exists. | Human, on the host, after forensics |
 
 Rules that hold at every level:
@@ -184,7 +184,7 @@ Rules that hold at every level:
   conditions never permitted a flatten; stops/TP own the risk). Re-attempts
   fire ONLY from `FLATTEN_PENDING` (no blind re-issue loops); a restart
   reloads the persisted state and reconciles with the broker before acting
-  — it never re-sends what the dead process may already have sent. Stage
+  - it never re-sends what the dead process may already have sent. Stage
   demotion is immediate on MEDIUM entry and independent of flatten progress.
 
 ## 10.4 AI spend control (R10, locked)
@@ -199,7 +199,7 @@ is journaled hourly and survives restart.
 
 | Stage | Absolute cap | Ratio cap |
 |---|---|---|
-| G0_PAPER | **$150 / 30 days** | none (no profit exists — do not compute a ratio against zero) |
+| G0_PAPER | **$150 / 30 days** | none (no profit exists - do not compute a ratio against zero) |
 | G1_TINY | $150 / 30 days | none (stage capital is too small for a meaningful ratio; absolute cap governs) |
 | G2_SCALED | $400 / 30 days | rolling-30d AI spend ≤ **20%** of trailing-90d realized net profit† |
 | G3_FULL | $1,000 / 30 days | same 20% test |
@@ -210,11 +210,11 @@ window (doc 05, locked). Both caps apply; the binding one wins.
 † **The ratio is undefined, not automatically failed, when trailing-90d net
 profit ≤ $0.** 20% of a loss is a negative number, and testing spend against a
 negative cap would make the ratio test fail from the first dollar spent during
-any ordinary drawdown — not because AI spend did anything wrong, but because
+any ordinary drawdown - not because AI spend did anything wrong, but because
 the denominator went negative. When trailing-90d profit ≤ $0: the ratio test is
 **suspended** (not evaluated, not deemed passed or failed), the absolute cap
 alone governs, and the daily summary flags `ratio_test: suspended (unprofitable
-window)`. This is a visibility flag only — it is not itself a demotion trigger.
+window)`. This is a visibility flag only - it is not itself a demotion trigger.
 A drawdown that is actually a problem is caught by R5 (drawdown halt) or R13
 (calibration floor) on its own terms; spend control's job is spend, not
 performance, and conflating the two would fire the wrong circuit breaker for
@@ -227,10 +227,10 @@ extrapolated), so the brake is applied before the wall, not at it.
 
 | Tier | Condition | Automatic response |
 |---|---|---|
-| **0 — normal** | projection < 60% of cap | Full research depth |
-| **1 — trim** | ≥ 60% | Research cycle interval doubled; `critique` node runs on TRIGGER-class symbols only; NULL-class source extraction suspended |
-| **2 — cheap** | ≥ 80% | Non-JEV LLM work switches to the cheapest configured model; `hypothesize` prose capped at 200 chars; watchlist cut to the 2 best-calibrated symbols; **SOFT kill: no new entries** |
-| **3 — stop** | ≥ 100%, or ratio test failed 3 consecutive days at G2/G3 | **MEDIUM kill**: entries halted, positions flattened in an orderly way, stage demoted, alert. Exits and reconcile stay live. |
+| **0 - normal** | projection < 60% of cap | Full research depth |
+| **1 - trim** | ≥ 60% | Research cycle interval doubled; `critique` node runs on TRIGGER-class symbols only; NULL-class source extraction suspended |
+| **2 - cheap** | ≥ 80% | Non-JEV LLM work switches to the cheapest configured model; `hypothesize` prose capped at 200 chars; watchlist cut to the 2 best-calibrated symbols; **SOFT kill: no new entries** |
+| **3 - stop** | ≥ 100%, or ratio test failed 3 consecutive days at G2/G3 | **MEDIUM kill**: entries halted, positions flattened in an orderly way, stage demoted, alert. Exits and reconcile stay live. |
 
 - **JEV is never throttled away.** It is the calibrated decision gate and is cheap
   relative to research; if spend is a problem, the fix is less *research*, not a
@@ -242,7 +242,7 @@ extrapolated), so the brake is applied before the wall, not at it.
   must carry consecutive revs, from/to matching the governor's emission
   rule (first from Tier 0 when the chain start lies inside the bounded
   tail window), snapshot tier equal to its row, and max rev
-  exactly equal to the state rev — a forged newer row denies, and rows
+  exactly equal to the state rev - a forged newer row denies, and rows
   newer than state are never adopted (state-first persist means the
   state always leads). Legacy (rev-less) rows recover only in an
   explicitly legacy deployment (state rev 0, no revisioned rows):
@@ -258,7 +258,7 @@ extrapolated), so the brake is applied before the wall, not at it.
   history (failed -> ok, with or without recomputed digests), a
   head/day mismatch, a stripped head, a legacy-format row inside the
   chain era, or more than ONE row beyond the head (the only legitimate
-  crash residue: append landed, state persist did not — adopted and
+  crash residue: append landed, state persist did not - adopted and
   persisted before any new append) all deny. The chain and the anchor
   live in the same state directory, so they detect edits and
   inconsistent crash residue, not a writer able to rewrite both
@@ -275,20 +275,20 @@ extrapolated), so the brake is applied before the wall, not at it.
 
 - Every LLM call is tagged `{stage, cycle_id, symbol, node, model,
   prompt_tokens, completion_tokens, usd, category}` where category is one of
-  `decision` (JEV — never throttled), `research` (plane — throttled by tiers),
-  `experiment` (shadow/challenger — per-experiment budgets, doc 11),
+  `decision` (JEV - never throttled), `research` (plane - throttled by tiers),
+  `experiment` (shadow/challenger - per-experiment budgets, doc 11),
   `observability`. Cost per opportunity and per closed trade are reported per
   category. The 20%-of-profit ratio stays as a capacity governor; experiment
   spend additionally needs its own expected-incremental-edge justification
-  (doc 11 registry) — profit unlocks capacity, never blind spending.
+  (doc 11 registry) - profit unlocks capacity, never blind spending.
 - The daily summary (doc 06 §6.3) reports: spend, projection, tier, spend per
-  closed trade, and — from G2 — the spend/profit ratio.
+  closed trade, and - from G2 - the spend/profit ratio.
 - Cost per *decision* and cost per *closed trade* are first-class metrics. A
   strategy that is profitable gross of AI cost and unprofitable net of it is a
   losing strategy, and the daily summary is written to make that impossible to
   miss.
 
-### 10.4.1 Reservation mechanism (frozen — change = doc edit + fresh paper window)
+### 10.4.1 Reservation mechanism (frozen - change = doc edit + fresh paper window)
 
 The pre-call order is fixed: R15 token reservation, then worst-case
 dollar HOLD against the stage cap, then and only then provider
@@ -302,7 +302,7 @@ and blocks future spend until a supervisor reconciles.
   never run (construction blocks); usd=0.0 always means a zero-price
   model, never unknown.
 - Token bound: the measured utf-8 bytes of the exact outbound prompt
-  (a true upper bound for byte-level-BPE providers — every token
+  (a true upper bound for byte-level-BPE providers - every token
   spans >= 1 byte; post-call reconciliation tripwires the assumption
   and aborts on violation) plus COMPLETION_MAX = 1500 tokens per
   provider step, clamped downward into every generate call. Agentic
@@ -312,7 +312,7 @@ and blocks future spend until a supervisor reconciles.
   TOOLS_PER_STEP_MAX = 4 tool slots reserved up front.
 - Holds: `reserved` (pre-spawn; auto-released after 600 s as a crashed
   pre-spawn never billed) → `invoked` (post-spawn; never auto-released
-  — only clean settlement or supervisor reconcile clears it).
+  - only clean settlement or supervisor reconcile clears it).
   Committed spend = trailing-30d ledger + outstanding holds.
   Pre-provider unwind rule: unwinding a reservation before the
   provider was provably touched settles the lease at zero and
@@ -350,7 +350,7 @@ envelope and the parent reclaims authoritatively. The kill ladder
   transition with its projection), `ratio_journal.jsonl` (daily ratio
   evaluations). The T2 SOFT-kill and T3 MEDIUM-kill signals are
   durable sentinel files plus supervisor-hook events; the trading-side
-  kill state machine that consumes them is Slice-D+ work — the plane
+  kill state machine that consumes them is Slice-D+ work - the plane
   signals, it never acts on capital. Until the trailing-90d profit
   feed is wired, every ratio evaluation reports suspended (the same
   visibility flag as an unprofitable window) and the absolute cap
@@ -362,7 +362,7 @@ envelope and the parent reclaims authoritatively. The kill ladder
   (x_lists_tail, launch_library, submarine_cables, aisstream,
   opensky_adsb) plus records explicitly carrying class NULL.
 
-### 10.4.2 Authorization hardening (frozen — change = doc edit + fresh paper window)
+### 10.4.2 Authorization hardening (frozen - change = doc edit + fresh paper window)
 
 Final-audit corrections to the §10.4.1 mechanism (all proven through
 the graph → worker → budget → attribution/spend → publish path):
@@ -375,7 +375,7 @@ the graph → worker → budget → attribution/spend → publish path):
   cap admit exactly one).
 - Research-call admission re-reads the DURABLE tier in the same
   tier-lock section that inserts the dollar hold (tier lock first,
-  ledger second — the order every tier evaluation uses). The graph's
+  ledger second - the order every tier evaluation uses). The graph's
   per-node tier snapshot is only the plan (model, prose cap,
   watchlist): Tier 3, a durable tier above the snapshot, or
   unverifiable tier state refuses pre-spawn, so a Tier-3 persist
@@ -424,7 +424,7 @@ the graph → worker → budget → attribution/spend → publish path):
 Spend identity follows model identity (§3.5b): the priced `model_id`
 must equal `provider_cfg["model_id"]` before any reservation (frozen
 §10.4.2), so retiring, removing, or changing an active model's
-pricing entry can never open an unpriced-call path — unpriced models
+pricing entry can never open an unpriced-call path - unpriced models
 never run, construction blocks. A pricing/config change alters the
 pricing fingerprint and forces immediate fresh tier evaluation, never
 reuse of stale tier state (frozen §10.4.2). The runtime governor
@@ -453,7 +453,7 @@ G0 bootstrap (human, at build): copy the §10.1 template, set
 compute `attest_hash` with
 `printf '%s' "G0_PAPER|<name>|<iso8601>|0|GENESIS" | sha256sum`, place the
 file where the kernel reads it, and log the signing in doc 07. Until that
-file exists and verifies, nothing starts — there is no default stage.
+file exists and verifies, nothing starts - there is no default stage.
 
 - [ ] Stage-chain verification tested, including a deliberately corrupted
       file (must land in G0_PAPER, not live).

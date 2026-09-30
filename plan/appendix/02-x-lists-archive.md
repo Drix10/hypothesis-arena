@@ -1,4 +1,4 @@
-# Appendix 02 — X-Lists signal system archive (NON-PRODUCTION / HISTORICAL)
+# Appendix 02 - X-Lists signal system archive (NON-PRODUCTION / HISTORICAL)
 
 Moved VERBATIM from doc 02 §§2.1–2.6 in the freeze-v3 rebaseline
 (2026-09-28). X is out of the production path (§2.6 below, unchanged).
@@ -7,7 +7,7 @@ book; its filename is legacy until the code-phase freeze-check update.
 
 Original doc 02 header (freeze v2): Ported from `Twitter-Gemini-GitHub-MVP`.
 
-## 2.1 What the old system did (HISTORICAL — archived design, not built)
+## 2.1 What the old system did (HISTORICAL - archived design, not built)
 
 ```
 cron (schedule)
@@ -59,10 +59,10 @@ Every accepted item emits exactly one JSON record:
 ```
 
 No scores here. Scoring happens in the JEV layer (doc 03), which reads the raw
-texts inline. No polarity field on the record — deliberate (see doc 03 §3.4).
+texts inline. No polarity field on the record - deliberate (see doc 03 §3.4).
 This system only collects, filters, dedupes, and stores.
 
-## 2.4 Universe (HISTORICAL — verified 2026-09-18, kept as research history; not polled in v1)
+## 2.4 Universe (HISTORICAL - verified 2026-09-18, kept as research history; not polled in v1)
 
 Finance-first. All IDs below were opened logged-in and resolve; all showed
 posts within ~24h. Full per-list record (name, owner, members, followers,
@@ -70,7 +70,7 @@ recency) is Phase-0 evidence, kept with the sign-off log.
 
 > HISTORICAL / NON-PRODUCTION (§2.6 locks this): the A/B/C split below is
 > the archived Phase-0 research universe. "TRIGGER-eligible" here MEANT
-> eligible-in-principle under a transport that no longer exists in v1 —
+> eligible-in-principle under a transport that no longer exists in v1 -
 > no X list, record, or mirror feed is TRIGGER-eligible in v1 production,
 > and no v1 code path polls X. Do not read §2.4 as an active source table;
 > the active v1 source table is doc 09 §9.1 (X listed there as
@@ -80,7 +80,7 @@ recency) is Phase-0 evidence, kept with the sign-off log.
 X Lists-tab search from the user's own page (curator profiles publish almost
 no public lists, so search beats curation):
 
-- `1723341818878644456` Macro, @dampedspring (Andy Constan), 40 members —
+- `1723341818878644456` Macro, @dampedspring (Andy Constan), 40 members -
   highest-quality macro voice in the set.
 - `1470525121328726018` Investing-Macro, 23 members / 1.8K followers.
 - `1628861381368766464` Forex Traders, 30 members.
@@ -92,11 +92,11 @@ no public lists, so search beats curation):
 - `1309396858633158658` Stocks, 60 members.
 
 Plus the fixed account roster (all 6 verified live 2026-09-18): `@DeItaone`,
-`@Fxhedgers`, `@FirstSquawk`, `@LiveSquawk`, `@elerianm`, `@MacroAlf` —
+`@Fxhedgers`, `@FirstSquawk`, `@LiveSquawk`, `@elerianm`, `@MacroAlf` -
 polled as user-timeline feeds through the same transport.
 
 **B. Market-moving AI/tech CONTEXT (13 lists, regime + Mag7/semiconductor
-sentiment — kept because this news moves our symbols, not for tech curiosity):**
+sentiment - kept because this news moves our symbols, not for tech curiosity):**
 AI Companies #1+#2 (`1696336383231525354`, `1811755253970112761`), AI
 Leaders/Founders #1+#2 (`1744564719309279599`, `1828820239175590166`),
 Tech Companies & News (`1272237719733796866`), Tech Journalists & VIPs
@@ -108,13 +108,13 @@ U.S. News (`1325322395335315457`), VC Firms (`1219428908283514881`), Investors
 
 **C. Dropped from the universe.** The remaining ~40 old IDs (dev tools, music,
 art, film, real estate, education, health, AR/VR, quantum, climate, cyber,
-crypto/Web3, etc.) stay on record in git history but are NOT polled — they
+crypto/Web3, etc.) stay on record in git history but are NOT polled - they
 cannot move forex majors or US stocks and only cost tokens. The 2 crypto
 lists are additionally excluded by the no-crypto rule (doc 01).
 
 TRIGGER vs CONTEXT reminder: a TRIGGER-classified list is only *eligible* to
 influence entries; each record must still pass the R12 timestamp gate (most
-mirror records land CONTEXT regardless — §2.5). Polling weight starts equal;
+mirror records land CONTEXT regardless - §2.5). Polling weight starts equal;
 reweight only with 2 weeks of measured hit-rate data.
 
 Macro relevance overlay (locked): lists about AI/infra/dev are REGIME context
@@ -123,7 +123,7 @@ macro/FX/earnings-native lists + calendar events (Fed/ECB, CPI, NFP, earnings fo
 covered names) + price feeds can trigger entries. This prevents
 "AI hype tweet → long EURUSD" nonsense.
 
-## 2.5 Collector design (HISTORICAL — the archived X-sidecar shape; production collector is §2.7 + doc 09)
+## 2.5 Collector design (HISTORICAL - the archived X-sidecar shape; production collector is §2.7 + doc 09)
 
 - **Transport (locked, corrected from an earlier draft of this doc): there is
   no free X API tier to build on.** As of 2026, X eliminated the free and
@@ -131,7 +131,7 @@ covered names) + price feeds can trigger entries. This prevents
   (charged per read and per post), with unmetered access granted only
   case-by-case to approved "public good" applications. Paying per call is a
   paid data subscription in substance even if billed as usage, and doc 01
-  forbids that for core operation — so the API is **not used**, full stop, not
+  forbids that for core operation - so the API is **not used**, full stop, not
   "used carefully."
   - Transport is therefore **self-hosted mirror feeds, best-effort**: Phase-0
     research selected `twikit-rss` (MIT, `GET /list/{id}/rss` + `/user/{name}/rss`,
@@ -147,7 +147,7 @@ covered names) + price feeds can trigger entries. This prevents
     about whether any *given record* has a trustworthy timestamp. A record from
     a TRIGGER-classified list still cannot enter JEV's TRIGGER-eligible feature
     set unless its `observed_at_ns` comes from the source's own publication
-    field — mirror content generally does not carry one reliably, so in
+    field - mirror content generally does not carry one reliably, so in
     practice most records land as CONTEXT via the R12 rule (doc 09 §9.2)
     regardless of which list they came from. The two gates are independent and
     both must pass.
@@ -163,24 +163,24 @@ covered names) + price feeds can trigger entries. This prevents
   atomic rename; the C++ tailer tracks inodes so midnight rotation can't drop
   or double-read a row.
 - Delivery: sidecar writes `signals.jsonl`; the research plane's `harvest` node tails
-  it as one input among many (doc 08 §8.3). `ctx/` never consumes raw signals — only
+  it as one input among many (doc 08 §8.3). `ctx/` never consumes raw signals - only
   validated features. No sockets, no shared memory for this path.
 - Failure default: stale signals expire after 6 h; context builder marks
   sentiment `stale=true` and sets `signal_count_6h=0`. **Stale/absent sentiment is
-  reported as absent, never as a neutral score** — a missing input and a
+  reported as absent, never as a neutral score** - a missing input and a
   balanced input are different states and JEV sees which one it is (doc 09 §9.3).
 - In practice this feed runs CONTEXT-only for the foreseeable future: not
   because §2.4's TRIGGER list classification is revoked, but because the
   free-only mirror transport rarely carries a timestamp good enough to clear
   the R12 gate (doc 09 §9.2). A TRIGGER-classified list whose mirror feed does
   start carrying reliable timestamps is free to clear that gate on its own
-  merits — nothing here lowers the §2.4 classification itself. Per doc 09 §9.1
+  merits - nothing here lowers the §2.4 classification itself. Per doc 09 §9.1
   this is an unproven source carried cheaply either way, and doc 11's promotion
   gate is the only way it becomes more than that.
 
 ## 2.6 v1 status: X disabled as a production input (locked 2026-09-18)
 
-Automated X collection — including the self-hosted session-mirror transport —
+Automated X collection - including the self-hosted session-mirror transport -
 is out of v1. It conflicts with X's terms (no scraping without permission),
 and the pay-per-use API is a paid subscription in substance, excluded by
 doc 01. No replacement with hand-pasted X context either: manual inputs are

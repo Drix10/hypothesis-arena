@@ -1,10 +1,10 @@
-# 12 — Controls and Benchmarks (freeze v3; `baseline_v1` frozen as negative control)
+# 12 - Controls and Benchmarks (freeze v3; `baseline_v1` frozen as negative control)
 
 Freeze v2 called `baseline_v1` "the permanent champion" and made "beat
 it" the AI layer's bar. S2 then measured it: it loses money, for a reason
 that is structural (§12.7). Beating a losing control proves nothing, so
-freeze v3 keeps `baseline_v1` exactly as specified — frozen, reproducible,
-never edited — but demotes it to a **negative control** and adds the
+freeze v3 keeps `baseline_v1` exactly as specified - frozen, reproducible,
+never edited - but demotes it to a **negative control** and adds the
 benchmark set every sleeve must beat (§12.6). The frozen specification
 below (§§12.1–12.5) is unchanged.
 
@@ -14,7 +14,7 @@ below (§§12.1–12.5) is unchanged.
 - US stocks: deterministic scan (doc 04 universe service) filtered to
   POINT-IN-TIME S&P-500 constituents (BASE1): membership, delistings, IPO
   age, liquidity, and corporate actions are all evaluated as-of the entry
-  timestamp from versioned constituent records — today's membership applied
+  timestamp from versioned constituent records - today's membership applied
   to history is survivorship bias and voids the run. Filter: median daily
   dollar volume > $50M and spread ≤ 5bp at entry, point-in-time.
 - The point-in-time universe is a VERSIONED ARTIFACT (frozen requirement):
@@ -57,14 +57,14 @@ never filled. Nothing else. No research plane, no JEV, no text.
 
 - Paper fill model (doc 06 Locked): BUY at mid + one full spread adverse,
   SELL at mid − one full spread adverse (BASE4), min 1bp, full size,
-  simulated. Cost stress at 1×/1.5×/2×/3× spread + fee — the baseline must be
+  simulated. Cost stress at 1×/1.5×/2×/3× spread + fee - the baseline must be
   reported at all four; a challenger beats the baseline only if it beats it at
   2× too (robustness, not optimism).
 - Labels per doc 11 §11.1 protocol (stop-first, gap = loss, censored third class).
 - Sessions America/New_York for stocks; forex needs open venue feed. Halts and
   missing data → excluded, never interpolated.
 
-## 12.6 Benchmark set (v3) — what every sleeve is scored against
+## 12.6 Benchmark set (v3) - what every sleeve is scored against
 
 Computed on the same window, same calendar, same `cost_v2`, daily returns:
 
@@ -77,7 +77,7 @@ Computed on the same window, same calendar, same `cost_v2`, daily returns:
    compared at matched volatility by de-risking whichever is riskier).
 3. **60/40** (SPY/IEF monthly rebalanced) as a sanity reference.
 4. **The same sleeve without its AI component** (paired; doc 11 §11.3b).
-5. **`baseline_v1`** — negative control and harness regression check: its
+5. **`baseline_v1`** - negative control and harness regression check: its
    frozen S2 numbers must reproduce bit-for-bit from the same manifests.
 
 ## 12.7 S2 result and diagnosis (recorded 2026-09-28)
@@ -93,12 +93,12 @@ Diagnosis (structural, not luck): `exit_profile_v1` places the stop at
 while equities must exit by the session close. A 3-hourly-ATR move inside
 at most 6.5 hours is rare, so most trades become time exits that pay
 costs on a near-random walk. Any successor to `baseline_v1` needs a
-horizon-consistent exit profile — which is a new versioned strategy (a
+horizon-consistent exit profile - which is a new versioned strategy (a
 doc 02 sleeve), never an edit of v1.
 
 S2 closure (doc 07 A1): rerun on SIP bars + SIP quotes so the primary
 ledger exists; record the numbers; the FX leg is dropped (forex is
-research-only). A negative result, honestly recorded, closes S2.
+research-only). A negative result, once recorded, closes S2.
 
 ## Locked decisions
 

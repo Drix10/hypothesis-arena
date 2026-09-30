@@ -5,10 +5,10 @@ relaxes none. Evidence base: `11-sleeve-evidence-review.md`. Recorded by the
 agent on the operator's instruction in chat, 2026-09-30 ("plan the best
 testing strategy for all of these, update all plan docs, then code").
 
-## 1. Where we actually are (from the trial ledger and `research/reports/`)
+## 1. Where things stand (from the trial ledger and `research/reports/`)
 
 All five built sleeves have run their A-gate (doc 11 §11.3a) on the frozen
-2023-09-01..2026-08-31 holdout and **all failed**:
+2023-09-01..2026-08-31 holdout and all failed:
 
 | Sleeve | Result | Why |
 |---|---|---|
@@ -19,14 +19,14 @@ All five built sleeves have run their A-gate (doc 11 §11.3a) on the frozen
 | E2det PEAD | FAIL, clearly | no drift in tradable names |
 
 Consequences that override the earlier draft of this appendix:
-1. **No sleeve is a promotion candidate.** Doc 07 §7.6 allows exactly one
+1. No sleeve is a promotion candidate. Doc 07 §7.6 allows exactly one
    champion through the kernel (G0b), and none exists. The g2 run is a
    plumbing test with the passive core; it is not a sleeve.
-2. **The netting router is not on the critical path.** It is needed only
+2. The netting router is not on the critical path. It is needed only
    when two or more sleeves trade the same account (after G1). The exit
    sequence for shares held by stop legs (K5) is the real prerequisite for
    any long-or-cash champion.
-3. **The burned holdouts stay burned.** Nothing here re-tunes on
+3. The burned holdouts stay burned. Nothing here re-tunes on
    2016-2026-08. Only data after 2026-09-01 is new information.
 4. A 3-year holdout cannot discriminate a Sharpe of 0.5-1 anyway:
    minimum track record (1.645/S)^2 years is 2.7 y at S=1.0, 4.8 y at 0.75,
@@ -50,7 +50,7 @@ short forward test; it is long data. So:
   sleeve plus its controls runs as a virtual ledger on live data
   (`ops/sleeve_shadow.py`, `ops/event_shadow.py`, `ops/macro_shadow.py`), all
   on the identical engine, `cost_v2`, next-open fills, settled cash, all
-  registered in the trial ledger BEFORE any result
+  registered in the trial ledger before any result
   (`ops/forward_register.py`). Question asked: does the failed A-gate
   hypothesis hold on untouched data, and how does it track its own replay.
   These are research observations under doc 11 §11.2; they are not
@@ -70,7 +70,7 @@ short forward test; it is long data. So:
 (equal-weight buy-and-hold of each sleeve's own universe, the vol-matched
 passive counterpart), `bench_spy_v1` (equity sleeves), `core_passive_v1`
 (60/40 sanity reference and the macro-lite baseline). Every sleeve is scored
-only as a **paired daily difference** against its mapped benchmark
+only as a paired daily difference against its mapped benchmark
 (`ops/sleeve_eval.py` `MAPPING`); paired differences remove market beta and
 are the most powerful test available. Benchmarks are not trials.
 
@@ -123,7 +123,7 @@ host: `python3 ops/long_history_fetch.py` then `python3 ops/long_history_run.py`
    includes <= 0): retire it from Track F, keep it as history.
 2. Track L shows it persists: the forward ledger keeps running; a new
    pre-registration on the FORWARD window (never the burned holdout) with the
-   canonical spec is written BEFORE the 2-year checkpoint, and only then can
+   canonical spec is written before the 2-year checkpoint, and only then can
    the A-gate be re-run on data that did not exist at registration.
 3. Only a sleeve that passes its A-gate then enters the B-gate, then the
    human picks the single G0b champion. The netting router and the K5 exit

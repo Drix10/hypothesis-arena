@@ -127,38 +127,49 @@ reason). It never touches the journal, candidates or STAGE. Spend caps still
 apply. With only the passive sleeve this shows the plumbing works, not
 whether JEV helps.
 
-Sleeve shadow ledgers (started automatically by `start.sh`, log-only): virtual
-$100k books for the 60/40 core, trend (T1) and sector momentum (T2), one
-hash-chained row per session in `~/g2/sleeves/`, shown in the monitor. They
-place no orders. Check that history reproduces (the fidelity gate) any time:
+Forward ledgers (`start.sh` starts these; they are log-only and place no
+orders). Each is a virtual $100k book with one hash-chained row per session,
+written to `~/g2/sleeves/` and shown in the monitor:
+
+- the 60/40 core, trend (T1) and sector momentum (T2);
+- insider (E1) and intraday (I1) ledgers in the same run. The first E1 pass
+  downloads SEC quarterly insider data sets into `~/g2/event_cache` (up to 3
+  per hourly pass), so E1 rows start after about two passes. `--no-events`
+  skips them;
+- the macro-lite ledger (needs `FRED_API_KEY`);
+- the JEV paired twins (need `OPENROUTER_API_KEY`; real spend under the
+  existing cap). `python3 ops/jev_twin.py ~/g2 --report` prints the paired
+  comparison.
+
+PEAD is not wired: its registered signal has no forward data source.
+`~/g2/sleeves/status.json` flags a ledger at -15% drawdown (soft) and -20%
+(hard).
+
+Check that history reproduces (the fidelity gate) at any time. Exit 1 means a
+logged row can no longer be reproduced, which points to look-ahead or revised
+data:
 
 ```bash
 python3 ops/sleeve_shadow.py ~/g2 --verify
 ```
 
-The insider (E1) and intraday (I1) sleeves are in the same ledger. The first
-E1 run downloads SEC quarterly insider data sets into `~/g2/event_cache` (up to
-3 per hourly pass), so its rows start after about two passes. Pass `--no-events`
-to skip them. PEAD is not wired (its registered signal has no forward data
-source). Exit 1 means a logged row can no longer be reproduced (look-ahead or revised
-data). Also in the same loop when the keys exist: the macro-lite ledger (`FRED_API_KEY`) and
-the JEV paired twins (`OPENROUTER_API_KEY`, real spend under the existing cap;
-`python3 ops/jev_twin.py ~/g2 --report` for the paired comparison).
-`~/g2/sleeves/status.json` flags a sleeve soft at -15% and hard at -20% drawdown.
+Every strategy is scored only against benchmark ledgers (`bench_*`, the 60/40
+core) as a paired daily difference. `python3 ops/sleeve_eval.py ~/g2` prints the
+table and writes `~/g2/sleeves/eval.json`, which the monitor shows. The states
+are WARMUP under 60 sessions; KILL-FUTILE from 126 sessions when even the best
+case is below the benchmark; ELIGIBLE-FOR-REVIEW only after 504 sessions with a
+corrected p under 0.05. That last state never means promote.
 
-Every sleeve is scored only against benchmark ledgers (`bench_*`, the 60/40 core) as a
-paired daily difference. `python3 ops/sleeve_eval.py ~/g2` prints the table (also written to
-`~/g2/sleeves/eval.json`, shown in the monitor): states WARMUP under 60 sessions, KILL-FUTILE
-from 126 sessions when even the best case is below the benchmark, and ELIGIBLE-FOR-REVIEW
-only after 504 sessions with a corrected p under 0.05 (it never means promote). On the first
-start the loop registers the whole forward program in the trial ledger
-(`python3 ops/forward_register.py ~/g2` does the same by hand); commit
-`research/ledger/trials.jsonl` and `checkpoint.json` afterwards. Long-history check of the
-canonical rules (run once, on a machine with internet):
-`python3 ops/long_history_fetch.py && python3 ops/long_history_run.py`.
+On first start the loop registers the whole forward program in the trial ledger
+(`python3 ops/forward_register.py ~/g2` does the same by hand). Commit
+`research/ledger/trials.jsonl` and `checkpoint.json` afterwards.
 
-Optional macro/filing collector (nothing reads its output yet):
-`WITH_COLLECTOR=1 bash ops/deploy/start.sh ~/g2`. Plan and promotion rules: `plan/appendix/10-sleeve-integration-plan.md`.
+Long-history check of the canonical rules (run once, on a machine with
+internet): `python3 ops/long_history_fetch.py && python3 ops/long_history_run.py`.
+
+Optional macro and filing collector (nothing reads its output yet):
+`WITH_COLLECTOR=1 bash ops/deploy/start.sh ~/g2`. Plan and promotion rules are
+in `plan/appendix/10-sleeve-integration-plan.md`.
 
 On a Linux-native checkout, `bash ops/deploy/start.sh` automates the same
 steps (build, first-run STAGE sign-off, loop, emitter, shadow);
@@ -192,9 +203,9 @@ recent orders). The broker panel reads keys from the environment or the repo
 tail -f ~/g2/logs/loop.log
 ```
 
-- Holidays come from `ops/deploy/session_calendar.json` (2026-2028). Extend
-  it before the last listed year ends; the loop refuses to trade in a year
-  with no listed holiday.
+- Holidays come from `ops/deploy/session_calendar.json` (2026-2028), with 13:00 ET
+  early closes in `early_close_YYYY` arrays. Extend it before the last listed
+  year ends; the loop refuses to trade in a year with no listed holiday.
 - Stop a foreground loop with Ctrl-C, a background one with
   `pkill -f g0_paper_loop`. Exit 2 (refused) or 3 (HARD stop) means: read
   `~/g2/journal.jsonl` and `~/g2/alerts.jsonl` before starting again.

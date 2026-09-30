@@ -1,4 +1,4 @@
-# AI Hedge Fund — Master Plan Index (freeze v3, 2026-09-28)
+# AI Hedge Fund - Master Plan Index (freeze v3, 2026-09-28)
 
 One folder. Everything lives here. If it is not in here, we do not build it.
 
@@ -6,34 +6,34 @@ One folder. Everything lives here. If it is not in here, we do not build it.
 safety machine around an unproven edge. Freeze v3 keeps every safety
 contract and re-points the work at three things the v2 plan lacked:
 a legally tradable scope for the actual operator, a measurable alpha
-pipeline, and the shortest honest path into the paper loop.
+pipeline, and the shortest path into the paper loop.
 
 ## Files (read in order)
 
-1. `01-vision-and-scope.md` — what we build, what we do not, operator
+1. `01-vision-and-scope.md` - what we build, what we do not, operator
    jurisdiction, venue, latency tiers (why this is not HFT and what is).
-2. `02-strategy-book.md` — **Strategy book: alpha sleeves** (renamed
+2. `02-strategy-book.md` - **Strategy book: alpha sleeves** (renamed
    from `02-twitter-alpha-system.md`; the X-lists archive moved to `appendix/02-x-lists-archive.md`).
-3. `03-jev-decision-layer.md` — JEV: the single candidate-bound
+3. `03-jev-decision-layer.md` - JEV: the single candidate-bound
    contract; JEV is an optional challenger-grade filter.
-4. `04-cpp-deterministic-core.md` — the C++ kernel: processes, modules,
+4. `04-cpp-deterministic-core.md` - the C++ kernel: processes, modules,
    data flow, latency budget, always-take path, cash-account ledger.
-5. `05-risk-and-determinism.md` — R1–R19 hard rules, measurement
+5. `05-risk-and-determinism.md` - R1–R19 hard rules, measurement
    definitions, determinism contract, self-correction.
-6. `06-execution-and-ops.md` — order lifecycle, execution by sleeve, TCA,
+6. `06-execution-and-ops.md` - order lifecycle, execution by sleeve, TCA,
    cash settlement, ops rhythm, monitoring.
-7. `07-build-roadmap.md` — the only document that says what to do when.
-8. `08-agentic-research-plane.md` — live research plane (reader tier) +
+7. `07-build-roadmap.md` - the only document that says what to do when.
+8. `08-agentic-research-plane.md` - live research plane (reader tier) +
    offline research factory; isolation; runaway limits; feature contract.
-9. `09-osint-and-free-data.md` — every free source, ranked, licensed,
+9. `09-osint-and-free-data.md` - every free source, ranked, licensed,
    with failure defaults; research datasets (SIP history, FRED, EDGAR).
-10. `10-capital-gates-and-spend-control.md` — stages, jurisdiction gate,
+10. `10-capital-gates-and-spend-control.md` - stages, jurisdiction gate,
     kill switches, AI spend control.
-11. `11-calibration-and-self-improvement.md` — validation standard,
+11. `11-calibration-and-self-improvement.md` - validation standard,
     trial ledger, contamination control, calibration, promotion gate.
-12. `12-statistical-baseline.md` — controls and benchmarks: frozen
+12. `12-statistical-baseline.md` - controls and benchmarks: frozen
     `baseline_v1` (negative control), cash, passive vol-matched.
-13. `13-cpp-kernel-build.md` — Phase-3 build record + P3.5 remaining scope.
+13. `13-cpp-kernel-build.md` - Phase-3 build record + P3.5 remaining scope.
 
 Also: `system-manifest.yaml` (fingerprint code verifies against),
 `appendix/` (implementation records moved verbatim, still frozen; `appendix/10-sleeve-integration-plan.md` is the live operating plan for sleeve tiers and g2 gates),
@@ -58,7 +58,7 @@ Also: `system-manifest.yaml` (fingerprint code verifies against),
 ## Global locked decisions (one page, no exceptions)
 
 - **Deterministic code owns every decision that can lose money.** Agents
-  produce evidence, research, and code proposals — never orders.
+  produce evidence, research, and code proposals - never orders.
 - **Alpha-first.** No engineering beyond what the current stage needs
   until a strategy sleeve has passed its gate (doc 11). Audit reopening
   follows the doc 06 AUDIT STOP RULE classes only.
@@ -70,7 +70,7 @@ Also: `system-manifest.yaml` (fingerprint code verifies against),
   research factory, typed extraction from primary documents, and
   (optionally) a calibrated filter that must prove a paired delta. No LLM
   output originates direction at the execution boundary.
-- **LLM evidence is time-honest:** any evaluation involving a model's
+- **LLM evidence is time-gated:** any evaluation involving a model's
   output uses only data after that model's pinned knowledge cutoff plus
   an embargo (doc 11). Data timestamps are guarded by R12; model memory is
   guarded by this rule.

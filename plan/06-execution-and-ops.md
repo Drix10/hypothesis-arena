@@ -1,4 +1,4 @@
-# 06 — Execution and Ops (freeze v3)
+# 06 - Execution and Ops (freeze v3)
 
 Freeze v3 keeps the H1 order lifecycle exactly as accepted and adds what
 the v2 doc never had: execution rules per sleeve, a cost model that is
@@ -19,7 +19,7 @@ recovery contract formerly in §6.1b moved VERBATIM to
 Ordering rules that every sleeve obeys:
 - Marketable limits, never naked market orders, for entries; the limit cap
   is the pre-registered slippage bound (a fill worse than the cap does not
-  happen; an unfilled entry is cancelled at the sleeve's window end —
+  happen; an unfilled entry is cancelled at the sleeve's window end -
   no chasing).
 - MOC exits go in before the broker-declared MOC cutoff (adapter data).
   MOC vs protective stop (K5 live finding 2026-09-29): Alpaca rejects both
@@ -27,7 +27,7 @@ Ordering rules that every sleeve obeys:
   first. The stop is cancelled before MOC submission if it is currently live
   (postpones the close to the next cycle when the stop is no longer active).
   If the stop fills first, the MOC becomes an over-sell that a cash account
-  rejects — the router treats that reject as the expected terminal for the
+  rejects - the router treats that reject as the expected terminal for the
   MOC (journaled, reconciled), never as an error loop. If the MOC is
   rejected or missed, the position stays protected and the exit is retried
   at the next session open (journaled incident).
@@ -36,7 +36,7 @@ Ordering rules that every sleeve obeys:
 - No extended-hours orders in v1. No order in the first 5 minutes after
   the open except the E-sleeve window, which starts at 10:00 ET.
 
-## 6.0a Cost model and TCA (v3 — the evaluation authority)
+## 6.0a Cost model and TCA (v3 - the evaluation authority)
 
 Alpaca paper is a plumbing test, not a cost oracle: per Alpaca's own
 documentation it does not check order size against NBBO quantity,
@@ -44,7 +44,7 @@ partial-fills a random 10% of eligible orders, ignores market impact,
 queue position, price improvement, latency slippage, and regulatory fees,
 and does not simulate dividends. Therefore:
 
-- `paper_fill_v1` (frozen, unchanged — see Locked decisions) stays the
+- `paper_fill_v1` (frozen, unchanged - see Locked decisions) stays the
   conservative per-leg fill rule used by `baseline_v1` and S2/S5
   reproductions.
 - `cost_v2` (v3, for every sleeve pre-registration) = `paper_fill_v1`
@@ -78,16 +78,16 @@ and does not simulate dividends. Therefore:
 
 Local C++ stops are the active controller, never the disaster protection. A
 position the broker cannot protect on its own is a position the process cannot
-survive losing — so protection is established broker-side first:
+survive losing - so protection is established broker-side first:
 
 ```
 intent (risk PASS) → re-check HALT file → journal row → send entry +
   protective SL/TP through a broker-specific protected mode (E1: entry is
   permitted ONLY through an order mode whose adapter implementation
-  positively establishes the entry↔protection relationship — OANDA
+  positively establishes the entry↔protection relationship - OANDA
   stopLossOnFill/takeProfitOnFill; Alpaca bracket legs with adapter-proven
   semantics). Each adapter proves: entry ack, protection ack, partial-fill
-  behavior, cancel/replace behavior, double-trigger behavior — including
+  behavior, cancel/replace behavior, double-trigger behavior - including
   fast-market edge behavior. "Atomic" is the requirement (no naked entry),
   not a cross-broker primitive claim. → ack/timeout → query once:
    filled + protection acked → journal fill → PROTECTED → track
@@ -106,11 +106,11 @@ intent (risk PASS) → re-check HALT file → journal row → send entry +
 
 - Durable order state machine (survives restarts): intent_id + client order ID
   + send_attempt + broker_ack_state persisted before send. After any crash the
-  process reconciles ack state with the broker BEFORE issuing anything new —
+  process reconciles ack state with the broker BEFORE issuing anything new -
   a restart must never double-send what the dead process already sent.
 - Client order ID = typed intent fingerprint + broker/account namespace +
   persisted intent_id, hashed: `hex(sha256(broker ‖ account ‖ context_hash ‖
-  symbol ‖ side ‖ intent_id))`, truncated only if the broker requires it —
+  symbol ‖ side ‖ intent_id))`, truncated only if the broker requires it -
   one intent, one ID, no attempt counter, no delimiter ambiguity, no
   cross-account collision. (An `attempt` field in the hash was a
   duplicate-order bug: every retry would mint a fresh ID and double-fill.
@@ -119,21 +119,21 @@ intent (risk PASS) → re-check HALT file → journal row → send entry +
 - Stops are attached at entry or the entry is rejected. exit_profile_v1
   (doc 03 §3.3): fixed stop + fixed 2R take-profit + mandatory calendar
   time_exit (E4): time_exit = actual exchange close − frozen exit buffer
-  (30 min default), from the validated IANA/exchange calendar — never a
+  (30 min default), from the validated IANA/exchange calendar - never a
   hard-coded 15:55 ET, which is wrong on early closes.
   Stop floor 0.1% ⇒ min TP 0.2% (20bp), which must EXCEED all-in modeled
-  cost + safety margin under the frozen cost stress — 20bp clears
+  cost + safety margin under the frozen cost stress - 20bp clears
   fees/slippage only if the cost model says so, never by construction.
   Entry requires: expected gross edge > all-in modeled cost + margin.
 - Journal-before-order is absolute for NORMAL entries. Emergency exits carry
   an explicit exception: if the journal write fails mid-emergency, execute
-  first, then append through the durable emergency-exit buffer — a delayed
+  first, then append through the durable emergency-exit buffer - a delayed
   exit is worse than a delayed row, and the row still lands. (This supersedes
   any "no exceptions" wording: the exception is this paragraph.)
 - Discretionary exit is REMOVED from live actuation (E3): `enter.noul < 0.3`
   twice is logged and researched, but never market-exits a position. Live
   exits are: stop, TP, time_exit, deterministic risk/kill exit, broker
-  reconciliation logic. Exits never depend on JEV — the hard stop/TP always
+  reconciliation logic. Exits never depend on JEV - the hard stop/TP always
   stand regardless; stale/missing JEV never forces, and never blocks, an exit.
 - Feed stale > 30 s → entries forbidden (veto). Exits go via REST if WS is down.
 - Stage multiplier (doc 10 §10.2) is applied to the computed size **after** the
@@ -147,10 +147,10 @@ close identity may be live, every kill-path close is pre-flighted by its
 stable id, incident epochs are durable-or-nothing, HARD quantities come
 from the signed broker position with a write-ahead chain, recovery refuses
 torn or orphaned durable state, and one OS-lifetime lock owns a state
-directory. The full frozen rule set — MEDIUM/HARD ownership, incident ids,
+directory. The full frozen rule set - MEDIUM/HARD ownership, incident ids,
 HARD chain integrity and attribution durability, overflow-safe parsing,
 state-file integrity (absent vs corrupt), single-process ownership,
-recovery-before-mutation, per-book orphan coverage, and the rest — is in
+recovery-before-mutation, per-book orphan coverage, and the rest - is in
 `appendix/06b-close-ownership-and-recovery-record.md`, unchanged and
 binding. Long-only note (v3): every live close is a SELL of a long
 position; a close that would exceed the held quantity is refused before
@@ -161,7 +161,7 @@ on the venue to catch it).
 
 Row appended: sleeve id, candidate CID, entry/exit context_hash, PnL,
 implementation shortfall vs modeled cost, regime, filter answers (if any),
-exit reason — auto fields only, no LLM prose. Weekly review aggregates per
+exit reason - auto fields only, no LLM prose. Weekly review aggregates per
 sleeve: hit rate, per-regime PnL, cost drift, tracking vs backtest. Rule
 changes come only through a new pre-registration (doc 11), never from
 the review directly.
@@ -210,7 +210,7 @@ and the system fails toward paper.**
 - Kill switch: `HALT` file → entries stop within 1 cycle. Deleting it does
   NOT resume (restart + flag required). MEDIUM and HARD per doc 10 §10.3,
   drilled monthly.
-- (v3) **Outbound-only alert adapter** — required before unattended
+- (v3) **Outbound-only alert adapter** - required before unattended
   operation of G0b: a one-way push (e.g. authenticated HTTPS POST to a
   push-notification endpoint, or SMTP send-only) carrying bounded,
   redacted alert records. It accepts no inbound messages, runs no

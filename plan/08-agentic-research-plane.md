@@ -1,11 +1,11 @@
-# 08 — Agentic Research Plane (freeze v3)
+# 08 - Agentic Research Plane (freeze v3)
 
 Two planes, one boundary:
 
-- **Live research plane** — reads the world on a schedule and writes
+- **Live research plane** - reads the world on a schedule and writes
   **typed, bounded features** into the context the kernel freezes. It has
   no other output into the trading tree.
-- **Research factory** (v3, §8.7) — offline. Agents propose hypotheses,
+- **Research factory** (v3, §8.7) - offline. Agents propose hypotheses,
   write pre-registrations, write and run backtest code on trusted local
   datasets, and draft reports for human triage. It never touches live
   state, credentials, or the trading tree.
@@ -32,8 +32,8 @@ ever relax a risk rule. Freeze v3 changes are marked (v3).
    Snapshot + candidate (sleeve engine) → risk/ → exec/
 ```
 
-- **R11:** the research plane writes exactly one artifact class —
-  `features.jsonl` — and nothing else in the trading tree: no broker keys,
+- **R11:** the research plane writes exactly one artifact class -
+  `features.jsonl` - and nothing else in the trading tree: no broker keys,
   no journal, no `HALT`, no stage chain, no `candidates.jsonl`. Separate OS
   user, enforced by filesystem permissions.
 - Agents never see account equity, position sizes, or PnL; at most a
@@ -55,12 +55,12 @@ LangGraph CHOSEN (orchestrator: durability 5, observability 4); smolagents
 CHOSEN for code-writing work under a Docker sandbox (token efficiency 5,
 durability 2); AG2 v1.0 rejected (breaking redesign churn); CrewAI rejected
 (observability behind a paid tier, no documented durable resume); Hermes
-Agent and OpenClaw **rejected on principle** — self-modifying assistants
+Agent and OpenClaw **rejected on principle** - self-modifying assistants
 reachable from chat apps are a remote-code-execution path into a capital
 host and violate D3.
 
 **v3 security pattern for untrusted text (adopted from the
-`anthropics/financial-services` managed-agent cookbooks — earnings-reviewer,
+`anthropics/financial-services` managed-agent cookbooks - earnings-reviewer,
 kyc-screener, gl-reconciler):**
 
 | Tier | Touches untrusted docs? | Capabilities | Output |
@@ -71,7 +71,7 @@ kyc-screener, gl-reconciler):**
 | **Emitter** (only writer) | No | writes `features.jsonl` via the frozen emit path | complete bundles |
 
 Handoffs between agents are typed tool calls or schema-validated records
-with allowlisted targets — never parsed out of model text that sits
+with allowlisted targets - never parsed out of model text that sits
 downstream of a reader (the financial-services orchestrator documents that
 exact injection path). Harness-side schema validation runs on every reader
 output before anything else sees it.
@@ -82,7 +82,7 @@ is a larger surface than the job needs. The deterministic parser is the
 authority and the LLM output is advisory, so the reader needs to read,
 not to act.
 
-**Container spec (locked — "runs in Docker" is not a spec; v3: applies to
+**Container spec (locked - "runs in Docker" is not a spec; v3: applies to
 the research factory and to any sandboxed harvest worker):** smolagents
 `CodeAgent` runs with `executor_type="docker"` only: non-root user, read-only
 rootfs, dropped capabilities, explicit CPU/RAM limits, and network egress limited
@@ -91,12 +91,12 @@ else). The prompt is NEVER the network boundary: enforcement lives in the
 sandbox firewall/proxy (container netns + egress proxy with an exact
 destination allowlist), and §8.6 proves it with an unauthorized-destination
 probe (a worker attempting a non-allowlisted host must fail at the network
-layer, counted). Import allowlist (LOCKED 2026-09-18, exact — nothing else imports): stdlib
+layer, counted). Import allowlist (LOCKED 2026-09-18, exact - nothing else imports): stdlib
 `json, re, datetime, urllib, xml, html, math, statistics, collections,
 itertools, hashlib, base64` + `requests` + `bs4` (BeautifulSoup) + `lxml`
 (parser only) + `pydantic` + `pandas` (frames parsing, no eval) + `feedparser`
 (RSS). No `subprocess`, no `os.system`, no `socket` raw, no `pickle`, no
-`yaml.load` (safe_load only if yaml ever added — it is not on the list).
+`yaml.load` (safe_load only if yaml ever added - it is not on the list).
 
 OS isolation design (LOCKED 2026-09-18, extended v3), no shared groups:
 `mirotrade` runs the C++ kernel and transport and owns journal/`HALT`/stage
@@ -115,7 +115,7 @@ live in the owning identity's home, never in git, never world-readable.
 `LocalPythonExecutor` is **forbidden** on any host or container that can
 reach trading credentials, the journal, `HALT`, or the stage chain.
 
-## 8.3 Agent topology — live plane (`research_graph_version: g1` → g2)
+## 8.3 Agent topology - live plane (`research_graph_version: g1` → g2)
 
 `research_graph_version: g1` is the running graph (matches
 `plan/system-manifest.yaml`). The v3 node semantics below are g2; the
@@ -126,7 +126,7 @@ manifest bumps to g2 in the same commit that lands them (doc 07 P1).
 | `harvest` | Pull doc-09 sources on their cadences. Pure I/O, no LLM. | raw records + `observed_at_ns` | Source `stale`; never blocks |
 | `extract` (v3: reader tier) | Deterministic parser first (authoritative); for kinds with a registered reader skill (e.g. 8-K EX-99.1 guidance, doc 02 E2), the reader tier produces capped JSON, then the resolver verifies every field by source span | verified `inference` candidates + parser `source` candidates | Drop + count |
 | `fuse` | Deterministic: join to symbols, dedupe, bucket | joined features | Drop + count |
-| `hypothesize` | LLM: falsifiable thesis per watchlist symbol into the digest (never into kernel state): claim, 3–5 pillars, explicit invalidation triggers, catalyst dates (thesis-tracker structure) | digest entry | Empty thesis — never a crash |
+| `hypothesize` | LLM: falsifiable thesis per watchlist symbol into the digest (never into kernel state): claim, 3–5 pillars, explicit invalidation triggers, catalyst dates (thesis-tracker structure) | digest entry | Empty thesis - never a crash |
 | `critique` (v3: verifier) | Re-verifies each pillar's factual claims against canonical records (gl-reconciler critic pattern); names the strongest disconfirming evidence; flags pillars whose facts do not verify | `critique_text`, `critique_disagreement` advisory flag | `critique_disagreement=true` |
 | `emit` | Schema-validate, bound, write `features.jsonl` atomically | `features.jsonl` | Nothing written; last file ages out via TTL |
 
@@ -176,7 +176,7 @@ process supervisor independently:
 
 | Limit | Value | On breach |
 |---|---|---|
-| LLM calls per cycle | 40 | Cycle aborted, `research_abort` logged; NO partial bundle is ever published — the last complete bundle stands (§8.5). |
+| LLM calls per cycle | 40 | Cycle aborted, `research_abort` logged; NO partial bundle is ever published - the last complete bundle stands (§8.5). |
 | Tool calls per cycle | 120 | Same |
 | Wall clock per cycle | 8 min | Same |
 | Tokens per cycle | 250k | Same |
@@ -187,16 +187,16 @@ A cycle that aborts is not retried within the same interval. The budget
 ledger's durability, digest, migration, trust-model, and trusted-config
 rules moved verbatim to `appendix/08-ledger-integrity-and-trust-record.md`
 and remain binding (coherent multi-object forgery bottoms out at host
-integrity — named, not solved by prose).
+integrity - named, not solved by prose).
 
-## 8.5 Feature contract v2 (locked — the only thing that crosses the boundary)
+## 8.5 Feature contract v2 (locked - the only thing that crosses the boundary)
 
 `features.jsonl` carries typed feature records in complete bundles. One
 `emit` writes one bundle: `research_epoch` + `bundle_id` + `watermarks` +
 feature list + `BUNDLE_COMMIT`, staged as temp + fsync + atomic rename with
 a manifest row (bundle_id, research_epoch, feature count, map sha, commit).
 MANIFEST STATUS (explicit): the manifest mechanism is DESIGN FROZEN but
-IMPLEMENTATION DEFERRED to Phase 2.5 — the research-plane writer does not
+IMPLEMENTATION DEFERRED to Phase 2.5 - the research-plane writer does not
 exist yet, so no writer produces the separate generation manifest and the
 P1.5 reader (`collector/ctx_read.py`) does NOT consume one. What the reader
 enforces TODAY is the bundle-internal `commit is True` flag plus the strict
@@ -205,11 +205,11 @@ until Phase 2.5 implements the writer side. The frozen guarantee stands:
 partial emit + crash + restart can never expose half a bundle (R6). Watermarks are replay-critical metadata, not
 decoration: `{"entity_map_version", "entity_map_sha256", source watermarks,
 last-observation timestamps}`. The reader hashes the actual map file and
-requires an exact sha256 match — version strings alone are not pinning. C++ consumes the last *complete* bundle
-only — a runaway-aborted cycle that never reaches `emit` publishes nothing,
+requires an exact sha256 match - version strings alone are not pinning. C++ consumes the last *complete* bundle
+only - a runaway-aborted cycle that never reaches `emit` publishes nothing,
 so partial epochs can never mix (R15). Thesis/critique prose is NOT a feature:
 it goes to `research_digest.jsonl` (human + critique-node reading, advisory
-only, never into JEV state — doc 03 §3.4).
+only, never into JEV state - doc 03 §3.4).
 
 ```json
 {
@@ -248,7 +248,7 @@ Hard rules on this record:
 - **Evidence levels, not vibes.** `source` = deterministic parser over a
   primary source (only these are TRIGGER-eligible). `derived` = deterministic
   transform of source facts. `inference` = model-produced: CONTEXT-only until
-  the producing *rule* earns promotion by measured track record — never the
+  the producing *rule* earns promotion by measured track record - never the
   individual claim. Schema-valid but fabricated is still fabricated; levels
   are what stop it reaching entries.
 - **`effect` is assigned by a deterministic interpretation table per kind**
@@ -259,22 +259,22 @@ Hard rules on this record:
 - **No free-form floats.** Values are enums, booleans, counts, or buckets.
 - **No prose** in this file, at all. The reader enforces an explicit f2
   field allowlist (required + `feature_id`/`canonical_hashes`/`entity_ref`)
-  and rejects unknown fields — a prose-key denylist alone cannot guarantee
+  and rejects unknown fields - a prose-key denylist alone cannot guarantee
   "no prose", so unknown keys fail closed. Prose lives in the digest.
 - **Plausibility, not just shape.** Schema validation proves structure; these
   three semantic checks prove the record means what it claims (all P1.5
   ctx-reader enforced, rejection reasons logged):
-  1. *Entity binding* — every `symbols[]` entry must resolve through the
+  1. *Entity binding* - every `symbols[]` entry must resolve through the
      versioned map `collector/entity_map.json` (`map_version`, sha256-pinned
      in the bundle watermarks; EDGAR CIK↔ticker, macro release↔symbols).
-     The reader replays the exact pinned version — never a newer map.
+     The reader replays the exact pinned version - never a newer map.
      Features may carry `entity_ref` (e.g. `{"cik": ...}`); when present,
      map contradiction (CIK resolves to a different ticker than claimed)
      rejects. Without a ref, P1.5 enforces resolvability; full upstream
      contradiction validation arrives with the research plane.
      Unmapped or contradictory binding → reject (TRIGGER) or cap at
      CONTEXT (derived).
-  2. *Frozen-feed detection* — nominal covers are explicit, never derived
+  2. *Frozen-feed detection* - nominal covers are explicit, never derived
      from polling cadence (`plausibility_v1`):
 
      ```
@@ -286,7 +286,7 @@ Hard rules on this record:
      history (`{"h", "ts"}` entries); the reader requires the N identical
      observations to span at least half the source's nominal cover.
      Undated history is rejected (`history-undated`).
-  3. *Session-aware freshness* — timestamps in America/New_York (IANA).
+  3. *Session-aware freshness* - timestamps in America/New_York (IANA).
      Equity features timed 16:00–09:30 ET are rejected UNLESS kind is in
      the overnight allowlist (`calendar_ahead` with phase pre/blackout,
      scheduled `macro_release`, forex any open `session`). Scheduled
@@ -307,7 +307,7 @@ Hard rules on this record:
   operational >5%/hour alerting is deferred to Phase 2.5 (the stub reader does
   not run continuously).
 - Source health is `source_status` per source (healthy/stale/failed/
-  not_scheduled/unavailable/na — doc 03 §3.4), not a single absent-list.
+  not_scheduled/unavailable/na - doc 03 §3.4), not a single absent-list.
   `not_scheduled` (nothing expected) is never a negative signal.
 
 ## 8.6 What "done" means (live plane)
@@ -324,35 +324,35 @@ Hard rules on this record:
 - [ ] Langfuse shows per-node token + dollar attribution for a full day.
 - [ ] (v3) Reader tier proven capability-free: a document containing tool
       calls, code, URLs, and instructions produces only schema-valid JSON
-      or a rejection — never an action; the verifier rejects any number
+      or a rejection - never an action; the verifier rejects any number
       without a matching source span.
 - [ ] Cadence gating proven against the §8.3a estimate within 2×.
 
 ## 8.7 Research factory (v3)
 
-The factory is how AI earns its keep in this fund: the same loop real
+The factory is where AI is used in this fund: the same loop real
 quant shops now run (agents propose signals, write the code, and backtest
 before a human sees them; outputs pass the same thresholds as human
 research), bounded by our governance.
 
 Loop (every step logged to the trial ledger, doc 11 §11.0a):
-1. **Intake** — hypothesis cards from the weekly reflection (≤ 3 per
+1. **Intake** - hypothesis cards from the weekly reflection (≤ 3 per
    week, doc 11 §11.4), from `lessons.jsonl` (doc 09 Tier D), or from a
    human. Each card: claim, mechanism, citations, data needed, expected
    sign and magnitude range, how it could be wrong.
-2. **Pre-registration** — the agent drafts a pre-registration from the
+2. **Pre-registration** - the agent drafts a pre-registration from the
    doc 02 template; a deterministic validator checks completeness (spec,
    variants, windows, holdout, cost model, kill criteria); a human
    approves before any data is touched.
-3. **Implementation** — a sandboxed CodeAgent writes the sleeve code
+3. **Implementation** - a sandboxed CodeAgent writes the sleeve code
    against the harness API only (no network, trusted local datasets,
-   read-only mounts, import allowlist below). The harness — not the agent —
+   read-only mounts, import allowlist below). The harness - not the agent -
    loads data, applies costs, splits windows, and computes statistics, so
    generated code cannot leak the holdout or choose its own costs.
-4. **Gate** — the harness runs the A-gate (doc 11 §11.3a) and writes the
+4. **Gate** - the harness runs the A-gate (doc 11 §11.3a) and writes the
    report + trial-ledger rows. The agent cannot rerun a failed
    pre-registration with different parameters; that is a new card.
-5. **Triage** — humans see only gate-passing reports plus a weekly count
+5. **Triage** - humans see only gate-passing reports plus a weekly count
    of failures (the failure count is part of the evidence).
 
 Factory rules:
@@ -412,5 +412,5 @@ Factory rules:
   window.
 - Research models are pinned per role with their knowledge cutoff (§8.8).
 - Deterministic-first: harvest/parse/normalize/fuse/verify are code; LLMs
-  read, hypothesize, draft, and write factory code — never parse
+  read, hypothesize, draft, and write factory code - never parse
   authoritatively, join, map symbols, validate timestamps, or classify.

@@ -1,4 +1,4 @@
-# 02 — Strategy Book: Alpha Sleeves (freeze v3, `strategy_book_version: sb1`)
+# 02 - Strategy Book: Alpha Sleeves (freeze v3, `strategy_book_version: sb1`)
 
 > Legacy filename. Until freeze v3 this doc held the X-lists signal system.
 > That material is **NON-PRODUCTION / HISTORICAL** and now lives verbatim in
@@ -29,13 +29,13 @@ It is never "improved" into passing: a new idea is a new pre-registration.
 
 ## 2.1 Evidence grades (used below)
 
-- **A** — multiple peer-reviewed studies + documented post-publication
+- **A** - multiple peer-reviewed studies + documented post-publication
   out-of-sample persistence.
-- **B** — peer-reviewed, but out-of-sample evidence limited, contested, or
+- **B** - peer-reviewed, but out-of-sample evidence limited, contested, or
   concentrated in segments we can only partly trade.
-- **C** — contested or failed replications; worth testing only because the
+- **C** - contested or failed replications; worth testing only because the
   test itself answers a question the fund needs answered.
-- **D** — speculative. Research factory only.
+- **D** - speculative. Research factory only.
 
 A published effect is haircut before it is believed: average
 post-publication decay is ≈58% (McLean–Pontiff), and new factors need
@@ -52,7 +52,7 @@ known failure modes · kill criteria · minimum evaluation windows · status.
 
 ## 2.3 Sleeves
 
-### T1 `trend_etf_v1` — ETF time-series trend (first champion candidate)
+### T1 `trend_etf_v1` - ETF time-series trend (first champion candidate)
 
 - **Hypothesis:** asset-class returns show time-series momentum; holding an
   asset only while its price is above its long moving average captures
@@ -91,10 +91,10 @@ known failure modes · kill criteria · minimum evaluation windows · status.
 - **Kill:** A-gate fail; or G0a/G0b drawdown > 1.5× the backtest's worst
   12-month drawdown; or Sharpe lower bound < 0 after the minimum window.
 - **Minimum windows:** A-gate full history with an untouched final 3-year
-  holdout; B-gate 3 months shadow (few trades — judged on tracking error
+  holdout; B-gate 3 months shadow (few trades - judged on tracking error
   vs its backtest, not on Sharpe).
 
-### T2 `sector_mom_v1` — sector relative + absolute momentum
+### T2 `sector_mom_v1` - sector relative + absolute momentum
 
 - **Hypothesis:** industries with the strongest 12-month returns (skipping
   the last month) keep outperforming over the next month; an absolute
@@ -111,7 +111,7 @@ known failure modes · kill criteria · minimum evaluation windows · status.
 - **Failure modes:** momentum crash at trend reversals; sector
   concentration. **Kill** as T1.
 
-### I1 `intraday_mom_v1` — market intraday momentum (the T2-tier sleeve)
+### I1 `intraday_mom_v1` - market intraday momentum (the T2-tier sleeve)
 
 - **Hypothesis:** the market's first half-hour return (previous close →
   10:00 ET) predicts its last half-hour return, more so on high-volatility
@@ -131,17 +131,17 @@ known failure modes · kill criteria · minimum evaluation windows · status.
   cutoff; protective stop leg attached at entry (OTO stop-only) at
   entry − 3 × 30-min ATR. The MOC must reconcile with the live stop
   (doc 06 §6.0: stop cancelled only after MOC ack; a stop fill makes the
-  MOC an over-sell that the cash account rejects — both paths journaled).
+  MOC an over-sell that the cash account rejects - both paths journaled).
 - **Exit profile `exit_intraday_v1`**; sizing: full sleeve tranche.
 - **Cash-account mechanics:** buy with settled cash, sell the same day is
   permitted; the proceeds settle T+1, so two alternating capital tranches
   are required (effective utilization ≈ 50%). R18 enforces it.
 - **Turnover:** ≤ 1 round trip/day; edge per trade is a few bp, so it
-  lives or dies on cost — 2× cost stress is decisive.
+  lives or dies on cost - 2× cost stress is decisive.
 - **AI:** none in the signal. **Kill:** A-gate fail at 2× cost; or live
   implementation shortfall > 2× modeled.
 
-### E1 `insider_buy_v1` — EDGAR Form 4 opportunistic insider purchases
+### E1 `insider_buy_v1` - EDGAR Form 4 opportunistic insider purchases
 
 - **Hypothesis:** open-market purchases by officers/directors who do not
   trade on a routine calendar pattern predict positive abnormal returns
@@ -164,7 +164,7 @@ known failure modes · kill criteria · minimum evaluation windows · status.
   every run and a run with > 5% excluded events is void.
 - **Kill** as T1; plus decay monitor (rolling 12-month event alpha).
 
-### E2 `earnings_reader_v1` — AI-assisted earnings press-release reader
+### E2 `earnings_reader_v1` - AI-assisted earnings press-release reader
 
 - **Hypothesis:** a reader-tier LLM extracts guidance changes from 8-K
   item 2.02 press releases (EX-99.1) that predict post-announcement drift
@@ -173,7 +173,7 @@ known failure modes · kill criteria · minimum evaluation windows · status.
   but is contested by 2025 studies; press-release text is as informative
   as the surprise for the *announcement-day* return (arXiv 2509.24254),
   which we cannot trade competitively (T1 tier). Our window starts the
-  next session. The honest prior is weak; this sleeve exists because it
+  next session. The prior is weak; this sleeve exists because it
   answers the fund's central question: **does AI reading add incremental
   edge?**
 - **Design:** paired test, same events, same entry/exit:
@@ -192,7 +192,7 @@ known failure modes · kill criteria · minimum evaluation windows · status.
   event count → the AI component is removed (the E2-det sleeve may
   continue on its own merits).
 
-### M1 `vol_target_overlay_v1` — portfolio volatility targeting
+### M1 `vol_target_overlay_v1` - portfolio volatility targeting
 
 - **Hypothesis:** scaling exposure inversely to recent realized volatility
   improves risk-adjusted returns and keeps drawdowns inside R5.
@@ -205,10 +205,10 @@ known failure modes · kill criteria · minimum evaluation windows · status.
   above 1 (no leverage).
 - **Macro context (M2, research only):** FRED curve slopes (T10Y2Y,
   T10Y3M), real yield (DFII10), breakeven (T10YIE), credit spread
-  (BAA10Y), NFCI, VIXCLS — logged as CONTEXT features with zero live
+  (BAA10Y), NFCI, VIXCLS - logged as CONTEXT features with zero live
   effect until a pre-registered overlay rule passes doc 11.
 
-### X1 `fx_carry_mom_research_v1` — FX research (never executed)
+### X1 `fx_carry_mom_research_v1` - FX research (never executed)
 
 - G10 FX carry (3-month interbank-rate differentials) and 12-1 momentum
   from FRED daily exchange rates and OECD short rates, simulated
@@ -216,7 +216,7 @@ known failure modes · kill criteria · minimum evaluation windows · status.
   live target (doc 01 §1.2). A future long-only currency-ETF expression
   would be a different sleeve and needs the jurisdiction gate first.
 
-### B0 `baseline_v1` — frozen negative control
+### B0 `baseline_v1` - frozen negative control
 
 Doc 12. Kept, never edited, never promoted: it measured negative in S2
 and the failure is diagnosed there (exit/horizon mismatch). It remains

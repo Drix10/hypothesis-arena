@@ -1,4 +1,4 @@
-# 07 — Build Roadmap (the only to-do list, freeze v3)
+# 07 - Build Roadmap (the only to-do list, freeze v3)
 
 Tracks run in parallel where marked; gates never get skipped. Paper only
 until Phase 5 sign-off. `TODO.md` is the itemized ledger of this doc; the
@@ -12,7 +12,7 @@ freeze-v2 ledger is in git history.
 | Phase 1 collector | Built and soaked (133 cycles); §2.7-equivalent boxes in doc 09 §9.4 open. |
 | Phase 2 JEV sidecar | ACCEPTED/FROZEN `50ea369`; contract = "jev" (candidate-bound; one contract across sidecar, evaluator and kernel filter). |
 | Phase 2.5 research plane | Six-node graph + five Tier-A adapters + seam built and hosted-green; doc 08 §8.6 exit open. |
-| Phase 3 kernel | JEV filter built and gated; P3.5 slices A–G done; **H1 router/runner/broker/journal built and audited (router 209, runner ~1045, broker 126, drills 120) but `transport = nullptr` — no order has ever left the host.** |
+| Phase 3 kernel | JEV filter built and gated; P3.5 slices A–G done; **H1 router/runner/broker/journal built and audited (router 209, runner ~1045, broker 126, drills 120) but `transport = nullptr` - no order has ever left the host.** |
 | Strategy track | S1 landed (PIT single-stock universe item open); S2 measured NEGATIVE, acceptance open; S3/S4 released; S5 implementation closed, economics open (stub FAIL); S6 released (isolated library); S7-A/B closed; S7-C re-audit #2 fixes at `f0815e7`, closure needs hosted 5/5. |
 | G0 | NOT STARTED. No sleeve has passed any economic gate. |
 
@@ -22,14 +22,14 @@ Critical path to paper trading (why the order below):
 → K6 candidate ingest → K7 alerts`. G0b starts when both meet: a sleeve
 passed its B-gate AND P3.5 closed.
 
-## 7.1 Phase R — Rebaseline (docs only; this change)
+## 7.1 Phase R - Rebaseline (docs only; this change)
 
 - [x] Full critique recorded (git history).
 - [x] Docs 00–13 + manifest rewritten for freeze v3; implementation
       records moved verbatim to `appendix/`.
 - [x] Operator approved the freeze-v3 text in chat, 2026-09-29 (sign-off log below).
 
-## 7.2 Track A — Alpha (critical path)
+## 7.2 Track A - Alpha (critical path)
 
 - [ ] A0 Research harness v2 (`research/strategy/`): global trial ledger
       (doc 11 §11.0a); `cost_v2` (doc 06 §6.0a); SIP bars+quotes fetcher
@@ -56,7 +56,7 @@ passed its B-gate AND P3.5 closed.
       freely available; S1 closes with ETF and EDGAR-derived universes and
       the limitation recorded (doc 12 §12.1).
 
-## 7.3 Track K — Kernel P3.5 remainder (parallel with A)
+## 7.3 Track K - Kernel P3.5 remainder (parallel with A)
 
 - [ ] K1 P3.5-T transport: decision record (libcurl+TLS in-kernel vs
       `mirotrade` broker gateway) + implementation behind the existing
@@ -76,7 +76,7 @@ passed its B-gate AND P3.5 closed.
       transport (every doc 06 §6.2a row, exits alive).
 - [ ] Exit: K1–K7 + K10 green → P3.5 CLOSED (doc 13).
 
-## 7.4 Track P — Research plane (parallel)
+## 7.4 Track P - Research plane (parallel)
 
 - [ ] P1 Reader-tier refactor: `extract` no longer runs a CodeAgent on
       untrusted text; reader tier (no tools/network, capped JSON) +
@@ -90,7 +90,7 @@ passed its B-gate AND P3.5 closed.
 - [ ] P5 S6 `event_direction_v1` production integration only via the
       doc 11 promotion path (unchanged; not on the critical path).
 
-## 7.5 Track O — Ops, CI, hygiene (parallel, small)
+## 7.5 Track O - Ops, CI, hygiene (parallel, small)
 
 - [ ] O1 CI runs on every push + `workflow_dispatch`; strategy tests
       (`test_baseline`, `test_candidate` with pinned pytest, `test_jev_filter`)
@@ -104,7 +104,7 @@ passed its B-gate AND P3.5 closed.
 - [ ] O6 [HUMAN] Rotate every credential shared in chat on 2026-09-28
       (OpenRouter, FRED, BEA, Alpaca paper) and re-seed `.env` locally.
 
-## 7.6 Phase 4 — Paper at G0_PAPER
+## 7.6 Phase 4 - Paper at G0_PAPER
 
 - [ ] G0a shadow: every sleeve that passed A-gate runs on live data with
       harness fills (`cost_v2`), no broker orders, from the day it passes.
@@ -124,7 +124,7 @@ passed its B-gate AND P3.5 closed.
 - [ ] Exit: G0 → G1 criteria in doc 10 §10.2 met **and** human sign-off
       recorded below (name + date + manifest hash).
 
-## 7.7 Phase 5 — G1_TINY (explicit decision, not automatic)
+## 7.7 Phase 5 - G1_TINY (explicit decision, not automatic)
 
 - [ ] LIVE JURISDICTION GATE evidence complete (doc 10 §10.1a).
 - [ ] Port-on-promotion: champion signal in C++ with cross-language
@@ -135,7 +135,7 @@ passed its B-gate AND P3.5 closed.
 - [ ] Any R-trip → automatic demotion to G0. No negotiation.
 - [ ] Exit: doc 10 §10.2 G1 → G2 criteria + human signature.
 
-## 7.8 Phase 6 — G2_SCALED
+## 7.8 Phase 6 - G2_SCALED
 
 - [ ] Universe-cap versioned change if multi-sleeve live is justified.
 - [ ] Checkpoint store moved to Postgres; challengers in shadow.
@@ -144,7 +144,7 @@ passed its B-gate AND P3.5 closed.
 - [ ] Exit: doc 10 §10.2 G2 → G3 criteria (60 days, ≥ 100 closed trades,
       max DD < 5%) + human signature.
 
-## 7.9 Phase 7 — G3_FULL
+## 7.9 Phase 7 - G3_FULL
 
 - [ ] Full stage limits per doc 05.
 - [ ] 30 consecutive days with zero *required* human intervention (weekly
@@ -154,15 +154,15 @@ passed its B-gate AND P3.5 closed.
 
 ## 7.10 History (closed phases, kept for the record)
 
-- Phase 0 — spec frozen at freeze v2 (signed `2dc8cbd`, reconciled
+- Phase 0 - spec frozen at freeze v2 (signed `2dc8cbd`, reconciled
   `50d88a7`); X removed from production v1; JEV v3 semantics frozen
   (4 questions; now the single candidate-bound `contract = "jev"`).
-- Phase 1 — P1.1 freeze-check, P1.2 collector, P1.3 TRIGGER/CONTEXT
+- Phase 1 - P1.1 freeze-check, P1.2 collector, P1.3 TRIGGER/CONTEXT
   tagging, P1.4 soak (133 cycles, shortened on evidence), P1.5 ctx reader.
-- Phase 2 — JEV sidecar accepted/frozen `50ea369`.
-- Phase 3 — JEV filter (confidence quarantined); P3.5 slices A–G; H1 built
+- Phase 2 - JEV sidecar accepted/frozen `50ea369`.
+- Phase 3 - JEV filter (confidence quarantined); P3.5 slices A–G; H1 built
   (doc 13).
-- Strategy Validation Track S1–S7 — see §7.0 and the archive ledger.
+- Strategy Validation Track S1–S7 - see §7.0 and the archive ledger.
 
 ## Distraction firewall (read when tempted)
 
@@ -202,7 +202,7 @@ Promotion sign-off template (copy per promotion; all lines required):
 ```
 PROMOTION: <G0→G1 | G1→G2 | G2→G3 | sleeve <id> to champion | filter jev on <sleeve>>
 DECIDED BY: <operator, approved in chat>   DATE: <ISO8601>   WINDOW JUDGED: <dates>
-CRITERIA (doc 10 §10.2 / doc 11 §11.3 — every box true, evidence linked):
+CRITERIA (doc 10 §10.2 / doc 11 §11.3 - every box true, evidence linked):
   [ ] sleeve gate passed (A-gate + B-gate reports, trial-ledger ids)
   [ ] clean-day count  [ ] zero R-violations  [ ] determinism green
   [ ] beats cash + vol-matched passive + no-AI variant, net, 2× stress

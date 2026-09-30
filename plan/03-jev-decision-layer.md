@@ -1,9 +1,9 @@
-# 03 — JEV Decision Layer
+# 03 - JEV Decision Layer
 
 Model: `typesafe/jev-1.13` via `POST https://openrouter.ai/api/alpha/decisions`,
 or direct TypeSafe. Endpoint, model string, and access are verified in Phase 0
 before any build; the pinned string is written here and never floats (D3).
-`jev-latest` or any floating alias is forbidden — a silent version change breaks
+`jev-latest` or any floating alias is forbidden - a silent version change breaks
 replay (D3) and invalidates every calibration curve in doc 11.
 JEV writes no text. It answers typed questions about a `state` with calibrated
 probabilities. Our code owns the workflow and acts on the answers.
@@ -63,15 +63,15 @@ knows). The contract tag inside every signed payload and decision key is
   - mean_reversion: z-score / distance from equilibrium / half-life, regime-compatible
   - momentum: trend / macro surprise / flow
   - macro: rates / central-bank / event-drift
-  - execution: liquidity / spread only — never a directional reason alone;
+  - execution: liquidity / spread only - never a directional reason alone;
     selecting it forbids risk-taking (table row 6)
   - These probabilities describe *family fit*, never trade-success probability.
     Nothing in this distribution may be read as P(trade wins).
-- `conviction` (score): ["flat", "lean", "strong", "max"] — a bounded
+- `conviction` (score): ["flat", "lean", "strong", "max"] - a bounded
   qualitative control. It gates budget tiers (§3.2) but cannot authorize size;
   sizing authority belongs to the risk engine alone.
 - `latent_risk` (noul): "Material risk NOT captured by the deterministic engine?"
-  - criteria.true: "Hidden risk likely — unflagged event, gap/overnight exposure,
+  - criteria.true: "Hidden risk likely - unflagged event, gap/overnight exposure,
     suspicious provenance, regime the engine is blind in"
   - criteria.false: "No latent risk seen"
   - Additive only: it can add a HOLD, never override a C++ rule, never enlarge risk.
@@ -80,7 +80,7 @@ Response fields used: `answers.enter.noul`, `answers.edge_family.choice`
 (+`probabilities`, family-fit only), `answers.conviction.score`,
 `answers.latent_risk.noul`.
 
-## 3.2 Decision table (locked — code implements exactly this)
+## 3.2 Decision table (locked - code implements exactly this)
 
 Row 0 is the deterministic engine, not JEV. JEV rows follow; the first HOLD
 wins and is the logged reason.
@@ -93,7 +93,7 @@ latent_risk.noul > 0.5       → HOLD (additive hidden-risk veto)
 disagreement == true          → HOLD (R14: opposite TRIGGER effects, §3.4)
 event blackout active         → HOLD (C++-computed from impact+phase, §3.4)
 calibration_gate == breach      → HOLD (deterministic R13 breach;
-  comparison alone never holds — see calibration semantics below)
+  comparison alone never holds - see calibration semantics below)
 enter.noul < 0.5              → HOLD (no edge)
 enter 0.5–0.8 + (edge_family == execution
   OR conviction < strong)     → HOLD (mid-band needs strong directional)
@@ -102,7 +102,7 @@ conviction == flat            → HOLD
 conviction == lean            → base risk budget (1×R)
 conviction == strong          → base risk budget (1×R)
 conviction == max + max-gate  → ELIGIBLE for elevated budget (engine decides,
-  §3.3 — conviction nominates, never authorizes)
+  §3.3 - conviction nominates, never authorizes)
 conviction == max, gate fails → downgrade to strong
 ```
 
@@ -119,7 +119,7 @@ them that way:
 
 ```
 1. risk budget: R = 25bp equity (base). Elevated 2×R is granted SOLELY by
-   the deterministic risk engine on independently validated conditions —
+   the deterministic risk engine on independently validated conditions -
    conviction never authorizes size, including here. Engine conditions (all
    observed/logged, none a model output except E/L as bounded inputs):
    enter ≥ 0.8 AND latent_risk ≤ 0.3 AND calibration_gate == pass AND
@@ -142,16 +142,16 @@ through the max-gate, which is necessary but not sufficient:
   → the engine evaluates its independent conditions (step 1) for a 2×R grant.
   Conviction max is necessary but confers zero authority. Rationale: `pass`
   is required (not merely `≠ breach`) because `insufficient` means the
-  evidence base is too thin to judge calibration — thin evidence must never
+  evidence base is too thin to judge calibration - thin evidence must never
   authorize elevated risk. `insufficient` remains non-blocking for ordinary
   base-budget entry per R13 policy; only the 2×R multiplier demands `pass`.
 - Anything else at `max` downgrades to strong (base budget).
 - `edge_family` probabilities are family-fit evidence; they carry zero sizing
-  weight. No analyst-distribution test survives from v2 — it confused
+  weight. No analyst-distribution test survives from v2 - it confused
   "which view fits" with "the trade wins."
 
 Exit profile v1 (frozen live profile; variants shadow-tested, never live-tuned):
-stop 1.5×ATR(14) floored 0.1%, TP 2R, plus mandatory `time_exit` — calendar-aware
+stop 1.5×ATR(14) floored 0.1%, TP 2R, plus mandatory `time_exit` - calendar-aware
 (E4): time_exit = actual exchange close − frozen exit buffer (30 min default),
 from the validated IANA/exchange calendar, never a hard-coded clock time
 (which is wrong on early closes). Forex max 24 h. Profile changes are versioned
@@ -200,7 +200,7 @@ State rules (locked):
 
 ## 3.5 Caching, failure, determinism (locked)
 
-Two layers — research is cached, decisions are re-issued. A slow contextual
+Two layers - research is cached, decisions are re-issued. A slow contextual
 key alone can bless a stale answer for a moved market (same regime bucket,
 different price/spread/z-score), so the answer is bound to a decision
 fingerprint instead:
@@ -214,25 +214,25 @@ fingerprint instead:
   this field-for-field; do not reword it.
 - A cached answer is usable only if the decision_key is still compatible AND
   answer age ≤ 60 s AND no protected state (stage, HALT, R-flags) changed.
-  Otherwise the sidecar re-issues the call — JEV answers are cheap, stale
+  Otherwise the sidecar re-issues the call - JEV answers are cheap, stale
   answers are expensive.
-- Spend safety is two-layered (units resolved — the frozen doc named a number
+- Spend safety is two-layered (units resolved - the frozen doc named a number
   without units, so this amendment fixes the interpretation; ratify by review):
-  (a) **rate ceiling: 5000 provider calls/day** (alert at 2500) — an emergency
+  (a) **rate ceiling: 5000 provider calls/day** (alert at 2500) - an emergency
   brake on runaway call loops, not a money cap. Every `post()` invocation
   counts, including timeouts/500s/malformed (retry storms are exactly what the
   brake is for); (b) **money governance from doc 10**: true date-based
   rolling-30d USD (files outside `[today-29d, today]` ignored) vs the stage
-  absolute cap ($150 G0/G1, $400 G2, $1000 G3) — breach halts JEV calls
+  absolute cap ($150 G0/G1, $400 G2, $1000 G3) - breach halts JEV calls
   (`spend-stage-cap`) while exits/reconcile stay live. Unknown stage values
-  HOLD as `invalid-stage` before any provider call — no default cap.
+  HOLD as `invalid-stage` before any provider call - no default cap.
   USD at probe scale (~$1e-5/call) makes a $5000/day JEV money cap
   meaningless, which is why the call-count reading is the coherent one.
 - JEV down / timeout (>10 s) / malformed response → exactly 1 retry after ~5 s,
   then HOLD + log `jev_error`. Every failure increments the S5 streak counter.
   Risk gates still run locally.
   AMBIGUOUS-TRANSPORT EXCEPTION (frozen, pass-5 durability rule): a timeout
-  / reset / refused / DNS failure with NO provider response is ambiguous —
+  / reset / refused / DNS failure with NO provider response is ambiguous -
   the provider may have billed the POST before the transport died. Such a
   failure NEVER retries and NEVER refunds: the pre-call reservation stands
   as conservative spend, the governor trips (`ambiguous-transport` HOLD +
@@ -244,7 +244,7 @@ fingerprint instead:
   external bill.
 - UNKNOWN-COST EXCEPTION (frozen): a valid provider answer whose usage/cost
   cannot be reconciled (malformed/negative/non-finite/out-of-bound cost)
-  is HOLD `unknown-cost` — NO answer enters the decision path. An unknown
+  is HOLD `unknown-cost` - NO answer enters the decision path. An unknown
   bill is unbounded by the reservation, so the absolute cap cannot bless
   it. The governor is poisoned for subsequent calls either way.
 - SINGLE-FLIGHT (frozen): the spend lock covers cache-recheck → cap →
@@ -254,7 +254,7 @@ fingerprint instead:
 - Every call is cost-tagged `{stage, cycle_id, symbol, node, model,
   prompt_tokens, completion_tokens, usd, category: decision}` (doc 10 §10.4).
   An untagged call is a build failure. Failed provider attempts are logged
-  with `usd: unknown` — an explicitly unattributed attempt, never silent zero.
+  with `usd: unknown` - an explicitly unattributed attempt, never silent zero.
 - Every answer is scored against realized outcomes, HOLDs included, per doc 11
   §11.1. Calibration semantics (locked): `vs_baseline`
   (better|equal|worse|insufficient) is a descriptive comparison;
@@ -271,7 +271,7 @@ fingerprint instead:
 - Every cycle logs: context_hash, answers, probabilities, thresholds applied,
   final action. Replay test re-applies §3.2 to logged rows.
 
-Determinism, split honestly: the remote model is not strongly deterministic
+Determinism, split by layer: the remote model is not strongly deterministic
 (provider routing, revisions, stochastic backends), so the plan claims only
 what it can prove. **Decision determinism is guaranteed:** same logged
 Snapshot + same logged AnswerSet + same code/version → identical risk/decision
@@ -293,7 +293,7 @@ consulting Python's cache. C++ verifies before trusting; a bad signature is
 a HOLD + alert, and a forged `answers.json` buys an attacker nothing past
 the still-authoritative C++ risk layer.
 
-## 3.5a Answer boundary artifact (frozen — the C++ contract)
+## 3.5a Answer boundary artifact (frozen - the C++ contract)
 
 Python owns slowness (HTTP, retries, cache, signatures, cost); C++ owns
 decisions. They meet only at this artifact. The adapter answers "what did
@@ -313,7 +313,7 @@ verifier holds the trust anchor. Kernel-owned values (expected cid, symbol
 and feature hash) come from the engine, never from the artifact; a mismatch
 in any of them, or in the recomputed `decision_key`, is a HOLD.
 
-C++ semantics for every malformed/stale answer (locked — each row is HOLD):
+C++ semantics for every malformed/stale answer (locked - each row is HOLD):
 
 ```
 missing / unparsable    → HOLD (absent)
@@ -335,7 +335,7 @@ the logged AnswerSet re-enter C++ and must reproduce the decision bit-for-bit.
 Same inputs + same AnswerSet → identical decision, even if the provider
 disappears tomorrow.
 
-## 3.5b Model retirement runbook (S7-B, governance — no JEV semantic change)
+## 3.5b Model retirement runbook (S7-B, governance - no JEV semantic change)
 
 A deployed JEV configuration is identified EXACTLY by the tuple
 `model | revision | provider | contract`, matching the
@@ -349,7 +349,7 @@ operations; nothing here retires, switches, or promotes automatically.
 
 Lifecycle (who moves what, and what may still call):
 - `active`: the pinned identity serves new provider calls.
-- `retirement-declared` (human declares): the identity is drained —
+- `retirement-declared` (human declares): the identity is drained -
   an ALREADY-VALID cache artifact may still be served under the
 existing cache contract, but NO new provider calls are issued for
   it. Expired, malformed, wrong-revision, wrong-provider, or
@@ -359,14 +359,14 @@ existing cache contract, but NO new provider calls are issued for
   identity, not a fallback.
 - `retired`: the identity is never selected for new calls, period.
 - `quarantined` (emergency path, human declares): immediate stop for
-  that identity — no new calls, no fabricated fallback answer, while
+  that identity - no new calls, no fabricated fallback answer, while
   the deterministic engine (veto, exits, reconcile) stays live. The
   net effect is HOLD/fail-closed, never a silent switch.
 
 The authoritative retirement record is human-owned and auditable:
 the exact identity tuple, the state entered, the effective time,
 the human signer/actor, and the reason/action. This record is
-governance and deployment authority — it is not LangGraph state and
+governance and deployment authority - it is not LangGraph state and
 not model output. The mechanical cutover for any retirement or
 replacement is: stop the provider process → write the retirement
 record → verify the old identity cannot be selected → install and
@@ -406,7 +406,7 @@ Notation: E = enter, F = edge_family, C = conviction, L = latent_risk.
 |---|---|---|---|---|---|
 | 21 | .90 | momentum | strong | L=.8 | HOLD latent risk (additive veto) |
 | 22 | .88 | mean_reversion | strong | C++ deterministic veto (R2) | HOLD row 0, reason = engine |
-| 23 | .85 | execution | strong | — | HOLD execution family never directs risk |
+| 23 | .85 | execution | strong | - | HOLD execution family never directs risk |
 | 24 | .93 | macro | max | L=.1, calib better, gate | Elevated budget 2×R |
 | 25 | .93 | macro | max | L=.4 | Downgrade strong (gate needs L≤.3) |
 | 26 | .91 | momentum | max | calib breach | HOLD calibration (row above max) |
@@ -415,9 +415,9 @@ Notation: E = enter, F = edge_family, C = conviction, L = latent_risk.
 | 29 | .93 | macro | max | L=.1, calib pass, independent snapshot carries R2 pending-risk | HOLD joint-error (row 0; reason = engine-veto:pending-risk) |
 
 Case 29 is the joint-JEV-error stress (gap-analysis B1, frozen): the
-artifact is an adversarial optimistic answer proxy — all four answers
+artifact is an adversarial optimistic answer proxy - all four answers
 jointly wrong in the optimistic direction (high enter, favored family,
-max conviction, low latent risk, clean calibration) — while an
+max conviction, low latent risk, clean calibration) - while an
 independent snapshot/risk state forbids the trade (R2 pending-risk:
 intent + pending exposure over the 75% cap). The proof is about
 authorization independence, NOT about the recorded answer being
@@ -432,7 +432,7 @@ breach via EvaluateVeto, maps it via BuildEngineInputs, and blocks the
 optimistic artifact; the filter vectors prove a vetoed state
 authorizes nothing regardless of answers.
 
-Rule proven by cases 24/25: conviction max is necessary but never sufficient —
+Rule proven by cases 24/25: conviction max is necessary but never sufficient -
 it nominates, the engine's independently validated conditions authorize, and
 the §3.3 hierarchy owns size. Family-fit probabilities carry zero sizing
 weight, ever.

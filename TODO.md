@@ -14,7 +14,7 @@ A box is checked only with evidence (commit and test output, or a report path).
 - S7-C: CLOSED (hosted CI green on the PR head, all six jobs).
 - G0: NOT STARTED. Live ordering: NOT AUTHORIZED.
 
-## Phase R — rebaseline (docs)
+## Phase R - rebaseline (docs)
 
 - [x] R1 Critique recorded (in git history).
 - [x] R2 Docs 00–13 + manifest rewritten; §6.1b, §8.4 internals, X archive
@@ -22,7 +22,7 @@ A box is checked only with evidence (commit and test output, or a report path).
 - [x] R3 TODO archived + rebuilt; AGENTS/README/ARCHITECTURE aligned.
 - [x] R4 Operator approval of the plan text (doc 07 sign-off log, 2026-09-29).
 
-## Track O — ops, CI, hygiene (small, do first)
+## Track O - ops, CI, hygiene (small, do first)
 
 - [x] O6 Rotate every credential shared in chat on 2026-09-28
       (OpenRouter, FRED, BEA, Alpaca paper); re-seed local `.env` only.
@@ -43,25 +43,25 @@ A box is checked only with evidence (commit and test output, or a report path).
   - Done: `config.py` handles `export KEY=` and unquoted inline comments; `HTTPError` responses are closed (`collector/tests/test_o7.py`, in CI).
   - Decision: the 8 MiB call-log rotation loses no spend evidence, because spend accounting reads the per-day ledgers.
 
-## Track A — alpha (critical path)
+## Track A - alpha (critical path)
 
 - [x] A0 Research harness v2 (`research/strategy/`):
   - [x] A0.1 Trial ledger (append-only, hash-chained, off-host checkpoint;
-        every run writes a row incl. failures) — doc 11 §11.0a.
+        every run writes a row incl. failures) - doc 11 §11.0a.
   - [x] A0.2 SIP data fetcher (daily + minute bars, quotes, `feed=sip`,
-        ≥15-min-delayed end) with dataset manifests — doc 09 §9.1a.
+        ≥15-min-delayed end) with dataset manifests - doc 09 §9.1a.
   - [x] A0.3 `cost_v2` (paper_fill_v1 + SIP NBBO + SEC/TAF fees +
-        participation caps + dividends) — doc 06 §6.0a.
+        participation caps + dividends) - doc 06 §6.0a.
   - [x] A0.4 Settlement simulation (T+1, GFV/free-riding) + long-only
-        cash constraint set in the backtester — doc 11 §11.0d.
+        cash constraint set in the backtester - doc 11 §11.0d.
   - [x] A0.5 Statistics: purged/embargoed walk-forward, CPCV, PBO, DSR
         (N from ledger), MinTRL, stationary bootstrap, HAC Sharpe, pooled
-        Holm — fixture-tested — doc 11 §11.0b.
+        Holm - fixture-tested - doc 11 §11.0b.
   - [x] A0.6 Pre-registration template + validator; contamination guard
-        (LLM windows must start after cutoff + 30 d) — doc 11 §11.0c.
+        (LLM windows must start after cutoff + 30 d) - doc 11 §11.0c.
   - [x] A0.7 Benchmark set (cash, vol-matched passive, 60/40, no-AI
-        variant, baseline_v1 reproduction) — doc 12 §12.6.
-  - [x] A0.8 A-gate / B-gate report generators — doc 11 §11.3a.
+        variant, baseline_v1 reproduction) - doc 12 §12.6.
+  - [x] A0.8 A-gate / B-gate report generators - doc 11 §11.3a.
 - [ ] A1 S2 closure:
   - [x] Negative result + diagnosis recorded (doc 12 §12.7).
   - [ ] `baseline_v1` rerun on SIP bars + quotes; primary ledger populated; FX leg dropped.
@@ -85,7 +85,7 @@ A box is checked only with evidence (commit and test output, or a report path).
       one candidate-bound contract, log-only); a live provider run and enough candidates are still open.
 - [ ] A9 S1 closure with ETF/EDGAR universes; PIT S&P-500 limitation recorded.
 
-## Track L — long-history replication (parallel with A)
+## Track L - long-history replication (parallel with A)
 
 - [x] L1 `l1_long_history_v1` harness (2026-09-30): T1/T2 rules on French daily
       industry portfolios (1926+), sub-period and post-publication decay
@@ -101,7 +101,7 @@ A box is checked only with evidence (commit and test output, or a report path).
     `--custom-csv` runs open their own trials. Smoke runs (`--boot`) use a
     temp ledger or `--no-ledger`, never the real one.
 
-## Track K — kernel P3.5 remainder (parallel with A)
+## Track K - kernel P3.5 remainder (parallel with A)
 
 - [ ] K1 P3.5-T transport: decision record (libcurl+TLS vs `mirotrade`
       gateway) → implementation behind the seam → fault-injection suite →
@@ -155,7 +155,7 @@ A box is checked only with evidence (commit and test output, or a report path).
   - Open: STAGE signature and approved.json (G0-STAGE) remain.
 - [ ] K-exit P3.5 CLOSED (K1–K7 + K10 green).
 
-## Track P — research plane (parallel)
+## Track P - research plane (parallel)
 
 Deferred by decision (2026-09-29): no sleeve has passed an A-gate, so there is nothing for a reader tier or a research factory to feed, and P1/P2/P4 need Docker workers and a paid LLM budget to verify. Alpha-first rule (AGENTS 9): revisit when a sleeve reaches B-gate or a new data source justifies it.
 Order (2026-09-29): the paper run and its results choose which strategies
@@ -172,14 +172,14 @@ to keep; this track is then connected to feed those strategies.
       Form 4 + 8-K EX-99.1 locators).
 - [ ] P5 S6 integration only via the doc 11 path (not critical path).
 
-## Phase 4 — G0_PAPER
+## Phase 4 - G0_PAPER
 
 The paper run is started with `bash ops/deploy/start.sh ~/g2` (see `ops/deploy/README.md`). G0b remains formally gated.
 
 - [ ] G0a Shadow on live data for every A-gate passer (harness fills,
       `cost_v2`, no broker orders); B-gate per sleeve.
   - [x] Shadow ledgers for core, T1, T2 (`ops/sleeve_shadow.py`, started by
-        `start.sh`, monitor panel, `--verify` fidelity gate) — plan/appendix/10.
+        `start.sh`, monitor panel, `--verify` fidelity gate) - plan/appendix/10.
   - [x] Event sleeves E1 and I1 in the shadow ledger (`ops/event_shadow.py`); E2det PEAD not wired (no forward source for its registered signal).
   - [x] Collector background poller (opt-in `WITH_COLLECTOR=1`). [x] macro-lite shadow ledger (`ops/macro_shadow.py`, needs FRED_API_KEY).
   - [x] JEV paired A/B twins per sleeve (`ops/jev_twin.py`, needs OPENROUTER_API_KEY; live run pending).
@@ -191,7 +191,7 @@ The paper run is started with `bash ops/deploy/start.sh ~/g2` (see `ops/deploy/R
 - [ ] G0-ops Daily summary, weekly replay, §6.2a drills on the live loop.
 - [ ] G0-exit 30 clean G0b days + doc 10 §10.2 G0→G1 criteria +       sign-off.
 
-## Phase 5+ — live stages (not authorized)
+## Phase 5+ - live stages (not authorized)
 
 - [ ] G1-J Jurisdiction evidence bundle (doc 10 §10.1a) incl.
       professional written confirmation of the instrument allowlist.

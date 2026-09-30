@@ -1,4 +1,4 @@
-# 13 — C++ deterministic kernel build (Phase 3)
+# 13 - C++ deterministic kernel build (Phase 3)
 
 Phase 2 is frozen (`50ea369` accepted). The JEV sidecar is not modified
 further unless Phase-3 integration exposes an actual contract defect.
@@ -78,14 +78,14 @@ elevated 2xR tier (conviction `max` nominates it; the engine authorizes).
 Confidence is quarantined: no accessor exists and no kernel path reads it
 (grep-gated).
 
-## 13.5 P3.5 — Risk engine, sizing, exits, kills (docs 04–06 order)
+## 13.5 P3.5 - Risk engine, sizing, exits, kills (docs 04–06 order)
 
 Only after the JEV filter gate is green. Build slices in this exact order; each
 slice is pure-first (no I/O in decision logic), fixture-tested, and
 green before the next starts. No JEV/sidecar changes, no research plane,
 G0_PAPER only (§13.6).
 
-- Slice A — request authority (prereq, doc 07 ruling): ValidationRequest
+- Slice A - request authority (prereq, doc 07 ruling): ValidationRequest
   becomes private-immutable (const fields, no setters, no mutable
   accessors) with KernelState friendship; request_for() is the sole
   construction authority, copying an authorized request is allowed but
@@ -99,27 +99,27 @@ G0_PAPER only (§13.6).
   (each failing for the intended reason), compile-PASS for
   request_for() and validate_jev(const ValidationRequest&). Grep is
   policy; the negative compile test is the proof.
-- Slice B — `risk/veto.cpp` (doc 05 R1–R17 + doc 03 §3.2 table): pure
+- Slice B - `risk/veto.cpp` (doc 05 R1–R17 + doc 03 §3.2 table): pure
   Snapshot+AnswerSet → HOLD/PROCEED + frozen reason; stage multiplier
   applied here after sizing; K6 snapshot formulas; R14/R13 inputs from
   validated state. Gate [correctness]: veto unit suite from doc 05 cases.
-- Slice C — `ingest/features.cpp` (doc 04 §4.2.2a, R12): f2 schema,
+- Slice C - `ingest/features.cpp` (doc 04 §4.2.2a, R12): f2 schema,
   bounds (≤64 retained, ≤16 payload), future/TTL drop, rejection
   counters, >5%/h alert. Gate [correctness]: §4.5 rejection tests.
-- Slice D — `kill/switch.cpp` (doc 10 §10.3): SOFT/MEDIUM/HARD, file +
+- Slice D - `kill/switch.cpp` (doc 10 §10.3): SOFT/MEDIUM/HARD, file +
   signal reachable <5 s, exits/stops/TP/reconcile survive every level.
   Gate [drill]: §4.5 + §6.5 kill drills.
-- Slice E — STAGE chain (doc 10 §10.1): re-read per cycle boundary,
+- Slice E - STAGE chain (doc 10 §10.1): re-read per cycle boundary,
   hash-chain verify, unverifiable → G0_PAPER. Gate [correctness]: corruption test.
-- Slice F — `feed/broker.cpp` (doc 04 §4.2.2): lock-free ring, gap
+- Slice F - `feed/broker.cpp` (doc 04 §4.2.2): lock-free ring, gap
   flags, reconnect backoff, session marking (closed = normal).
   Gate [soak]: 24 h soak, flat RSS, kill/reconnect test (§4.5).
-- Slice G — `ctx/context.cpp` (doc 04 §4.2.3): frozen Snapshot over
+- Slice G - `ctx/context.cpp` (doc 04 §4.2.3): frozen Snapshot over
   marks, spread, session, indicators, regime, buckets, VaR/corr flags,
   portfolio, last complete feature bundle, source_status, stage,
   research_revision, calibration; context_hash (D6 fixed-point) over
   ALL of it, features included. Gate [correctness]: 10k identical inputs → 1 hash.
-- Slice H1 — `exec/router.cpp` + `log/journal.cpp` (doc 06, implementation
+- Slice H1 - `exec/router.cpp` + `log/journal.cpp` (doc 06, implementation
   + integration): §3.3 sizing hierarchy, broker-native PROTECTED attach
   (E1), idempotent order IDs (doc 06 §6.1 recipe), durable intent/ack
   machine, retry-once, journal-before-order, S2 reconcile FSM,
@@ -128,12 +128,12 @@ G0_PAPER only (§13.6).
   reconcile drills (exits proven alive). Gate [correctness + drill]:
   §6.5 implementation and drill rows green. H1 green CLOSES P3.5
   (with §4.5 correctness + drill rows).
-- Slice H2 — Phase 4 operational evidence (NOT P3.5): the live paper
+- Slice H2 - Phase 4 operational evidence (NOT P3.5): the live paper
   loop, 30 clean days, zero R violations, real outage drills with
   exits alive, out-of-band notification actually received. Gate
   [operational]: doc 07 Phase 4 exit. H2 owns all time-series evidence;
   it runs after P3.5 closes and never retro-blocks it. The 30-day bar
-  is unchanged — it simply belongs to the correct phase.
+  is unchanged - it simply belongs to the correct phase.
 
 Gate classes (so long evidence never silently serializes the build):
 [correctness] = unit/fixture suites, deterministic, minutes;
@@ -153,31 +153,31 @@ Soak/operational evidence tracked per gate class, never retro-blocking.
 - No research-plane work (Phase 2.5 runs in parallel, feeds `features.jsonl`
   only through the frozen f2 schema).
 - No live capital, no stage above G0_PAPER, no venue beyond Alpaca paper
-  (v3: OANDA practice BLOCKED — India ineligible; forex is not a live
+  (v3: OANDA practice BLOCKED - India ineligible; forex is not a live
   target, doc 01 §1.2).
 - No confidence-driven decisions without closing §13.4(a).
 
 ## 13.7 Battle-testing ladder (gap-analysis mapping, frozen ownership)
 
-The research lesson set vs existing gates — reconciled, not duplicated.
+The research lesson set vs existing gates - reconciled, not duplicated.
 Every reliability property has exactly one owner and one measurable test.
 
 | Research lesson | Existing gate | Missing gate | Owning slice |
 |---|---|---|---|
-| parser strictness | filter vectors (type/int-domain/expiry cases) | — (covered) | filter (closed) |
-| rejection-shape matrix | Slice C 78-check suite (§4.5 rows) | — (covered) | Slice C (closed) |
-| veto unit battery | Slice B 153+ suite + case-29 row | — (covered) | Slice B (closed) |
-| decision determinism | 32 cross-language vectors + veto composition suite | — (covered) | filter (closed) |
-| simulated market-feed delay/drop | — | feed-gap + transport-drop injection vs §6.2a broker rows | Slice F |
-| JEV/provider timeout/drop | — | provider-timeout injection vs §6.2a JEV rows | H1 |
-| randomized event ordering | — | order-permuted reconcile test: arrival order randomized while broker event identity/sequence metadata is preserved; reconciliation must converge to the same broker-consistent final state across permutations and duplicate deliveries. Where a venue supplies no usable sequence metadata, the H1 design freezes an explicit deterministic tie-break (e.g. broker-timestamp then event-id order) rather than assuming order irrelevance | H1 |
+| parser strictness | filter vectors (type/int-domain/expiry cases) | - (covered) | filter (closed) |
+| rejection-shape matrix | Slice C 78-check suite (§4.5 rows) | - (covered) | Slice C (closed) |
+| veto unit battery | Slice B 153+ suite + case-29 row | - (covered) | Slice B (closed) |
+| decision determinism | 32 cross-language vectors + veto composition suite | - (covered) | filter (closed) |
+| simulated market-feed delay/drop | - | feed-gap + transport-drop injection vs §6.2a broker rows | Slice F |
+| JEV/provider timeout/drop | - | provider-timeout injection vs §6.2a JEV rows | H1 |
+| randomized event ordering | - | order-permuted reconcile test: arrival order randomized while broker event identity/sequence metadata is preserved; reconciliation must converge to the same broker-consistent final state across permutations and duplicate deliveries. Where a venue supplies no usable sequence metadata, the H1 design freezes an explicit deterministic tie-break (e.g. broker-timestamp then event-id order) rather than assuming order irrelevance | H1 |
 | feature-bundle version skew | context snapshot vectors (f2 only) | f3-shaped research bundle → loud reject at the feature/context boundary, no silent pass | Phase 2.5 |
-| chaos restart (kernel) | — | kill -9 mid-cycle drill: journal chain verifies, epoch monotonicity holds, no duplicate order IDs | H1 (drill gate) |
-| chaos restart (research) | — | kill -9 at random node: resume, no duplicate features, no partial bundle | Phase 2.5 §8.6 |
-| kill-switch levels | — | §4.5 + §6.5 kill drills (exits alive at all three) | Slice D (drill gate) |
-| outage defaults | — | every §6.2a row drilled with exits proven alive | H1 (drill gate) |
-| feed soak | — | 24 h soak, flat RSS, kill/reconnect | Slice F (soak gate) |
-| 30-day operation | — | H2 operational evidence (Phase 4, never retro-blocks) | H2 |
+| chaos restart (kernel) | - | kill -9 mid-cycle drill: journal chain verifies, epoch monotonicity holds, no duplicate order IDs | H1 (drill gate) |
+| chaos restart (research) | - | kill -9 at random node: resume, no duplicate features, no partial bundle | Phase 2.5 §8.6 |
+| kill-switch levels | - | §4.5 + §6.5 kill drills (exits alive at all three) | Slice D (drill gate) |
+| outage defaults | - | every §6.2a row drilled with exits proven alive | H1 (drill gate) |
+| feed soak | - | 24 h soak, flat RSS, kill/reconnect | Slice F (soak gate) |
+| 30-day operation | - | H2 operational evidence (Phase 4, never retro-blocks) | H2 |
 
 No overlapping tests proving the same thing twice: a lesson with an
 existing gate is cited, not rebuilt. New gates attach to the listed slice
@@ -228,7 +228,7 @@ nothing has been sent. Remaining boxes, in order:
   shape extension, legs proof for the 1-leg OTO case, stop-before-MOC and
   MOC-reject drills.
 - **Candidate ingest** (doc 04 2b): CID recompute, sleeve approval,
-  allowlist, freshness, long-only side policy — adversarial vectors.
+  allowlist, freshness, long-only side policy - adversarial vectors.
 - **Outbound-only alert adapter** (doc 06 §6.4).
 - **Live journal growth bound** (tracked item from H1 becomes a box).
 - **H1 drills on the real transport** (every doc 06 §6.2a row).

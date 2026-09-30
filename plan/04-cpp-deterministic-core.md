@@ -1,6 +1,6 @@
-# 04 — C++ Deterministic Core (low-latency execution, not HFT alpha)
+# 04 - C++ Deterministic Core (low-latency execution, not HFT alpha)
 
-The < 1 ms local budget buys determinism, auditability, and reliable exits —
+The < 1 ms local budget buys determinism, auditability, and reliable exits -
 not market-latency advantage. Venue feeds are seconds-scale, the broker API
 is internet REST (200 requests/min), and the strategies are latency tier
 T2/T3 (doc 01 §1.4). Nothing here assumes HFT market-making capability.
@@ -44,7 +44,7 @@ jurisdiction allowlist (doc 10 §10.1a, v3) ───┤     │
   candidates and open positions; it is the end of a funnel.
 - Boundary law: `features.jsonl` is the ONLY research artifact that may
   cross into C++, and `candidates.jsonl` is the ONLY strategy artifact.
-  `research_digest.jsonl`, thesis prose, critique prose, raw texts — never
+  `research_digest.jsonl`, thesis prose, critique prose, raw texts - never
   consumed, never attached, never snapshot material. `ctx/` rejects any
   row carrying text fields (quarantine, alert, HOLD).
 - Files over sockets: features and candidates are tailed with atomic
@@ -54,16 +54,16 @@ jurisdiction allowlist (doc 10 §10.1a, v3) ───┤     │
   unverifiable → G0_PAPER (doc 10 §10.1).
 - **Signal data vs order data (v3):** sleeve signals are computed from
   consolidated SIP bars (15-minute-delayed on the free plan, which every
-  current sleeve schedule tolerates) — the same data the backtests used.
+  current sleeve schedule tolerates) - the same data the backtests used.
   Real-time IEX quotes are used only to price orders and to run
   staleness/spread vetoes. A sleeve whose signal needs real-time SIP is
   not supported on the free plan and is not pre-registered.
 
 ## 4.2 Modules (each = one directory, one responsibility)
 
-1. `core/types.h` — `Side`, `Candidate`, `Snapshot`, `AnswerSet`,
+1. `core/types.h` - `Side`, `Candidate`, `Snapshot`, `AnswerSet`,
    `OrderIntent`, `Fill`. Plain structs. Risk numbers `constexpr` (doc 05).
-2. `feed/broker.cpp` — broker quote/trade stream, fixed lock-free ring
+2. `feed/broker.cpp` - broker quote/trade stream, fixed lock-free ring
    (65536 ticks, overwrite-oldest + `gap=true`), sequence-gap detection,
    reconnect with backoff; REST alongside for exits + reconcile only.
    Session-aware (`session=closed` is normal). Transport decision (frozen,
@@ -73,11 +73,11 @@ jurisdiction allowlist (doc 10 §10.1a, v3) ───┤     │
    contract is a different product and is not assumed interchangeable. The
    runner seam stays wire-agnostic: `RouteStep` consumes shaped
    observations only.
-2a. `ingest/features.cpp` — tails `features.jsonl`; schema version, bounds
+2a. `ingest/features.cpp` - tails `features.jsonl`; schema version, bounds
    (≤64 retained, ≤16 into a JEV payload), enum/bucket types, **R12**:
    drop `observed_at_ns` in the future or past TTL. Rejections counted;
    > 5%/h alerts. Zero allocation on the tick path.
-2b. `ingest/candidates.cpp` (v3) — tails `candidates.jsonl`; validates the
+2b. `ingest/candidates.cpp` (v3) - tails `candidates.jsonl`; validates the
    c1 schema, **recomputes the CID** (mismatch = reject), checks the sleeve
    id against the stage manifest's approved-sleeve list, symbol against the
    jurisdiction allowlist (R19), freshness (created within the sleeve's
@@ -87,7 +87,7 @@ jurisdiction allowlist (doc 10 §10.1a, v3) ───┤     │
    the tick-path zero-allocation gate is unchanged.
    **c1 wire record (K6, frozen with the code):** one JSON object per line,
    keys exactly `schema` (`"c1"`), `created_ns` (decimal string), and
-   `candidate` — an object whose 12 CID-recipe fields (doc 12 / `candidate.py`
+   `candidate` - an object whose 12 CID-recipe fields (doc 12 / `candidate.py`
    `_ID_FIELDS`, in that order) plus `cid` are ALL JSON strings holding the
    exact Python `str()` bytes the CID was hashed over (same convention as
    the JEV request, so one recompute rule serves both). The sleeve is
@@ -100,7 +100,7 @@ jurisdiction allowlist (doc 10 §10.1a, v3) ───┤     │
    symbol is currently held; anything else rejected). `created_ns` is
    informational and must parse as a non-negative int64. Every reject is
    counted per reason and never partially applied.
-3. `ctx/context.cpp` — builds the frozen `Snapshot`: marks, spread,
+3. `ctx/context.cpp` - builds the frozen `Snapshot`: marks, spread,
    session, indicators, regime, VaR/correlation flags (doc 05 §5.1a),
    portfolio view (equity, **settled cash, unsettled proceeds**, exposure,
    pending, buying power), the last complete feature bundle, per-source
@@ -118,19 +118,19 @@ jurisdiction allowlist (doc 10 §10.1a, v3) ───┤     │
    `context_hash` ≠ JEV `state_hash` (frozen distinction, doc 03 §3.5a):
    context_hash is the kernel's Snapshot digest; state_hash is the digest
    of the full JEV request state. Either mismatch is HOLD.
-4. `risk/veto.cpp` — pure `Snapshot + Candidate (+ optional AnswerSet) →
+4. `risk/veto.cpp` - pure `Snapshot + Candidate (+ optional AnswerSet) →
    HOLD/PROCEED + reason`. Implements R1–R19 + the doc 03 §3.2 table when
    a filter is configured + the stage multiplier after sizing. No I/O.
-4a. `kill/switch.cpp` — SOFT / MEDIUM / HARD (doc 10 §10.3). Pure C++, no
+4a. `kill/switch.cpp` - SOFT / MEDIUM / HARD (doc 10 §10.3). Pure C++, no
    LLM, no network dependency for the decision, file + signal reachable
    in < 5 s. Exits, stops, reconcile survive every level.
-4b. **Always-take path (v3)** — `BuildEngineInputs` gains a versioned
+4b. **Always-take path (v3)** - `BuildEngineInputs` gains a versioned
    filter-policy input (`none | jev`). With `none`, the decision is
    row-0 veto + R1–R19 + sizing; no AnswerSet is read, required, or
    fabricated. Proven by: identical verdicts to the filtered path on every
    row where the filter would PASS, and by a compile/grep gate that the
    `none` path cannot reach an AnswerSet accessor.
-5. `exec/router.cpp` — risk-budget sizing (doc 03 §3.3 hierarchy),
+5. `exec/router.cpp` - risk-budget sizing (doc 03 §3.3 hierarchy),
    broker-native protection attach (doc 06 §6.1), idempotent client order
    IDs `hex(sha256(broker ‖ account ‖ context_hash ‖ symbol ‖ side ‖
    intent_id))`, durable intent/ack machine, reconcile-before-resend,
@@ -139,30 +139,30 @@ jurisdiction allowlist (doc 10 §10.1a, v3) ───┤     │
    signal-exit sleeves (`exit_trend_v1`, `exit_intraday_v1`,
    `exit_event_v1`); MOC exits via `time_in_force=cls` with the stop/MOC
    ordering rule of doc 06 §6.0.
-5a. `broker/` — `EquityBrokerAdapter` (Alpaca). The adapter declares
+5a. `broker/` - `EquityBrokerAdapter` (Alpaca). The adapter declares
    units (whole shares for protected orders), partials, precision,
    sessions, MOC cutoff, rate limits. The `FXBrokerAdapter` interface is
    retired from v1 (OANDA BLOCKED, forex not a live target).
-5b. **Transport (v3, named blocker)** — the runner currently runs with
+5b. **Transport (v3, named blocker)** - the runner currently runs with
    `deps.transport = nullptr` (no network). Decision frozen: the transport
    is a vetted TLS HTTP/WebSocket client behind the existing transport
-   seam — either libcurl + system TLS linked into the kernel, or a
+   seam - either libcurl + system TLS linked into the kernel, or a
    minimal broker-gateway process under the same `mirotrade` identity
    speaking the shaped-observation protocol over a local pipe. Selection
    criteria (doc 13 P3.5-T): smaller audited surface, fail-closed on every
    TLS/HTTP error, no credential in argv/env of other users, bounded
    buffers, rate-limit aware (200/min). Writing TLS from scratch is
    forbidden.
-5c. **Settlement ledger (v3)** — per-lot trade date, settlement date (T+1
+5c. **Settlement ledger (v3)** - per-lot trade date, settlement date (T+1
    by the exchange calendar), funding source (settled vs unsettled),
    supports R18: no buy with unsettled funds whose position could be sold
    before settlement; no sale of a lot bought with unsettled funds before
    that funding settles. Rebuilt from the journal + broker account on
    recovery; disagreement = HOLD + reconcile.
-5d. Universe service — deterministic eligibility/liquidity/spread/
+5d. Universe service - deterministic eligibility/liquidity/spread/
    allowlist filters → the ≤ 5 executable symbols per epoch. Kernel-owned:
    the universe and `snapshot_epoch` are minted by the kernel only.
-6. `log/journal.cpp` — append-only per-decision row + hash chain. Nothing
+6. `log/journal.cpp` - append-only per-decision row + hash chain. Nothing
    trades without a journal row (emergency-exit exception: doc 06).
 
 **Port-on-promotion rule (v3):** a sleeve may drive G0b paper through the
@@ -211,9 +211,9 @@ protect positions even if the host is gone.
 - [ ] Snapshot hash stable: 10k identical inputs → 1 hash, features and
       settlement fields included (Snapshot v2 vectors).
 - [ ] Feature ingest rejects: bad schema, future timestamp (R12), expired
-      TTL, over-count, float-where-enum — each proven by test.
+      TTL, over-count, float-where-enum - each proven by test.
 - [ ] Candidate ingest rejects: forged CID, unapproved sleeve,
-      non-allowlisted symbol, stale candidate, SELL-to-open live — each
+      non-allowlisted symbol, stale candidate, SELL-to-open live - each
       proven by test.
 - [ ] Always-take path proven equal to the filtered path where the filter
       passes, and unable to read an AnswerSet.
@@ -229,7 +229,7 @@ protect positions even if the host is gone.
 
 - Four processes (C++ kernel + sleeve engine + research plane + optional
   JEV sidecar), JSON over files between identities. No gRPC, no sockets
-  between planes in v1 — files make the boundary auditable. The transport
+  between planes in v1 - files make the boundary auditable. The transport
   (broker network I/O) is part of the kernel's identity, not a plane.
 - Research features and strategy candidates are validated, bounded,
   TTL'd, and hashed into the decision record. Absent ≠ neutral.

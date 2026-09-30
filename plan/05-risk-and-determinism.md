@@ -1,4 +1,4 @@
-# 05 — Risk and Determinism (hard rules, freeze v3 `risk_version: R1-R19+v3`)
+# 05 - Risk and Determinism (hard rules, freeze v3 `risk_version: R1-R19+v3`)
 
 Violation of any numbered rule halts paper trading until human review and
 demotes a live stage (doc 10 §10.2). No auto-override exists by design, and
@@ -8,7 +8,7 @@ text is the freeze-v2 contract unchanged.
 ## 5.1 Position and exposure limits
 
 - R1. (v3) Max 5 concurrent positions (= `EXEC_UNIVERSE_MAX`). One open
-  position per symbol — a second intent on a held symbol is HOLD until the
+  position per symbol - a second intent on a held symbol is HOLD until the
   first closes. The freeze-v2 "max 2 in the same direction" clause applies
   only to books that may short (shadow research books); a long-only book
   controls concentration through R2, R7, and the sleeve/portfolio risk
@@ -16,7 +16,7 @@ text is the freeze-v2 contract unchanged.
   book of 3+ positions). Exposure math counts filled exposure PLUS pending
   executable exposure (unfilled entries reserve budget). Account inputs are
   first-class: equity, settled cash, unsettled proceeds, open-order
-  notional, realized/unrealized PnL — from the broker adapter.
+  notional, realized/unrealized PnL - from the broker adapter.
   Snapshot-time formulas (K6, frozen): `pending_notional` = sum of
   open-order notional (entry + unacked); `reserved_risk` = pending_notional
   × per-symbol risk fraction; in a cash account `margin_requirement` = 0
@@ -41,7 +41,7 @@ text is the freeze-v2 contract unchanged.
   Like-with-like only: both sides are stdev of 1 h log returns (baseline =
   trailing 480 points, current = trailing 24). Data-age gate (frozen): the
   latest input bar must fall within the last 2 EXPECTED hourly bars per
-  the venue session calendar (doc 01) — weekends and holidays are
+  the venue session calendar (doc 01) - weekends and holidays are
   excluded BY THE CALENDAR, feed gaps count against the budget. A stale R6
   input makes R6 UNAVAILABLE and entry is HOLD.
 - R7. Correlation gate at entry + drift rule after. Entry that would create
@@ -59,13 +59,13 @@ text is the freeze-v2 contract unchanged.
   sizes at base budget only (no 2×R without a gate that can grant it).
 - R9. Sessions, broker rules, and corporate plumbing are hard vetoes via
   the `broker_compliance_policy` adapter table (broker, account type,
-  effective date, day-trade/short/session/settlement rules —
+  effective date, day-trade/short/session/settlement rules -
   effective-date-aware; regulation changes are data updates). No entries
   outside 09:30–16:00 America/New_York (exchange calendar); no
   extended-hours orders in v1. Day-trade counting (v3): the FINRA
   pattern-day-trader framework was eliminated by SEC approval on
   2026-04-14 (effective 2026-06-04; broker implementation deadline
-  2027-10-20) — a table row with effective dates, not a code path; cash
+  2027-10-20) - a table row with effective dates, not a code path; cash
   accounts are governed by R18. Shorts: live HOLD always (R19); shadow
   books require shortable + borrow + SSR + margin checks. Corporate
   actions: splits, dividends, ticker changes, mergers, halts normalize
@@ -99,11 +99,11 @@ text is the freeze-v2 contract unchanged.
   returns, position-weighted; breach = portfolio VaR > 5% equity. The
   engine also carries historical expected shortfall and precomputed stress
   scenarios (gap, correlation shock, liquidity stress); C++ consumes
-  bounded precomputed values — no stochastic model on the hot path.
+  bounded precomputed values - no stochastic model on the hot path.
 - (v3) Sizing is risk-budget based everywhere (doc 03 §3.3 hierarchy;
   sleeve slot weights in doc 02 are caps inside that hierarchy). The
   freeze-v2 "conviction sizes: lean 5%, strong 10–15%, max 25% notional"
-  line is RETIRED — it contradicted doc 03 §3.3 (conviction never
+  line is RETIRED - it contradicted doc 03 §3.3 (conviction never
   authorizes size) and survived the v3 question-set edit by mistake.
 
 ## 5.1b Autonomy rules (R10–R17, hard)
@@ -164,7 +164,7 @@ bit-identically before landing.
 - Every order intent carries broker-native protection or it is rejected by
   `risk/veto.cpp`. Exit profiles are versioned per sleeve:
   `exit_profile_v1` (1.5×ATR(14) stop floored at 0.1%, TP 2R, calendar
-  time_exit — `baseline_v1` only; diagnosed as horizon-mismatched in
+  time_exit - `baseline_v1` only; diagnosed as horizon-mismatched in
   doc 12), `exit_trend_v1`, `exit_intraday_v1`, `exit_event_v1` (doc 02).
   Profile variants are pre-registered and shadow-tested, never live-tuned.
 
@@ -222,14 +222,14 @@ bit-identically before landing.
 
 Degraded modes (locked; a mode never widens autonomy, only narrows it;
 transitions are journaled):
-- `FULL` — everything live.
-- `DEGRADED_RESEARCH` — research plane down; sleeves that need no research
+- `FULL` - everything live.
+- `DEGRADED_RESEARCH` - research plane down; sleeves that need no research
   input continue; research-dependent sleeves HOLD entries.
-- `ENTRY_HALT` — entries off, management on (e.g. JEV down for a
+- `ENTRY_HALT` - entries off, management on (e.g. JEV down for a
   `jev` sleeve, R-trip, SOFT kill).
-- `EXIT_ONLY` — only exits, stops, reconcile.
-- `HARD_STOP` — doc 10 HARD sequence.
-- `BASELINE_ONLY` (shadow) — controls keep computing offline for
+- `EXIT_ONLY` - only exits, stops, reconcile.
+- `HARD_STOP` - doc 10 HARD sequence.
+- `BASELINE_ONLY` (shadow) - controls keep computing offline for
   comparison and never place orders.
 
 ## 5.5 Audit
