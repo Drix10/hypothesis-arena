@@ -74,7 +74,7 @@ A box is checked only with evidence (commit and test output, or a report path).
   - Result: A-gate FAIL for both variants. Holdout excess Sharpe 0.68 / 0.27 against 1.35 for the passive 60/40; CI lower bound <= 0, DSR and MinTRL fail. Ledger N=17.
 - [x] A6 E2-det `earnings_reader_v1` (deterministic SUE drift, SEC financial-statement sets, 3 variants) A-gate run: FAIL for all variants (holdout excess Sharpe -0.34 / +0.28 / -0.20 vs passive 1.33; costs $71k-$137k over the sample; 6.3% of events lack prices). Ledger N=15. Report `research/reports/e2det_pead_v1_a_gate.json`.
 - [ ] A6b E2-ai paired forward design [BLOCKED on P2].
-- [ ] A7 M1 vol-target overlay tested on every A-gate survivor.
+- [ ] A7 M1 vol-target overlay tested on every A-gate survivor. [BLOCKED: no sleeve has passed an A-gate as of 2026-09-30; nothing to test]
 - [x] JEV unified to one candidate-bound contract (2026-09-29): sidecar,
       shadow logger, `jev_filter.py` and `kernel/jev_filter.hpp` share one
       artifact; 32 vectors agree in Python and C++.

@@ -25,7 +25,6 @@ reads no bar after its decision time, and only sessions that finished before
 the last UTC midnight are used."""
 import datetime
 import gzip
-import io
 import json
 import os
 import re
@@ -40,7 +39,7 @@ import zoneinfo
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from research.strategy import (a_run, a_run_e1, fsds_fetch, insider_data,
+from research.strategy import (a_run_e1, fsds_fetch, insider_data,
                                portfolio, sip_fetch)
 from research.strategy.sleeves import intraday_mom
 

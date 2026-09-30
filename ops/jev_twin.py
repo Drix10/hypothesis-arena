@@ -64,7 +64,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from collector import jev
 from ops import jev_shadow
 from ops import sleeve_shadow as S
-from research.strategy import jev_filter, portfolio, sip_fetch
+from research.strategy import portfolio, sip_fetch
 from research.strategy.candidate_wire import WireError, wire_record
 from research.strategy.sleeves import trend
 

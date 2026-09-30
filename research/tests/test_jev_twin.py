@@ -125,13 +125,13 @@ class Twin(unittest.TestCase):
 
     def test_veto_drops_add_to_bil_everything_else_same(self):
         self.base()
-        first = self.go(Poster())
+        self.go(Poster())
         jr = self.jr()
         victim = jr[0]
         T_ = Poster(veto={victim["alias"]})
         d2 = tempfile.mkdtemp()
         jev.CACHE_DIR = os.path.join(d2, "cache")
-        r = T.run(d2, NOW, "k", prices=self.prices, post_fn=T_, wall=self.wall)
+        T.run(d2, NOW, "k", prices=self.prices, post_fn=T_, wall=self.wall)
         vj = [x for x in T.read_decisions(os.path.join(d2, T.DECISIONS))[0]
               if x["class"] == "veto"]
         self.assertTrue(vj)
