@@ -682,7 +682,7 @@ def append_span(log_path, epoch, node, model_id, calls=1, tokens=0,
     if usd is None:
         usd = dollars
     if prompt_tokens == 0 and completion_tokens == 0 and tokens:
-        prompt_tokens = tokens  # legacy combined figure
+        prompt_tokens = tokens  # combined figure
     _check_usd(usd)
     _check_int("prompt_tokens", prompt_tokens, 0, TOKENS_MAX)
     _check_int("completion_tokens", completion_tokens, 0, TOKENS_MAX)

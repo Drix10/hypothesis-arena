@@ -1,10 +1,10 @@
 # ARCHITECTURE: codebase guide
 
 AI-assisted systematic fund: US-listed equities and ETFs, cash account, long
-only (freeze v3, 2026-09-28). Forex is research-only (OANDA blocked, RBI LRS
+only. Forex is research-only (OANDA blocked, RBI LRS
 prohibits forex and margin trading abroad). No crypto.
 
-Status: plan freeze v3 (alpha-first rebaseline), P3.5 H1
+Status: plan frozen (alpha-first), P3.5 H1
 built with the paper transport verified read-only, five sleeves backtested and
 none past an economic gate, G0 not started, paper only.
 
@@ -29,7 +29,7 @@ Tracked: `.env.example`, `.gitattributes`, `.gitignore`, `AGENTS.md`,
   theme; fail closed.
 - `ARCHITECTURE.md` — this file.
 - `README.md` — status table, quick start, repo map.
-- `TODO.md` — the live build ledger (freeze v3). History lives in git.
+- `TODO.md` — the live build ledger. History lives in git.
 - `.env` / `.env.example` — ACTIVE canonical config. `.env` is
   git-ignored real values; `.env.example` is the tracked template
   (`MIRO_CONTACT` required; provider, broker and BEA keys optional).
@@ -50,7 +50,7 @@ Tracked: `.env.example`, `.gitattributes`, `.gitignore`, `AGENTS.md`,
   emit, seam-graph), `kernel` (`WITH_CURL=1 build.sh` + freeze-check),
   `kernel-sanitizer` (ASan+UBSan), `secrets` (gitleaks over full history).
 
-## 2. plan/ (freeze v3: 13 docs + manifest + appendix/ + reviews/)
+## 2. plan/ (13 docs + manifest + appendix/ + reviews/)
 
 The plan is built around a legal live scope, a strategy book, a validation
 standard and the shortest path to paper. Where a note below conflicts with a
@@ -173,8 +173,7 @@ per source. Nothing in the seam trades.
 - `sources.json` — source registry (incl. `needs_key: FRED_API_KEY`,
   keyless EDGAR/Fed/ECB/Treasury/BLS entries).
 - `session_calendar.json` — session/holiday seed (fail-closed veto input).
-- `soak.py` / `soak_check.py` / `SOAK_REPORT.md` (133-cycle report) /
-  `SOAK_MANIFEST.json` — soak harness + evidence.
+- `soak.py` / `soak_check.py` — soak harness and its acceptance check.
 - `audit.py` — collector self-audit helper.
 - `tests/` (6): `test_collect` (poller/TTL/heartbeat/singleton);
   `test_config` (dotenv/config states); `test_ctx` (reader);
@@ -354,4 +353,4 @@ mirror (missing ledger raises, never $0).
 - Current credentials (ONLY): OpenRouter, FRED/ALFRED, BEA, Alpaca
   paper — all to be rotated after the 2026-09-28 chat exposure (doc 07
   O6). OANDA practice BLOCKED (India ineligible, Addendum 39); forex is
-  research-only under freeze v3 (no FX venue search). No other keys exist.
+  research-only (no FX venue search). No other keys exist.

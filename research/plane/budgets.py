@@ -792,7 +792,7 @@ class BudgetLedger:
         return None
 
     def _row(self, con, cycle_id, symbol, now_wall, create):
-        # create=True is legacy; reserve paths use _reserve_row (deletion-detecting)
+        # reserve paths use _reserve_row (deletion-detecting)
         cur = con.execute(
             "SELECT llm, tools, tokens, depth, start_wall, dead "
             "FROM counters WHERE cycle = ? AND symbol = ?",

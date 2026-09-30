@@ -800,7 +800,7 @@ def _reserve_now(now, cap=None):
     makes the stage cap a pre-call bound: authorization requires
     total_30d + MAX_AUTHORIZED_CALL_USD <= cap, so the ledger can never
     cross the cap from a single call whose actual cost is learned later.
-    cap=None skips the money-cap check (legacy standalone tooling only;
+    cap=None skips the money-cap check (standalone tooling only;
     the decision path always passes its stage cap). A crash between
     reserve and settle overstates spend (fail-closed)."""
     s, p = spend_today(now)
@@ -983,7 +983,7 @@ def spend_30d(now=None):
         full = os.path.join(SPEND_DIR, fn)
         if os.path.isdir(full):
             if fn == ".lock":
-                continue  # legacy mkdir-lock artifact, harmless
+                continue  # stale mkdir-style lock directory, harmless
             unknown = True
             continue
         if not DAY_LEDGER_RE.match(fn):

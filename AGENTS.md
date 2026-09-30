@@ -1,4 +1,4 @@
-# AGENTS.md: session rules (pi harness) — freeze v3
+# AGENTS.md: session rules (pi harness)
 
 1. Read `ARCHITECTURE.md` + `plan/00-INDEX.md` before any code change.
    `plan/07-build-roadmap.md` explains why the plan looks the way it does.

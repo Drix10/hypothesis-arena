@@ -24,8 +24,7 @@ Items 1 to 3 only, plus `collector/tests/test_o7.py` (hermetic, temp-dir ROOT,
 CI stdlib job). No change to classifier rules (`rules_v1`), request or response
 formats, hashes, spend limits, caps, cache keys or any string that
 `scripts/freeze-check.sh` pins. AST comparison before and after shows only the
-lines above. The soak evidence (`collector/SOAK_MANIFEST.json`) covers the
-classifier and source polling, which are unchanged.
+lines above. The classifier and source polling are unchanged.
 
 ## Why now
 

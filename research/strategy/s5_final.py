@@ -186,21 +186,6 @@ def _mint_split_token(holdout, bound, n_splits, stream_n, edges,
             "stream_record_hash": stream_record_hash}
 
 
-def assert_exact_holdout(candidate_recs, holdout):
-    """Legacy exact-set check (kept for runner/diagnostic use).
-
-    Final evidence uses token validation (_validate_set), which is
-    multiset-safe. holdout is the record list from holdout_split or
-    its CID set. Returns the CID set."""
-    if holdout and isinstance(next(iter(holdout)), dict):
-        hset = {r["cid"] for r in holdout}
-    else:
-        hset = set(holdout)
-    cset = {r["cid"] for r in candidate_recs}
-    assert cset == hset, "final set != exact holdout CIDs"
-    return hset
-
-
 def holdout_split(records, n_splits=None):
     """Runner-side constructor of the threaded split echo: (folds,
     holdout, holdout_start, split_token).

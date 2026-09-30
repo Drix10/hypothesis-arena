@@ -1,2 +1,2 @@
-# Strategy-harness test deps (freeze v3 O1). Exact pins.
+# Strategy-harness test deps (exact pins).
 pytest==8.3.4

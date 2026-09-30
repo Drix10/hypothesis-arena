@@ -442,7 +442,7 @@ def _summary_text(row, keys):
 def run_json_source(src):
     """Returns (status, records-list, validators-or-None, skipped-count).
     The tuple is structural: main() can NEVER mistake a status string for records (a
-    bare string return used to be iterated char-by-char into the event
+    bare string return would be iterated char-by-char into the event
     stream). Only a list reaches append_records(). Validators are RETURNED,
     never committed here: the caller persists them only AFTER the records
     are durably appended (durable-first ordering — a bad 200 never banks

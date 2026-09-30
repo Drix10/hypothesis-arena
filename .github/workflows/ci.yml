@@ -1,22 +1,12 @@
-# Repository-level execution evidence (Phase-D audit finding: claimed
-# green counts were local-only). Jobs run on every push, PR and manual
-# dispatch (freeze v3 O1: feature-branch pushes were previously unverified):
-#  1. stdlib — collector suites only (mocked IO, no network),
-#     no third-party deps.
-#  2. evidence — plane isolation + sources suites, stdlib only, in
-#     their own job so collector failure cannot mask them (Round-9
-#     audit gap: isolation used to be skipped behind the frozen
-#     collector loop, and sources never ran in CI at all).
-#  3. plane — full research battery in the pinned venv, including
-#     the final-hardening P0 suite (concurrency, crash recovery,
-#     process boundary, publisher/manifest/reader/digest).
-#  4. kernel — deterministic C++ gates (normal mode; MinGW-only
-#     hardened flags stay local to the Windows build host).
-#  5. kernel-sanitizer — S7-A: same deterministic C++ gates rebuilt
-#     with real Linux ASan+UBSan runtimes (ubuntu toolchain has them;
-#     MinGW does not). --wrap,malloc allocation proofs stay in the
-#     normal-mode gate by design (sanitizer runtimes own the
-#     allocator); zero-heap discipline is unchanged.
+# CI runs on every push, PR and manual dispatch:
+#  1. stdlib: collector suites only (mocked IO, no network, no third-party deps).
+#  2. evidence: plane isolation and sources suites, stdlib only, separate from
+#     the collector job so neither masks the other.
+#  3. plane: full research test battery in the pinned venv (concurrency, crash
+#     recovery, process boundary, publisher/manifest/reader/digest).
+#  4. kernel: deterministic C++ gates in normal mode.
+#  5. kernel-sanitizer: the same C++ gates rebuilt with ASan+UBSan; the
+#     --wrap,malloc allocation proofs stay in the normal-mode gate.
 name: ci
 
 on:

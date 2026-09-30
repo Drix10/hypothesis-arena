@@ -9,7 +9,7 @@ FAIL=0
 
 ok()   { echo "PASS: $1"; }
 bad()  { echo "FAIL: $1"; FAIL=1; }
-# xxd is not installed everywhere (v3 O3): fall back to python3.
+# xxd is not installed everywhere: fall back to python3.
 hex2bin() {
   if command -v xxd >/dev/null 2>&1; then xxd -r -p "$1"
   else python3 -c 'import sys;sys.stdout.buffer.write(bytes.fromhex("".join(open(sys.argv[1]).read().split())))' "$1"; fi
