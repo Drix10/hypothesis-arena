@@ -18,10 +18,11 @@ Requirements and `ALPACA_KEY_ID` / `ALPACA_SECRET` in the repo `.env`
    The kernel refuses to buy a symbol it already holds, and positions left over
    from an older build carry no stop.
 3. `bash ops/deploy/start.sh ~/g1` (use a new directory name for each run)
+   - first asks you to type the STAGE phrase once for the new directory
+     (be at the keyboard: it asks straight away)
    - builds a copy of the repo in `~/ha` and runs the kernel gate
-   - asks you to type the STAGE phrase once for the new directory
-   - starts the loop in the background, then runs the candidate emitter and
-     the shadow once
+   - runs the candidate emitter and the shadow once, then starts the loop in
+     the background (candidates must exist before the loop's first tick)
 4. Watch it: `python3 ops/monitor.py ~/g1` (Ctrl+C closes the view only).
    The Alpaca paper dashboard shows the same orders and positions.
 5. Stop it: `bash ops/deploy/start.sh stop`.

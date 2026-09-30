@@ -39,14 +39,23 @@ tar --exclude=.git --exclude=data -C "$repo" -cf - . | tar -C "$build" -xf -
 (cd "$build/kernel" && WITH_CURL=1 bash build.sh) 2>&1 | tail -5
 [ -x "$build/kernel/g0_paper_loop" ] || { echo "build failed: no g0_paper_loop" >&2; exit 3; }
 
-mkdir -p "$dir/logs"
+mkdir -p "$dir/logs" "$dir/backup"
 [ -f "$dir/approved.json" ] || cp ops/deploy/approved.json.example "$dir/approved.json"
 [ -f "$dir/STAGE" ] || bash scripts/sign-stage.sh "$dir"
 
-nohup "$build/kernel/g0_paper_loop" "$dir" ops/deploy/session_calendar.json --ticks 0 --interval-s 60 >>"$dir/logs/loop.log" 2>&1 &
+echo "== build (copy in $build) =="
+mkdir -p "$build"
+tar --exclude=.git --exclude=data -C "$repo" -cf - . | tar -C "$build" -xf -
+(cd "$build/kernel" && WITH_CURL=1 bash build.sh) 2>&1 | tail -5
+[ -x "$build/kernel/g0_paper_loop" ] || { echo "build failed: no g0_paper_loop" >&2; exit 3; }
+
+
+# Candidates first: the loop rejects a candidate stamped after its own tick
+# clock ("cand-stale-or-future"), so they must exist before the loop starts.
 python3 ops/emit_candidates.py "$dir" >>"$dir/logs/emit.log" 2>&1 || echo "emitter failed, see $dir/logs/emit.log" >&2
 if [ -n "$OPENROUTER_API_KEY" ]; then
     python3 ops/jev_shadow.py "$dir" >>"$dir/logs/shadow.log" 2>&1 || echo "shadow failed, see $dir/logs/shadow.log" >&2
 fi
+nohup "$build/kernel/g0_paper_loop" "$dir" ops/deploy/session_calendar.json --ticks 0 --interval-s 60 >>"$dir/logs/loop.log" 2>&1 &
 sleep 5
 echo "running. live view: python3 ops/monitor.py $dir"
