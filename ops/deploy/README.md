@@ -127,6 +127,18 @@ reason). It never touches the journal, candidates or STAGE. Spend caps still
 apply. With only the passive sleeve this shows the plumbing works, not
 whether JEV helps.
 
+Sleeve shadow ledgers (started automatically by `start.sh`, log-only): virtual
+$100k books for the 60/40 core, trend (T1) and sector momentum (T2), one
+hash-chained row per session in `~/g2/sleeves/`, shown in the monitor. They
+place no orders. Check that history reproduces (the fidelity gate) any time:
+
+```bash
+python3 ops/sleeve_shadow.py ~/g2 --verify
+```
+
+Exit 1 means a logged row can no longer be reproduced (look-ahead or revised
+data). Plan and promotion rules: `plan/appendix/10-sleeve-integration-plan.md`.
+
 On a Linux-native checkout, `bash ops/deploy/start.sh` automates the same
 steps (build, first-run STAGE sign-off, loop, emitter, shadow);
 `bash ops/deploy/start.sh stop` stops them.

@@ -221,6 +221,22 @@ def panel_shadow(d, out):
             r.get("symbol"), r.get("verdict"), r.get("reason")))
 
 
+def panel_sleeves(d, out):
+    out.append(col("SLEEVE SHADOW LEDGERS (virtual $100k each, no orders)", BOLD))
+    sd = os.path.join(d, "sleeves")
+    names = sorted(f for f in os.listdir(sd) if f.endswith(".jsonl")) if os.path.isdir(sd) else []
+    if not names:
+        out.append("  " + col("none yet (runs after each close)", DIM))
+    for n in names:
+        rows = jrows(os.path.join(sd, n))
+        if not rows:
+            continue
+        eq, last = rows[-1].get("equity"), rows[-1].get("date")
+        pct = (eq / rows[0]["equity"] - 1) * 100 if rows[0].get("equity") else 0.0
+        out.append("  %-16s %s  equity %10.2f  %+6.2f%%  (%d sessions)" % (
+            n[:-6], last, eq, pct, len(rows)))
+
+
 def panel_broker(broker, out):
     out.append(col("ALPACA PAPER (live from broker)", BOLD))
     data, err = broker.snapshot()
@@ -271,7 +287,8 @@ def render(d, broker):
         time.strftime("%Y-%m-%d %H:%M:%S"), d), ""]
     panels = [lambda: panel_loop(d, out, now), lambda: panel_candidates(d, out),
               lambda: panel_decisions(d, out), lambda: panel_journal(d, out),
-              lambda: panel_shadow(d, out)]
+              lambda: panel_shadow(d, out),
+              lambda: panel_sleeves(d, out)]
     if broker:
         panels.append(lambda: panel_broker(broker, out))
     for fn in panels:

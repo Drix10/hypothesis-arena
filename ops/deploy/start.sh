@@ -15,6 +15,7 @@ loop_bin="$build/kernel/g0_paper_loop"
 if [ "${1:-}" = stop ]; then
     pkill -f "^$loop_bin " || true
     pkill -f "ops/jev_shadow.py" || true
+    pkill -f "ops/sleeve_shadow.py" || true
     echo stopped; exit 0
 fi
 dir="${1:-$HOME/g0}"
@@ -78,6 +79,9 @@ echo $! > "$dir/loop.pid"
 sleep 5
 kill -0 "$(cat "$dir/loop.pid")" 2>/dev/null || { tail -5 "$dir/logs/loop.log" >&2; echo "the loop exited at once" >&2; exit 5; }
 echo "loop running (pid $(cat "$dir/loop.pid")). live view: python3 ops/monitor.py $dir"
+# Forward shadow ledgers for the non-routed sleeves (log-only, no orders).
+setsid nohup python3 ops/sleeve_shadow.py "$dir" --loop </dev/null >>"$dir/logs/sleeves.log" 2>&1 &
+echo "sleeve shadow ledgers running (log: $dir/logs/sleeves.log, data: $dir/sleeves/)"
 
 if [ -n "$OPENROUTER_API_KEY" ]; then
     timeout 180 python3 ops/jev_shadow.py "$dir" >>"$dir/logs/shadow.log" 2>&1 || echo "shadow did not finish, see $dir/logs/shadow.log" >&2

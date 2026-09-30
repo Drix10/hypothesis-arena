@@ -161,6 +161,13 @@ The paper run is started with `bash ops/deploy/start.sh ~/g2` (see `ops/deploy/R
 
 - [ ] G0a Shadow on live data for every A-gate passer (harness fills,
       `cost_v2`, no broker orders); B-gate per sleeve.
+  - [x] Shadow ledgers for core, T1, T2 (`ops/sleeve_shadow.py`, started by
+        `start.sh`, monitor panel, `--verify` fidelity gate) — plan/appendix/10.
+  - [ ] Event sleeves E1/E2det/I1 into the shadow ledger (data pulls, A-gate runs).
+  - [ ] Collector background poller + shadow macro-lite tilt.
+  - [ ] JEV paired A/B twins per sleeve.
+  - [ ] Netting router + Tier R promotion of T1 (needs the fidelity gate).
+  - [ ] Kill inputs wired (`deps.kill_inputs`).
 - [x] G0-STAGE Sign the G0 bootstrap STAGE file (doc 10 §10.5). Signed by the operator 2026-09-29 (`scripts/sign-stage.sh ~/g0`, mode 0600).
 - [ ] G0b Broker paper: one champion sleeve through the kernel on Alpaca
       paper [BLOCKED on K-exit + a B-gate pass + G0-STAGE].

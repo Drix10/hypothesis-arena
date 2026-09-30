@@ -36,7 +36,7 @@ pipeline, and the shortest honest path into the paper loop.
 13. `13-cpp-kernel-build.md` — Phase-3 build record + P3.5 remaining scope.
 
 Also: `system-manifest.yaml` (fingerprint code verifies against),
-`appendix/` (implementation records moved verbatim, still frozen),
+`appendix/` (implementation records moved verbatim, still frozen; `appendix/10-sleeve-integration-plan.md` is the live operating plan for sleeve tiers and g2 gates),
 `reviews/` (result reviews; never authority).
 
 ## Rules of this folder
