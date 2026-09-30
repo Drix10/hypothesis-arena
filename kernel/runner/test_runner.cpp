@@ -2745,6 +2745,36 @@ int main() {
               "rt-retried-protected");
         Check(CountMethod("POST", "/v2/orders") == 2, "rt-two-posts");
     }
+    // 40e. Repair attempts pause between tries (the venue frees cancelled
+    // legs' shares asynchronously) and stop pausing once protected.
+    {
+        Rig r;
+        std::string cid;
+        Check(!CrashImage(r.dir, "intent-314", "AAPL", 0, 0, 100,
+                          3, 100, &cid)
+                   .empty(),
+              "rp-image");
+        static int naps = 0;
+        naps = 0;
+        r.deps.sleep_ms = [](void*, int) { ++naps; };
+        G0Runner g(r.cfg, r.deps);
+        Check(g.Recover(nullptr), "rp-recover");
+        PushRule("GET", "by_client_order_id", 200,
+                 PlainReply("filled", "100").c_str());
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 422, "{}");
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 422, "{}");
+        PushRule("GET", "by_client_order_id", 404, "{}");
+        PushRule("POST", "/v2/orders", 200,
+                 BracketReply("accepted", "100").c_str());
+        Check(g.Cycle(g_now), "rp-cycle");
+        const auto* rs = g.Find("intent-314");
+        Check(rs && rs->done &&
+                  rs->m.state == jev::exec::RouteState::PROTECTED,
+              "rp-protected-after-pauses");
+        Check(naps == 2, "rp-two-pauses");
+    }
     // 41. P1 S2 union semantics: (a) PROTECTED +100 vs broker
     // +100 = quiet; (b) local-only = drift; (c) broker-only =
     // drift; (d) short agreement = quiet.

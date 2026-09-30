@@ -88,6 +88,7 @@ int main(int argc, char** argv) {
     deps.transport = jev::broker::CurlTransport;
     deps.now_ns = WallNs;
     deps.mono_ns = MonoNs;
+    deps.sleep_ms = [](void*, int ms) { usleep((useconds_t)ms * 1000); };
     deps.restart_flag = true;
     jev::broker::TradeStream stream;
     deps.stream_read = jev::broker::TradeStream::Thunk;

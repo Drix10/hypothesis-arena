@@ -55,6 +55,11 @@ struct RunnerDeps {
     bool (*venue_gate)(void* ctx, bool* open, bool* spread_ok) =
         nullptr;
     void* venue_ctx = nullptr;
+    // Optional pause between repair attempts. The venue releases shares held
+    // by a cancelled bracket asynchronously, so an immediate repair POST can
+    // be refused; null = no pause (tests).
+    void (*sleep_ms)(void* ctx, int ms) = nullptr;
+    void* sleep_ctx = nullptr;
 };
 
 struct RunnerConfig {

@@ -33,7 +33,8 @@ std::string FlattenId(const char* intent_id) {
 }
 
 // Bounded tries for one protection repair (each pass queries before posting).
-constexpr int kRepairAttempts = 3;
+constexpr int kRepairAttempts = 4;
+constexpr int kRepairPauseMs = 2500;
 
 bool SameId(const char* a, const char* b) {
     if (!a || !b) return false;
@@ -3369,6 +3370,9 @@ bool G0Runner::Dispatch(Slot& s, const exec::RouteOut& o,
                     s.repair_ok = adapter_.EstablishProtection(po);
                     posted = true;
                 }
+                if (!s.repair_ok && attempt + 1 < kRepairAttempts &&
+                    deps_.sleep_ms)
+                    deps_.sleep_ms(deps_.sleep_ctx, kRepairPauseMs);
             }
             return posted;
         }
