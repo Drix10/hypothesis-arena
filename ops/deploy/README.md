@@ -6,6 +6,42 @@ One runner, Alpaca paper only. The transport is hard-wired to
 Python commands run from the repo root in WSL. The kernel builds and runs
 from `~/ha` (next section).
 
+## Quick path (the exact steps)
+
+From the repo root in WSL, one terminal. Needs the packages in
+Requirements and `ALPACA_KEY_ID` / `ALPACA_SECRET` in the repo `.env`
+(`OPENROUTER_API_KEY` is optional and enables the log-only JEV shadow).
+
+1. `git pull`
+2. Before a fresh run, close any open paper positions in the Alpaca paper
+   dashboard (Positions, close all) and confirm there are no open orders.
+   The kernel refuses to buy a symbol it already holds, and positions left over
+   from an older build carry no stop.
+3. `bash ops/deploy/start.sh ~/g1` (use a new directory name for each run)
+   - builds a copy of the repo in `~/ha` and runs the kernel gate
+   - asks you to type the STAGE phrase once for the new directory
+   - starts the loop in the background, then runs the candidate emitter and
+     the shadow once
+4. Watch it: `python3 ops/monitor.py ~/g1` (Ctrl+C closes the view only).
+   The Alpaca paper dashboard shows the same orders and positions.
+5. Stop it: `bash ops/deploy/start.sh stop`.
+
+Keep one WSL window open and the laptop awake and plugged in for the whole
+run. If the loop dies (closed window, reboot), do not start a second one on
+the same directory:
+
+```bash
+ps aux | grep g0_paper_loop | grep -v grep      # empty means it is not running
+bash ops/deploy/start.sh ~/g1 --resume          # rebuilds, then continues the same directory
+tail -3 ~/g1/logs/loop.log                      # expect account_ok=1 within 2 minutes
+```
+
+The emitter writes at most one candidate per symbol per month. To run the
+emitter or shadow again by hand: `python3 ops/emit_candidates.py ~/g1` and
+`python3 ops/jev_shadow.py ~/g1`.
+
+The manual steps below do the same thing one command at a time.
+
 ## Requirements
 
 Ubuntu 24.04 in WSL (g++ 13, libcurl). Ubuntu 22.04 does not build: its

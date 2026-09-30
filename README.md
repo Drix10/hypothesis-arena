@@ -55,8 +55,15 @@ VERIFIED (acceptance green).
 
 ## Run it
 
-Paper run (WSL, Ubuntu 24.04): [`ops/deploy/README.md`](./ops/deploy/README.md).
-Live view of a running loop: `python3 ops/monitor.py ~/g0` from the repo root.
+Paper run (WSL, Ubuntu 24.04), from the repo root:
+
+```bash
+bash ops/deploy/start.sh ~/g1       # build, sign STAGE once, start the loop
+python3 ops/monitor.py ~/g1         # live view (Ctrl+C closes the view only)
+bash ops/deploy/start.sh stop       # stop everything
+```
+
+Full steps, restarts and manual commands: [`ops/deploy/README.md`](./ops/deploy/README.md).
 
 Checks:
 
