@@ -111,7 +111,8 @@ def panel_loop(d, out, now):
     lines = read_lines(lp)
     ticks = [l for l in lines if l.startswith("tick ")]
     bad = [l for l in lines if l.strip() and not l.startswith("tick ")
-           and "screen size" not in l]
+           and "screen size" not in l
+           and "nohup: ignoring input" not in l]
     try:
         age = now - os.path.getmtime(lp)
     except OSError:
@@ -141,6 +142,8 @@ def panel_loop(d, out, now):
                       sum(1 for t in ticks if "account_ok=0" in t)))
     for l in bad[-3:]:
         out.append("  " + col(l[:110], RED))
+    for a in jrows(os.path.join(d, "alerts.jsonl"))[-3:]:
+        out.append("  " + col("ALERT " + json.dumps(a)[:100], YEL))
     fz = os.path.join(d, "freeze.txt")
     if os.path.exists(fz):
         out.append("  " + col("FREEZE file present: " + short(
@@ -174,14 +177,13 @@ def panel_decisions(d, out):
 
 
 def panel_journal(d, out):
-    files = sorted(x for x in os.listdir(d)
-                   if re.match(r"journal-\d{8}\.jsonl$", x)) if os.path.isdir(d) else []
+    # journal.jsonl is the live chained file; journal-YYYYMMDD.jsonl are
+    # full day-roll copies of it (counting them would double the rows).
     rows = []
-    for fn in files:
-        for ln in read_lines(os.path.join(d, fn)):
-            p = ln.split("|")
-            if len(p) == 7:
-                rows.append(p)
+    for ln in read_lines(os.path.join(d, "journal.jsonl")):
+        p = ln.split("|")
+        if len(p) == 7:
+            rows.append(p)
     kinds = Counter(p[2] for p in rows)
     chain = all(rows[i][5] == rows[i - 1][6] and int(rows[i][0]) == int(rows[i - 1][0]) + 1
                 for i in range(1, len(rows)))
