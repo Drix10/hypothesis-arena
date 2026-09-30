@@ -121,10 +121,14 @@ class Register(Base):
         shutil.copy(REAL_FILES[1], self.cp)
         n0 = L.TrialLedger(self.lp).verify(self.cp)
         n_open0 = L.TrialLedger(self.lp).count_trials()
-        self.reg()
+        res = self.reg()
+        # The real ledger may already hold the forward trials (the loop
+        # registers them on first start); only the missing ones are appended.
+        k = len(res["registered"])
+        self.assertEqual(k + res["already"], len(EXPECTED))
         led = L.TrialLedger(self.lp)
-        self.assertEqual(led.verify(self.cp), n0 + len(EXPECTED))
-        self.assertEqual(led.count_trials(), n_open0 + len(EXPECTED))
+        self.assertEqual(led.verify(self.cp), n0 + k)
+        self.assertEqual(led.count_trials(), n_open0 + k)
         self.assertEqual(self.reg()["registered"], [])
 
     def test_changed_spec_opens_a_new_trial(self):
