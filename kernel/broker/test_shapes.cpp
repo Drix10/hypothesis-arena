@@ -116,6 +116,20 @@ int main(int argc, char** argv) {
     CHECK("oto-repair-stop-only", ad.EstablishProtection(t1) &&
           g_last_req.find("\"type\":\"stop\"") != std::string::npos &&
           g_last_req.find("\"side\":\"sell\"") != std::string::npos);
+    // A bracket's filled quantity is re-protected as an OCO pair that keeps
+    // the entry's lifetime: GTC when the entry was GTC, else day.
+    ProtectedOrder t3 = o;
+    t3.protection = Protection::BRACKET;
+    t3.gtc = true;
+    ad.EstablishProtection(t3);
+    CHECK("oco-repair-gtc",
+          g_last_req.find("\"order_class\":\"oco\"") != std::string::npos &&
+              g_last_req.find("\"time_in_force\":\"gtc\"") !=
+                  std::string::npos);
+    t3.gtc = false;
+    ad.EstablishProtection(t3);
+    CHECK("oco-repair-day",
+          g_last_req.find("\"time_in_force\":\"day\"") != std::string::npos);
     // MOC rides time_in_force cls on the same close lifecycle.
     g_body = "{\"id\":\"99999999-2222-3333-4444-555555555555\","
              "\"status\":\"accepted\",\"qty\":\"1\",\"filled_qty\":\"0\"}";

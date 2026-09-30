@@ -80,10 +80,10 @@ static void ProtectionChecks() {
     risk::RiskSnapshot st = Clean();
     EntryDecision t = Go(Rec(), st);
     CHECK("trend-profile-bracket", t.proceed &&
-              t.intent.protection == Protection::BRACKET && !t.intent.gtc);
+              t.intent.protection == Protection::BRACKET && t.intent.gtc);
     EntryDecision p = Go(Rec("BUY", "VTI", "trend_etf_v1", 60, "exit_profile_v1"), st);
     CHECK("plain-profile-bracket", p.proceed &&
-              p.intent.protection == Protection::BRACKET);
+              p.intent.protection == Protection::BRACKET && p.intent.gtc);
     EntryDecision i = Go(Rec("BUY", "VTI", "trend_etf_v1", 60, "exit_intraday_v1"), st);
     CHECK("intraday-profile-oto-day", i.proceed &&
               i.intent.protection == Protection::OTO_STOP && !i.intent.gtc);

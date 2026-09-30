@@ -442,6 +442,7 @@ int main() {
         RouteObs confirmEv = queryEv;
         confirmEv.cancel_confirmed = true;
         confirmEv.cancel_filled_qty = 40;  // authoritative final qty
+        confirmEv.repair_ok = true;  // filled qty re-protected after cancel
         RouteObs dupEv = queryEv;
         // P1-9: each distinct event bears identity+sequence (arrival
         // permutes below; identity/sequence never do). The duplicate
@@ -461,7 +462,7 @@ int main() {
         drain.event_seq = 0;        // event identity (never collapses)
         drain.journal_ok = true;
         int perm[4] = {0, 1, 2, 3};
-        const char* want_trace[2] = {"partial", "cancel"};
+        const char* want_trace[2] = {"partial", "reconcile"};
         for (int p = 0; p < 24; ++p) {
             Drive d;
             d.m = lead.m;
@@ -531,6 +532,7 @@ int main() {
         RouteObs cc = fill;
         cc.cancel_confirmed = true;
         cc.cancel_filled_qty = 40;  // authoritative final quantity
+        cc.repair_ok = true;  // filled qty re-protected after cancel
         // order: journal, send, query(fill 40), partial-row, cancel,
         // confirm — with the query observation duplicated once.
         d.step(c, fill, &sink);
@@ -539,7 +541,8 @@ int main() {
         d.step(c, q, &sink);  // duplicate query delivery: quiet
         d.step(c, q, &sink);
         d.step(c, cc, &sink);
-        d.step(c, cc, &sink);  // confirm lands: cancel journaled
+        d.step(c, cc, &sink);  // cancel confirmed: filled qty re-protected
+        d.step(c, cc, &sink);  // repair acked: reconcile journaled
         Check(d.m.state == RouteState::PROTECTED &&
                   d.m.filled_qty == 40 && sink.verify(),
               "drill-partial-converge");

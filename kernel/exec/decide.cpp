@@ -30,7 +30,10 @@ bool ProtectionFor(const std::string& profile, broker::Protection* p,
                    bool* gtc) {
     *gtc = false;
     if (profile == "exit_profile_v1" || profile == "exit_trend_v1") {
+        // Multi-day holds: day legs would expire at the close and leave the
+        // position without a stop overnight.
         *p = broker::Protection::BRACKET;
+        *gtc = true;
     } else if (profile == "exit_intraday_v1") {
         *p = broker::Protection::OTO_STOP;
     } else if (profile == "exit_event_v1") {

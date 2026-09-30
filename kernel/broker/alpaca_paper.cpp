@@ -805,13 +805,13 @@ bool AlpacaPaperAdapter::EstablishProtection(
     int w = std::snprintf(
         body, sizeof(body),
         "{\"symbol\":\"%.15s\",\"qty\":\"%lld\",\"side\":\"%s\","
-        "\"type\":\"limit\",\"time_in_force\":\"day\","
+        "\"type\":\"limit\",\"time_in_force\":\"%s\","
         "\"client_order_id\":\"%.64s\",\"order_class\":\"oco\","
         "\"take_profit\":{\"limit_price\":\"%s\"},"
         "\"stop_loss\":{\"stop_price\":\"%s\",\"limit_price\":\"%s\"}}",
         o.symbol, (long long)o.qty_shares,
         is_long ? "sell" : "buy",  // protection opposes the position
-        o.client_order_id, tp, sl, sl);
+        o.gtc ? "gtc" : "day", o.client_order_id, tp, sl, sl);
     if (w <= 0 || w >= static_cast<int>(sizeof(body))) return false;
     HttpRequest req;
     req.method = "POST";

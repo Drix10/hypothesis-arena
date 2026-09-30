@@ -578,10 +578,17 @@ int main() {
         o.cancel_confirmed = true;
         o.cancel_filled_qty = 40;  // authoritative final quantity
         auto r6 = Step(r5.next, in, venue, o);
-        Check(r6.action == RouteAction::JOURNAL_CANCEL &&
-                  r6.next.state == RouteState::PROTECTED &&
+        // Cancelling the entry cancels its legs at the venue: the filled
+        // quantity must be re-protected, never assumed covered.
+        Check(r6.action == RouteAction::ESTABLISH_PROTECTION &&
+                  r6.next.state == RouteState::REPAIR_SENT &&
                   r6.next.filled_qty == 40,
-              "partial-protected");
+              "partial-reprotects-filled");
+        o.repair_ok = true;
+        auto r7 = Step(r6.next, in, venue, o);
+        Check(r7.next.state == RouteState::PROTECTED &&
+                  r7.next.protection_ok,
+              "partial-reprotected");
     }
     // 11. cancel failed -> UNKNOWN + freeze (never "filled")
     {
@@ -763,11 +770,18 @@ int main() {
                   rc.next.state == RouteState::REPAIR_SENT,
               "cancel-sent-unprotected-repairs");
         mc.protection_ok = true;
-        oc.cancel_filled_qty = 50;  // authoritative: rests covered
+        oc.cancel_filled_qty = 50;  // partial of 100: legs died with the entry
         auto rc2 = Step(mc, in, venue, oc);
-        Check(rc2.next.state == RouteState::PROTECTED &&
+        Check(rc2.action == RouteAction::ESTABLISH_PROTECTION &&
+                  rc2.next.state == RouteState::REPAIR_SENT &&
                   rc2.next.filled_qty == 50,
-              "cancel-sent-protected-rests");
+              "cancel-sent-partial-reprotects");
+        mc.filled_qty = 100;
+        oc.cancel_filled_qty = 100;  // fully filled: entry protection rests
+        auto rc2f = Step(mc, in, venue, oc);
+        Check(rc2f.next.state == RouteState::PROTECTED &&
+                  rc2f.next.filled_qty == 100,
+              "cancel-sent-full-protected-rests");
         // Same machine, final observation without authoritative
         // quantity: coverage unproven -> repair, never assume.
         RouteObs oc2 = OpenMarket();

@@ -826,9 +826,11 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                     return o;
                 }
                 if (fq >= 0) o.next.filled_qty = fq;
-                if (o.next.protection_ok && fq >= 0) {
-                    // Remainder cancelled; the authoritative filled qty rests
-                    // under confirmed entry protection.
+                if (o.next.protection_ok && fq >= intent.qty_shares) {
+                    // Fully filled: the entry protection still rests. A partial
+                    // never takes this branch: cancelling the entry order also
+                    // cancels its bracket/OTO legs at the venue, so the filled
+                    // quantity is re-protected below under its own identity.
                     o.action = RouteAction::JOURNAL_CANCEL;
                     o.next.state = RouteState::PROTECTED;
                     o.journal_kind = "cancel";
