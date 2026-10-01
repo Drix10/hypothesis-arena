@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|Read|NotebookRead|Grep|Glob|Task|Agent|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-flow-runtime/bin/agent-flow.js\" guard"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -40,3 +40,31 @@
     log (what, date, "approved in chat"); never ask the operator to edit or sign
     a document. The STAGE file is the one exception: only
     `scripts/sign-stage.sh` writes it (rule 4, doc 10 §10.1).
+
+## Repository map
+
+- `plan/`: source of truth; 13 docs, `plan/system-manifest.yaml`, `plan/appendix/`. [HIGH CONFIDENCE: ARCHITECTURE.md §2]
+- `kernel/`: C++17 deterministic core (broker, exec, risk, kill, runner, stage), tests co-located. [HIGH CONFIDENCE: `kernel/build.sh`]
+- `collector/`: Python stdlib data collection and JEV; tests in `collector/tests/`. [HIGH CONFIDENCE]
+- `research/`: evidence and strategy plane, trial ledger, preregistrations, reports; pinned deps in `research/requirements.txt`. [HIGH CONFIDENCE]
+- `ops/`: shadow ledgers, monitor, alert relay; paper run scripts in `ops/deploy/`. [HIGH CONFIDENCE: file names, `ops/deploy/README.md`]
+- `scripts/`: `scripts/freeze-check.sh`, `scripts/pre-commit-secrets.sh`, `scripts/sign-stage.sh`. [HIGH CONFIDENCE]
+
+## Commands
+
+From `.github/workflows/ci.yml` unless noted. [HIGH CONFIDENCE]
+
+- `./kernel/build.sh [normal|hardened|sanitize]`: builds and runs every C++ suite and the grep-gates.
+- `scripts/freeze-check.sh`: the repo must match `plan/system-manifest.yaml`.
+- `python3 collector/tests/<name>.py`: collector suites; `test_soak_check` needs `MIRO_CONTACT` set.
+- `PYTHONWARNINGS=error python3 research/tests/<name>.py`: evidence and plane suites (the full list is in the `evidence` and `plane` jobs).
+- `python3 -m pytest -q research/tests/test_candidate.py`: needs `research/strategy/requirements.txt` installed.
+
+## Local traps
+
+- `kernel/build.sh` refuses to run as root; its chmod-000 tests would give a false green. [HIGH CONFIDENCE: `kernel/build.sh`]
+- `sanitize` mode needs a Linux toolchain; on the MinGW box use `hardened`. [HIGH CONFIDENCE: `kernel/build.sh`]
+- `test_config` asserts a clean environment; `test_soak_check` needs `MIRO_CONTACT`. Scope the override to one command. [HIGH CONFIDENCE: ci.yml]
+- `.env` holds real values; `collector/config.py` is its only loader. [HIGH CONFIDENCE: ARCHITECTURE.md §1]
+- `research/sandbox/langfuse/docker-compose.yml` hardcodes local sandbox secrets and stays flagged by the scanners until cleaned up. [HIGH CONFIDENCE]
+- Live trading paths: [NEEDS VERIFICATION] read the plan docs, not the code, before touching them.

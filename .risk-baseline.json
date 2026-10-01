@@ -1,0 +1,674 @@
+{
+  "version": "2",
+  "lastScan": "2026-10-01T14:24:27.130Z",
+  "surfaces": [
+    {
+      "key": "auth:collector/jev.py",
+      "type": "auth",
+      "path": "collector/jev.py",
+      "detail": "auth pattern",
+      "lines": [
+        79,
+        1270
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "auth:ops/jev_twin.py",
+      "type": "auth",
+      "path": "ops/jev_twin.py",
+      "detail": "auth pattern",
+      "lines": [
+        414
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "auth:ops/macro_shadow.py",
+      "type": "auth",
+      "path": "ops/macro_shadow.py",
+      "detail": "auth pattern",
+      "lines": [
+        187
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "auth:ops/sleeve_shadow.py",
+      "type": "auth",
+      "path": "ops/sleeve_shadow.py",
+      "detail": "auth pattern",
+      "lines": [
+        302
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "auth:research/plane/workers.py",
+      "type": "auth",
+      "path": "research/plane/workers.py",
+      "detail": "auth pattern",
+      "lines": [
+        391,
+        413
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "auth:research/sandbox/config-probe.py",
+      "type": "auth",
+      "path": "research/sandbox/config-probe.py",
+      "detail": "auth pattern",
+      "lines": [
+        69
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "auth:research/sandbox/fred_vintage_probe.py",
+      "type": "auth",
+      "path": "research/sandbox/fred_vintage_probe.py",
+      "detail": "auth pattern",
+      "lines": [
+        56,
+        89,
+        109,
+        136
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "auth:research/sandbox/live-provider-probe.py",
+      "type": "auth",
+      "path": "research/sandbox/live-provider-probe.py",
+      "detail": "auth pattern",
+      "lines": [
+        42,
+        43,
+        66
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "auth:research/sources/fred.py",
+      "type": "auth",
+      "path": "research/sources/fred.py",
+      "detail": "auth pattern",
+      "lines": [
+        152,
+        155,
+        158,
+        199,
+        233
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "auth:research/sources/tier_a.py",
+      "type": "auth",
+      "path": "research/sources/tier_a.py",
+      "detail": "auth pattern",
+      "lines": [
+        78
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "data-mutation:collector/classify.py",
+      "type": "data-mutation",
+      "path": "collector/classify.py",
+      "detail": "data-mutation pattern",
+      "lines": [
+        221,
+        244
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "data-mutation:collector/jev.py",
+      "type": "data-mutation",
+      "path": "collector/jev.py",
+      "detail": "data-mutation pattern",
+      "lines": [
+        651
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "data-mutation:ops/event_shadow.py",
+      "type": "data-mutation",
+      "path": "ops/event_shadow.py",
+      "detail": "data-mutation pattern",
+      "lines": [
+        229,
+        356
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "data-mutation:research/plane/attribution.py",
+      "type": "data-mutation",
+      "path": "research/plane/attribution.py",
+      "detail": "data-mutation pattern",
+      "lines": [
+        204,
+        871,
+        939,
+        1123,
+        1142
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "data-mutation:research/plane/budgets.py",
+      "type": "data-mutation",
+      "path": "research/plane/budgets.py",
+      "detail": "data-mutation pattern",
+      "lines": [
+        132,
+        163,
+        666,
+        677,
+        688
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "data-mutation:research/plane/emit.py",
+      "type": "data-mutation",
+      "path": "research/plane/emit.py",
+      "detail": "data-mutation pattern",
+      "lines": [
+        162,
+        313,
+        349
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "data-mutation:research/plane/locks.py",
+      "type": "data-mutation",
+      "path": "research/plane/locks.py",
+      "detail": "data-mutation pattern",
+      "lines": [
+        153
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "data-mutation:research/plane/source_seam.py",
+      "type": "data-mutation",
+      "path": "research/plane/source_seam.py",
+      "detail": "data-mutation pattern",
+      "lines": [
+        292
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "data-mutation:research/plane/spend.py",
+      "type": "data-mutation",
+      "path": "research/plane/spend.py",
+      "detail": "data-mutation pattern",
+      "lines": [
+        697
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "data-mutation:research/sandbox/kill9-resume.sh",
+      "type": "data-mutation",
+      "path": "research/sandbox/kill9-resume.sh",
+      "detail": "data-mutation pattern",
+      "lines": [
+        72
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "data-mutation:research/sources/bea.py",
+      "type": "data-mutation",
+      "path": "research/sources/bea.py",
+      "detail": "data-mutation pattern",
+      "lines": [
+        426
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "data-mutation:research/sources/bls.py",
+      "type": "data-mutation",
+      "path": "research/sources/bls.py",
+      "detail": "data-mutation pattern",
+      "lines": [
+        374
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "data-mutation:research/sources/earnings.py",
+      "type": "data-mutation",
+      "path": "research/sources/earnings.py",
+      "detail": "data-mutation pattern",
+      "lines": [
+        205
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "data-mutation:research/sources/edgar.py",
+      "type": "data-mutation",
+      "path": "research/sources/edgar.py",
+      "detail": "data-mutation pattern",
+      "lines": [
+        380,
+        646
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "data-mutation:research/sources/fred.py",
+      "type": "data-mutation",
+      "path": "research/sources/fred.py",
+      "detail": "data-mutation pattern",
+      "lines": [
+        416
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "data-mutation:research/sources/treasury.py",
+      "type": "data-mutation",
+      "path": "research/sources/treasury.py",
+      "detail": "data-mutation pattern",
+      "lines": [
+        357
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "data-mutation:research/strategy/fsds_fetch.py",
+      "type": "data-mutation",
+      "path": "research/strategy/fsds_fetch.py",
+      "detail": "data-mutation pattern",
+      "lines": [
+        77
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "dependency:research/requirements.txt:beautifulsoup4",
+      "type": "dependency",
+      "path": "research/requirements.txt",
+      "detail": "Dependency: beautifulsoup4",
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "dependency:research/requirements.txt:feedparser",
+      "type": "dependency",
+      "path": "research/requirements.txt",
+      "detail": "Dependency: feedparser",
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "dependency:research/requirements.txt:langgraph",
+      "type": "dependency",
+      "path": "research/requirements.txt",
+      "detail": "Dependency: langgraph",
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "dependency:research/requirements.txt:langgraph-checkpoint-sqlite",
+      "type": "dependency",
+      "path": "research/requirements.txt",
+      "detail": "Dependency: langgraph-checkpoint-sqlite",
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "dependency:research/requirements.txt:lxml",
+      "type": "dependency",
+      "path": "research/requirements.txt",
+      "detail": "Dependency: lxml",
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "dependency:research/requirements.txt:openai",
+      "type": "dependency",
+      "path": "research/requirements.txt",
+      "detail": "Dependency: openai",
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "dependency:research/requirements.txt:pandas",
+      "type": "dependency",
+      "path": "research/requirements.txt",
+      "detail": "Dependency: pandas",
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "dependency:research/requirements.txt:pydantic",
+      "type": "dependency",
+      "path": "research/requirements.txt",
+      "detail": "Dependency: pydantic",
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "dependency:research/requirements.txt:requests",
+      "type": "dependency",
+      "path": "research/requirements.txt",
+      "detail": "Dependency: requests",
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "dependency:research/requirements.txt:smolagents",
+      "type": "dependency",
+      "path": "research/requirements.txt",
+      "detail": "Dependency: smolagents",
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "dependency:research/requirements.txt:tzdata",
+      "type": "dependency",
+      "path": "research/requirements.txt",
+      "detail": "Dependency: tzdata",
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "dependency:research/strategy/requirements.txt:pytest",
+      "type": "dependency",
+      "path": "research/strategy/requirements.txt",
+      "detail": "Dependency: pytest",
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "exec:collector/soak_check.py",
+      "type": "exec",
+      "path": "collector/soak_check.py",
+      "detail": "exec pattern",
+      "lines": [
+        219,
+        344
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "exec:collector/soak.py",
+      "type": "exec",
+      "path": "collector/soak.py",
+      "detail": "exec pattern",
+      "lines": [
+        238
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "exec:research/plane/workers.py",
+      "type": "exec",
+      "path": "research/plane/workers.py",
+      "detail": "exec pattern",
+      "lines": [
+        1112
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:collector/collect.py",
+      "type": "external-api",
+      "path": "collector/collect.py",
+      "detail": "external-api pattern",
+      "lines": [
+        15,
+        33,
+        235
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:collector/jev.py",
+      "type": "external-api",
+      "path": "collector/jev.py",
+      "detail": "external-api pattern",
+      "lines": [
+        18,
+        1059,
+        1064
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:ops/alert_relay.py",
+      "type": "external-api",
+      "path": "ops/alert_relay.py",
+      "detail": "external-api pattern",
+      "lines": [
+        13,
+        134,
+        155,
+        158
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:ops/event_shadow.py",
+      "type": "external-api",
+      "path": "ops/event_shadow.py",
+      "detail": "external-api pattern",
+      "lines": [
+        35,
+        90,
+        91
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:ops/long_history_fetch.py",
+      "type": "external-api",
+      "path": "ops/long_history_fetch.py",
+      "detail": "external-api pattern",
+      "lines": [
+        20,
+        63,
+        68
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:ops/monitor.py",
+      "type": "external-api",
+      "path": "ops/monitor.py",
+      "detail": "external-api pattern",
+      "lines": [
+        15,
+        81,
+        83
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:research/plane/workers.py",
+      "type": "external-api",
+      "path": "research/plane/workers.py",
+      "detail": "external-api pattern",
+      "lines": [
+        407,
+        414
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:research/sandbox/alpaca_paper_probe.py",
+      "type": "external-api",
+      "path": "research/sandbox/alpaca_paper_probe.py",
+      "detail": "external-api pattern",
+      "lines": [
+        24,
+        42,
+        49
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:research/sandbox/bea_probe.py",
+      "type": "external-api",
+      "path": "research/sandbox/bea_probe.py",
+      "detail": "external-api pattern",
+      "lines": [
+        21,
+        40,
+        44
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:research/sandbox/egress-probe.sh",
+      "type": "external-api",
+      "path": "research/sandbox/egress-probe.sh",
+      "detail": "external-api pattern",
+      "lines": [
+        64
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:research/sandbox/fred_vintage_probe.py",
+      "type": "external-api",
+      "path": "research/sandbox/fred_vintage_probe.py",
+      "detail": "external-api pattern",
+      "lines": [
+        25,
+        42,
+        46
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:research/sources/bea.py",
+      "type": "external-api",
+      "path": "research/sources/bea.py",
+      "detail": "external-api pattern",
+      "lines": [
+        28,
+        143,
+        145
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:research/sources/bls.py",
+      "type": "external-api",
+      "path": "research/sources/bls.py",
+      "detail": "external-api pattern",
+      "lines": [
+        23,
+        138,
+        140
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:research/sources/earnings.py",
+      "type": "external-api",
+      "path": "research/sources/earnings.py",
+      "detail": "external-api pattern",
+      "lines": [
+        22,
+        46,
+        48
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:research/sources/edgar.py",
+      "type": "external-api",
+      "path": "research/sources/edgar.py",
+      "detail": "external-api pattern",
+      "lines": [
+        20,
+        164,
+        166
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:research/sources/fred.py",
+      "type": "external-api",
+      "path": "research/sources/fred.py",
+      "detail": "external-api pattern",
+      "lines": [
+        23,
+        121,
+        123
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:research/sources/tier_a.py",
+      "type": "external-api",
+      "path": "research/sources/tier_a.py",
+      "detail": "external-api pattern",
+      "lines": [
+        22,
+        38,
+        40
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:research/sources/treasury.py",
+      "type": "external-api",
+      "path": "research/sources/treasury.py",
+      "detail": "external-api pattern",
+      "lines": [
+        17,
+        106,
+        108
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:research/strategy/fsds_fetch.py",
+      "type": "external-api",
+      "path": "research/strategy/fsds_fetch.py",
+      "detail": "external-api pattern",
+      "lines": [
+        8,
+        37,
+        39
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:research/strategy/sip_fetch.py",
+      "type": "external-api",
+      "path": "research/strategy/sip_fetch.py",
+      "detail": "external-api pattern",
+      "lines": [
+        11,
+        64,
+        65
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "secret:research/sandbox/langfuse/docker-compose.yml:credential assigned to a secret-named variable",
+      "type": "secret",
+      "path": "research/sandbox/langfuse/docker-compose.yml",
+      "detail": "Possible credential assigned to a secret-named variable (value redacted)",
+      "lines": [
+        64
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "secret:research/sandbox/langfuse/docker-compose.yml:database URL with password",
+      "type": "secret",
+      "path": "research/sandbox/langfuse/docker-compose.yml",
+      "detail": "Possible database URL with password (value redacted)",
+      "lines": [
+        57,
+        58
+      ],
+      "firstSeen": "2026-10-01T14:24:26.745Z"
+    }
+  ]
+}

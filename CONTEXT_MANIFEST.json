@@ -1,0 +1,395 @@
+{
+  "$schema": "./.agent-flow-runtime/schemas/context-manifest.schema.json",
+  "version": "2",
+  "repo": "hypothesis-arena",
+  "generated_by": "agent-flow@1.1.6 manifest sync",
+  "generated_at": "2026-10-01T13:47:33.323Z",
+  "last_full_scan": "2026-10-01T14:14:53.926Z",
+  "default_branch": "main",
+  "staleness_threshold_days": 30,
+  "context_files": [
+    {
+      "path": "AGENTS.md",
+      "references": [
+        {
+          "path": "plan/00-INDEX.md",
+          "type": "file",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "plan/07-build-roadmap.md",
+          "type": "file",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "plan/",
+          "type": "directory",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "plan/appendix/",
+          "type": "directory",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "scripts/sign-stage.sh",
+          "type": "file",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "plan/system-manifest.yaml",
+          "type": "file",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "kernel/",
+          "type": "directory",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "kernel/build.sh",
+          "type": "file",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "collector/",
+          "type": "directory",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "collector/tests/",
+          "type": "directory",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "research/",
+          "type": "directory",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "research/requirements.txt",
+          "type": "file",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "ops/",
+          "type": "directory",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "ops/deploy/",
+          "type": "directory",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "ops/deploy/README.md",
+          "type": "file",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "scripts/",
+          "type": "directory",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "scripts/freeze-check.sh",
+          "type": "file",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "scripts/pre-commit-secrets.sh",
+          "type": "file",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "type": "file",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "research/strategy/requirements.txt",
+          "type": "file",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "collector/config.py",
+          "type": "file",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "research/sandbox/langfuse/docker-compose.yml",
+          "type": "file",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        }
+      ],
+      "confidence_markers": {
+        "high_confidence": 5,
+        "inferred": 0,
+        "needs_verification": 1
+      }
+    },
+    {
+      "path": "CLAUDE.md",
+      "references": [],
+      "confidence_markers": {
+        "high_confidence": 0,
+        "inferred": 0,
+        "needs_verification": 0
+      }
+    },
+    {
+      "path": "kernel/AGENTS.md",
+      "references": [
+        {
+          "path": "kernel/exec/",
+          "type": "directory",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "kernel/broker/",
+          "type": "directory",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "kernel/kill/",
+          "type": "directory",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "kernel/risk/",
+          "type": "directory",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "kernel/build.sh",
+          "type": "file",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "kernel/ingest/test_noalloc.cpp",
+          "type": "file",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "kernel/jev_vectors/",
+          "type": "directory",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "research/strategy/gen_jev_vectors.py",
+          "type": "file",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "scripts/freeze-check.sh",
+          "type": "file",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "kernel/log/",
+          "type": "directory",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "kernel/stage/",
+          "type": "directory",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        }
+      ],
+      "confidence_markers": {
+        "high_confidence": 2,
+        "inferred": 0,
+        "needs_verification": 0
+      }
+    },
+    {
+      "path": "research/AGENTS.md",
+      "references": [
+        {
+          "path": "research/tests/test_candidate.py",
+          "type": "file",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "research/ledger/",
+          "type": "directory",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        },
+        {
+          "path": "research/prereg/",
+          "type": "directory",
+          "last_verified": "2026-10-01T13:47:33.323Z",
+          "exists": true
+        }
+      ],
+      "confidence_markers": {
+        "high_confidence": 0,
+        "inferred": 0,
+        "needs_verification": 0
+      }
+    }
+  ],
+  "protected_paths": [
+    "STAGE",
+    "scripts/sign-stage.sh",
+    ".github/workflows/**",
+    ".gitleaks.toml",
+    "scripts/pre-commit-secrets.sh",
+    "scripts/freeze-check.sh",
+    "plan/system-manifest.yaml",
+    "plan/appendix/**",
+    "kernel/exec/**",
+    "kernel/broker/**",
+    "kernel/kill/**",
+    "kernel/risk/**"
+  ],
+  "deny_read": [],
+  "gates": [
+    {
+      "name": "collector",
+      "command": "for t in test_ctx test_jev test_pipeline test_config test_collect test_o7; do python3 collector/tests/$t.py || exit 1; done",
+      "timeout_seconds": 900
+    },
+    {
+      "name": "research",
+      "command": "for t in test_a_run test_alert_relay test_baseline test_bea test_bls test_costs_v2 test_edgar test_event_shadow test_forward_register test_fred test_gates test_insider_data test_insider_sleeve test_intraday_mom test_isolation test_jev_filter test_jev_shadow test_jev_twin test_ledger test_long_history test_macro_shadow test_pead_data test_pead_sleeve test_portfolio test_prereg test_s5 test_sector_mom test_settlement test_sip_fetch test_sleeve_eval test_sleeve_shadow test_source_seam test_stats test_tier_a test_treasury test_trend; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
+      "timeout_seconds": 1800
+    },
+    {
+      "name": "research-posix",
+      "command": "for t in test_core_passive test_sources; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
+      "os": [
+        "linux"
+      ],
+      "timeout_seconds": 600
+    },
+    {
+      "name": "freeze-check",
+      "command": "bash scripts/freeze-check.sh"
+    },
+    {
+      "name": "kernel",
+      "command": "bash kernel/build.sh",
+      "os": [
+        "linux"
+      ],
+      "timeout_seconds": 1800
+    }
+  ],
+  "risk_boundaries": [
+    {
+      "path": "kernel/**",
+      "risk_level": "critical",
+      "rationale": "Order path and deterministic core; money moves here."
+    },
+    {
+      "path": "ops/deploy/**",
+      "risk_level": "critical",
+      "rationale": "Paper run scripts and approved.json."
+    },
+    {
+      "path": "ops/alert_relay.py",
+      "risk_level": "critical",
+      "rationale": "Operator alerting."
+    },
+    {
+      "path": "research/ledger/**",
+      "risk_level": "critical",
+      "rationale": "Trial ledger behind rule 11."
+    },
+    {
+      "path": "research/prereg/**",
+      "risk_level": "critical",
+      "rationale": "Preregistrations govern evaluation validity."
+    },
+    {
+      "path": "collector/config.py",
+      "risk_level": "critical",
+      "rationale": "Sole .env loader."
+    },
+    {
+      "path": ".env.example",
+      "risk_level": "critical",
+      "rationale": "Config template for secrets."
+    },
+    {
+      "path": "collector/tests/**",
+      "risk_level": "low",
+      "rationale": "Test files."
+    },
+    {
+      "path": "research/tests/**",
+      "risk_level": "low",
+      "rationale": "Test files."
+    },
+    {
+      "path": "kernel/tests/**",
+      "risk_level": "low",
+      "rationale": "Test files (kernel/** stays critical)."
+    },
+    {
+      "path": "research/reports/**",
+      "risk_level": "low",
+      "rationale": "Generated reports."
+    },
+    {
+      "path": "research/lessons/**",
+      "risk_level": "low",
+      "rationale": "Notes."
+    },
+    {
+      "path": "README.md",
+      "risk_level": "low",
+      "rationale": "Docs outside plan/."
+    },
+    {
+      "path": "TODO.md",
+      "risk_level": "low",
+      "rationale": "Docs outside plan/."
+    },
+    {
+      "path": "ARCHITECTURE.md",
+      "risk_level": "low",
+      "rationale": "Docs outside plan/."
+    }
+  ],
+  "pipeline": {
+    "max_review_rounds": 2,
+    "auto_merge_low_risk": true
+  }
+}

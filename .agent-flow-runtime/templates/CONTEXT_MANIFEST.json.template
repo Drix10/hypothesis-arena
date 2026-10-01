@@ -1,0 +1,26 @@
+{
+  "$schema": "./node_modules/@drix10/agent-flow/schemas/context-manifest.schema.json",
+  "version": "2",
+  "repo": "{{REPO_NAME}}",
+  "generated_by": "agent-flow@{{VERSION}}",
+  "generated_at": "{{ISO_TIMESTAMP}}",
+  "last_full_scan": "{{ISO_TIMESTAMP}}",
+  "default_branch": "{{DEFAULT_BRANCH}}",
+  "staleness_threshold_days": 30,
+  "context_files": [
+    {
+      "path": "AGENTS.md",
+      "references": [
+        { "path": "{{PATH_NAMED_IN_AGENTS_MD}}", "type": "directory", "last_verified": "{{ISO_TIMESTAMP}}", "exists": true }
+      ],
+      "confidence_markers": { "high_confidence": 0, "inferred": 0, "needs_verification": 0 }
+    }
+  ],
+  "protected_paths": ["{{PROTECTED_PATH_OR_GLOB}}"],
+  "deny_read": [],
+  "secret_scan": { "ignore_paths": [] },
+  "risk_boundaries": [
+    { "path": "{{CRITICAL_PATH}}", "risk_level": "critical", "reviewer_model": "high-reasoning", "rationale": "{{WHY}}" }
+  ],
+  "pipeline": { "max_review_rounds": 2, "auto_merge_low_risk": false }
+}

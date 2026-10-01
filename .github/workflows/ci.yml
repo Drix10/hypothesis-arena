@@ -7,6 +7,9 @@
 #  4. kernel: deterministic C++ gates in normal mode.
 #  5. kernel-sanitizer: the same C++ gates rebuilt with ASan+UBSan; the
 #     --wrap,malloc allocation proofs stay in the normal-mode gate.
+#  6. agent-flow: context files against the tree (doctor) and new risk
+#     surfaces against .risk-baseline.json (audit-risk), from the committed
+#     .agent-flow-runtime/ (no npm).
 name: ci
 
 on:
@@ -166,3 +169,13 @@ jobs:
           echo "5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba  gl.tgz" | sha256sum -c -
           tar xzf gl.tgz gitleaks
           ./gitleaks detect --no-banner --redact -c .gitleaks.toml
+
+  agent-flow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: context files match the tree (stale timestamps warn, not fail)
+        run: node .agent-flow-runtime/bin/agent-flow.js doctor --allow-stale
+      - name: no new risk surfaces since the accepted baseline
+        run: node .agent-flow-runtime/bin/agent-flow.js audit-risk --fail-on-new
