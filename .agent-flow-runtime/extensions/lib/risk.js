@@ -1,0 +1,417 @@
+/**
+ * Risk-surface audit.
+ *
+ * Fixes over v1.0.2:
+ *  - EVERY dependency is a surface (keyed per package), so "a new dependency
+ *    appeared" is detected. v1.0.2 keyed deps by manifest file, so adding
+ *    `stripe` to an existing package.json was never reported as new.
+ *  - Parses package.json, requirements*.txt, pyproject.toml, go.mod,
+ *    Cargo.toml and Gemfile (v1.0.2 globbed them but only parsed package.json).
+ *  - Line-level, word-bounded patterns: `map.delete(` and `author` no longer
+ *    light up every file in the repo. Alert fatigue kills audits.
+ *  - Secret detection (values are NEVER echoed — only kind + line).
+ *  - Baseline accept never silently wipes: omitted keys = accept current set.
+ */
+import { basename, join } from "node:path";
+import { atomicWrite, isoNow, readJson, readTextFile } from "./fsutil.js";
+import { listRepoFiles } from "./repofiles.js";
+import { matchAny, secretIgnorePaths, tryLoadManifest } from "./manifest.js";
+export const SELF_PACKAGE = "@drix10/agent-flow";
+export const BASELINE_FILE = ".risk-baseline.json";
+const SOURCE_EXT = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|py|go|rs|java|kt|kts|rb|php|cs|swift|scala|ex|exs|sql|sh|bash|ps1)$/i;
+const TEST_FILE = /(^|\/)(__tests__|__mocks__|tests?|spec|fixtures?|e2e)\/|\.(test|spec)\.[a-z]+$|_test\.(go|py)$|(^|\/)test_[^/]+\.py$/i;
+/** Word-bounded, line-level. Each hit records the line numbers (first 5). */
+export const CODE_PATTERNS = {
+    auth: [
+        /\b(jwt|jsonwebtoken|oauth2?|openid|saml|bcrypt|argon2|scrypt|passport|next-auth|authjs)\b/i,
+        /\b(authenticate|authorize|verify_?token|verifyToken|sign_?in|signIn|login|logout)\s*\(/i,
+        /\b(session_?secret|sessionSecret|api_?key|apiKey|access_?token|accessToken|refresh_?token|refreshToken|password_?hash|passwordHash)\b/i,
+    ],
+    payment: [
+        /\b(stripe|paypal|braintree|adyen|razorpay|paddle|lemonsqueezy|chargebee|recurly)\b/i,
+        /\b(create_?payment|createPayment|payment_?intent|paymentIntent|create_?charge|createCharge|refund|payout|invoice)\w*\s*\(/i,
+    ],
+    "data-mutation": [
+        /\b(DROP\s+(TABLE|DATABASE|SCHEMA|INDEX)|TRUNCATE\s+(TABLE\s+)?\w|DELETE\s+FROM|ALTER\s+TABLE|UPDATE\s+\w+\s+SET)\b/i,
+        /\.(destroy|deleteMany|delete_many|bulkDelete|bulk_delete|dropCollection|drop_table|truncate)\s*\(/,
+        /\b(rm\s+-rf|fs\.rm(Sync)?\s*\(|rmSync\s*\(|shutil\.rmtree|os\.remove|os\.unlink|fs\.unlink(Sync)?\s*\()/,
+    ],
+    "external-api": [
+        /(^|[^.\w])fetch\s*\(\s*[`'"]?https?:/,
+        /\b(axios|got|ky|superagent|undici)(\.(get|post|put|patch|delete|request))?\s*\(/,
+        /\bhttps?\.(request|get)\s*\(/,
+        /\brequests\.(get|post|put|patch|delete|request)\s*\(/,
+        /\bhttpx\.(get|post|put|patch|delete|AsyncClient|Client)\b/,
+        /\bhttp\.(Get|Post|NewRequest|DefaultClient)\b/,
+        /\b(reqwest::|urllib\.request|new\s+WebSocket\s*\()/,
+    ],
+    exec: [
+        /\b(child_process|execSync|execFileSync|spawnSync)\b/,
+        /\bsubprocess\.(run|call|check_output|Popen)\s*\(/,
+        /\bos\.system\s*\(/,
+        /\bexec\.Command\s*\(/,
+        /(^|[^.\w])eval\s*\(/,
+    ],
+};
+/** Placeholders and interpolation aren't secrets; docker-compose dev defaults are too common to block on. Tested against one match. */
+const CREDENTIAL_PLACEHOLDER = /^[^:]+:\/\/[^\s:@/]+:(password|passwd|pass|pwd|secret|token|changeme|postgres|root|example|test|x+|\*+|\$\{?[^@]*\}?|%[^@]*%|<[^>@]*>|\{\{[^@]*\}\})@$/i;
+/**
+ * A credential assigned to a variable named like one: `APCA_API_SECRET_KEY=…`, `fred_api_key: "…"`,
+ * `password = "…"`. Vendor shapes can't cover every provider, so the NAME carries the signal. To stay quiet the value
+ * must be 16+ characters mixing letters and digits, and not read like a placeholder or a reference.
+ */
+const NAMED_SECRET = /(?:api[_-]?key|api[_-]?secret|secret[_-]?key|secret[_-]?access[_-]?key|access[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key|password|passwd|secret|token)(?:[_-]?(?:id|key|value|str|string))?["']?\s*[:=]\s*["']?([A-Za-z0-9/+_=.-]{16,})(?![A-Za-z0-9/+_=.(-])["']?/gi;
+const NAMED_SECRET_UNLESS = {
+    // Judged per match: a placeholder, a reference to config, or an identifier is not a credential.
+    test(match) {
+        const v = match.match(/[:=]\s*["']?([A-Za-z0-9/+_=.-]{16,})/)?.[1] ?? "";
+        if (!/[A-Za-z]/.test(v) || !/\d/.test(v))
+            return true; // a real key mixes letters and digits
+        if (/example|changeme|change_me|placeholder|your[_-]|dummy|sample|redacted|x{6,}|\*{4,}|process\.env|os\.environ|getenv|secrets\./i.test(v))
+            return true;
+        if (/^[A-Za-z]+(\.[A-Za-z_]+)+$/.test(v) || /^(.)\1+$/.test(v))
+            return true;
+        if (/^[a-z]+(?:[A-Z][a-z]+){2,}\d*$/.test(v) || /^[a-z0-9]+(?:_[a-z0-9]+){2,}$/i.test(v))
+            return true; // camelCase / snake_case identifiers
+        return false;
+    },
+};
+/** High-signal secret shapes. We report the KIND and LINE only — never the value. */
+const SECRET_PATTERNS = [
+    { kind: "AWS access key id", re: /\b(AKIA|ASIA)[0-9A-Z]{16}\b/ },
+    { kind: "AWS secret access key", re: /\baws_?secret_?access_?key\b["']?\s*[:=]\s*["']?[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+])/i },
+    { kind: "private key block", re: /-----BEGIN (RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY( BLOCK)?-----|PuTTY-User-Key-File-\d/ },
+    { kind: "GitHub token", re: /\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36}\b|\bgithub_pat_[A-Za-z0-9_]{60,}\b/ },
+    { kind: "GitLab token", re: /\bglpat-[A-Za-z0-9_-]{20,}\b/ },
+    { kind: "Slack token", re: /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/ },
+    { kind: "Slack webhook", re: /https:\/\/hooks\.slack\.com\/services\/T[A-Z0-9]+\/B[A-Z0-9]+\/[A-Za-z0-9]{20,}/ },
+    { kind: "Stripe live key", re: /\b(sk|rk)_live_[A-Za-z0-9]{20,}\b/ },
+    { kind: "Stripe webhook secret", re: /\bwhsec_[A-Za-z0-9]{24,}\b/ },
+    { kind: "Google API key", re: /\bAIza[0-9A-Za-z_-]{35}\b/ },
+    { kind: "Anthropic API key", re: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/ },
+    { kind: "OpenAI API key", re: /\bsk-(proj-)?[A-Za-z0-9_-]{32,}\b/ },
+    { kind: "Hugging Face token", re: /\bhf_[A-Za-z0-9]{34,}\b/ },
+    { kind: "SendGrid API key", re: /\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b/ },
+    { kind: "Twilio API key", re: /\bSK[0-9a-f]{32}\b/ },
+    { kind: "npm token", re: /\bnpm_[A-Za-z0-9]{36}\b/ },
+    // Not preceded by a base64url char: `-eyJ-eyJ…` would otherwise restart the scan at every `eyJ` (quadratic).
+    { kind: "JSON Web Token", re: /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{20,}/ },
+    // Storage connection strings: AccountKey is base64 of 64 bytes, always 86 chars + "==".
+    { kind: "Azure storage account key", re: /\bAccountKey=[A-Za-z0-9+/]{86}==/ },
+    { kind: "DigitalOcean token", re: /\bdo[opr]_v1_[a-f0-9]{64}\b/ },
+    { kind: "Shopify token", re: /\bshp(at|ca|pa|ss)_[a-fA-F0-9]{32}\b/ },
+    // .npmrc: `//registry.npmjs.org/:_authToken=<uuid | npm_…>`; `${NPM_TOKEN}` doesn't match.
+    { kind: "npm auth token", re: /_authToken\s*=\s*["']?(npm_[A-Za-z0-9]{36}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b/i },
+    { kind: "Alpaca API key", re: /\bAPCA[-_]API[-_](?:KEY[-_]ID|SECRET[-_]KEY)\b["']?\s*[:=]\s*["']?[A-Za-z0-9]{16,}/i },
+    { kind: "credential assigned to a secret-named variable", re: NAMED_SECRET, unless: NAMED_SECRET_UNLESS },
+    {
+        kind: "database URL with password",
+        // The password may contain `/`; one that is all digits before a `/` is a port (`host:8080/a@b`).
+        re: /\b(postgres(ql)?|mysql|mariadb|mongodb(\+srv)?|rediss?|amqps?|mssql|sqlserver):\/\/[^\s:@/]{1,256}:(?!\d+[/?#])[^\s@]{3,256}@/gi,
+        unless: CREDENTIAL_PLACEHOLDER,
+    },
+    {
+        kind: "URL with embedded password",
+        re: /\b(https?|s?ftps?):\/\/[^\s:@/]{1,256}:(?!\d+[/?#])[^\s@]{3,256}@/gi,
+        unless: CREDENTIAL_PLACEHOLDER,
+    },
+];
+/**
+ * Long lines (minified bundles, base64 blobs) are scanned in overlapping chunks:
+ * skipping them would let padding hide a key, and a whole-line regex over
+ * megabytes risks pathological backtracking.
+ */
+const CHUNK = 4096;
+const OVERLAP = 512;
+function* windows(line) {
+    if (line.length <= CHUNK) {
+        yield line;
+        return;
+    }
+    for (let at = 0; at < line.length; at += CHUNK - OVERLAP) {
+        yield line.slice(at, at + CHUNK);
+        if (at + CHUNK >= line.length)
+            return;
+    }
+}
+/** Does `text` hold a match that isn't a placeholder? `unless` is judged per match, so one dummy URL can't hide a real one. */
+function realMatch(text, re, unless) {
+    if (!re.global)
+        return re.test(text) && !(unless && unless.test(text));
+    re.lastIndex = 0;
+    for (const m of text.matchAll(re))
+        if (!unless || !unless.test(m[0]))
+            return true;
+    return false;
+}
+/** A line carrying this (or the line after one that does) is a known fake — a fixture or a docs sample. */
+export const ALLOW_SECRET_MARKER = "agent-flow:allow-secret";
+/**
+ * Secret kinds + line numbers in a blob of text. Never returns the matched value.
+ * `honorMarker: false` ignores the allow marker — for content an agent is about to write,
+ * where a marker would be the way around the check.
+ */
+export function findSecrets(content, opts = {}) {
+    const lines = content.split(/\r?\n/);
+    const allowed = new Set();
+    if (opts.honorMarker !== false) {
+        lines.forEach((l, i) => {
+            if (l.includes(ALLOW_SECRET_MARKER)) {
+                allowed.add(i);
+                allowed.add(i + 1);
+            }
+        });
+    }
+    const out = [];
+    for (const { kind, re, unless } of SECRET_PATTERNS) {
+        const hit = [];
+        lines.forEach((l, i) => {
+            if (hit.length >= 5 || allowed.has(i))
+                return;
+            for (const w of windows(l)) {
+                if (realMatch(w, re, unless)) {
+                    hit.push(i + 1);
+                    return;
+                }
+            }
+        });
+        if (hit.length)
+            out.push({ kind, lines: hit });
+    }
+    return out;
+}
+/** `.env`, `.env.production.local`, `.envrc`, `prod.env` — any number of dot-suffixes. */
+const ENV_FILE = /(^|\/)(\.env(\d+|[_-][\w-]+)?(\.[\w-]+)*|\.envrc|[\w.-]+\.env)$/;
+const ENV_TEMPLATE = /\.(example|sample|template|dist|defaults)$/i;
+/** A real environment file, not a checked-in template (`.env.example`, `prod.env.sample`). */
+export function isEnvFile(path) {
+    return ENV_FILE.test(path) && !ENV_TEMPLATE.test(path);
+}
+// ---------------------------------------------------------------------------
+// Dependency parsing (heuristic, documented as such)
+// ---------------------------------------------------------------------------
+/**
+ * Bodies of the TOML arrays that start at each `opener` match. Brackets inside quoted strings
+ * (`"requests[security]>=2"`) don't end the array; a lazy `[\s\S]*?\]` stopped at the first one.
+ */
+function tomlArrays(content, opener) {
+    const out = [];
+    for (const m of content.matchAll(opener)) {
+        let depth = 1;
+        let quote = "";
+        const start = m.index + m[0].length;
+        for (let i = start; i < content.length; i++) {
+            const ch = content[i];
+            if (quote) {
+                if (ch === "\\")
+                    i++;
+                else if (ch === quote)
+                    quote = "";
+            }
+            else if (ch === '"' || ch === "'")
+                quote = ch;
+            else if (ch === "#")
+                i = content.indexOf("\n", i) < 0 ? content.length : content.indexOf("\n", i);
+            else if (ch === "[")
+                depth++;
+            else if (ch === "]" && --depth === 0) {
+                out.push(content.slice(start, i));
+                break;
+            }
+        }
+    }
+    return out;
+}
+export function parseDependencies(file, content) {
+    const name = basename(file);
+    const deps = new Set();
+    try {
+        if (name === "package.json") {
+            const pkg = JSON.parse(content);
+            for (const field of ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]) {
+                for (const d of Object.keys(pkg[field] ?? {}))
+                    deps.add(d);
+            }
+        }
+        else if (/^requirements.*\.txt$/.test(name)) {
+            for (const line of content.split(/\r?\n/)) {
+                const l = line.replace(/#.*/, "").trim();
+                if (!l || l.startsWith("-"))
+                    continue;
+                const m = l.match(/^([A-Za-z0-9][A-Za-z0-9._-]*)/);
+                if (m)
+                    deps.add(m[1].toLowerCase());
+            }
+        }
+        else if (name === "pyproject.toml") {
+            const optional = content.match(/\[project\.optional-dependencies\]([\s\S]*?)(\n\[|$)/)?.[1] ?? "";
+            const lists = [...tomlArrays(content, /^\s*dependencies\s*=\s*\[/gm), ...tomlArrays(optional, /^\s*[\w-]+\s*=\s*\[/gm)];
+            for (const list of lists)
+                for (const m of list.matchAll(/["']([A-Za-z0-9][A-Za-z0-9._-]*)/g))
+                    deps.add(m[1].toLowerCase());
+            const poetry = content.match(/\[tool\.poetry\.(?:dev-)?dependencies\]([\s\S]*?)(\n\[|$)/);
+            for (const m of poetry?.[1].matchAll(/^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*=/gm) ?? []) {
+                if (m[1] !== "python")
+                    deps.add(m[1].toLowerCase());
+            }
+        }
+        else if (name === "go.mod") {
+            const block = content.match(/require\s*\(([\s\S]*?)\)/g) ?? [];
+            for (const b of block)
+                for (const m of b.matchAll(/^\s*([\w.\-/]+)\s+v/gm))
+                    deps.add(m[1]);
+            for (const m of content.matchAll(/^require\s+([\w.\-/]+)\s+v/gm))
+                deps.add(m[1]);
+        }
+        else if (name === "Cargo.toml") {
+            for (const sec of content.matchAll(/\[(?:dev-|build-)?dependencies\]([\s\S]*?)(?=\n\[|$)/g)) {
+                for (const m of sec[1].matchAll(/^\s*([A-Za-z0-9_-]+)\s*=/gm))
+                    deps.add(m[1]);
+            }
+        }
+        else if (name === "Gemfile") {
+            for (const m of content.matchAll(/^\s*gem\s+["']([^"']+)["']/gm))
+                deps.add(m[1]);
+        }
+    }
+    catch {
+        /* malformed manifest — reported as zero deps, never crashes the audit */
+    }
+    return [...deps].sort();
+}
+const DEP_MANIFEST = /(^|\/)(package\.json|requirements[^/]*\.txt|pyproject\.toml|go\.mod|Cargo\.toml|Gemfile)$/;
+export const isDependencyManifest = (p) => DEP_MANIFEST.test(p);
+function depCategory(dep) {
+    if (/(^|[-_/@])(stripe|paypal|braintree|adyen|razorpay|paddle|chargebee|recurly|payments?|billing)([-_/]|$)/i.test(dep))
+        return "payment";
+    if (/(^|[-_/@])(auth|jwt|jsonwebtoken|oauth2?|passport|bcrypt|argon2|openid|saml|jose|next-auth|keycloak|auth0|clerk|lucia)([-_/]|$)/i.test(dep))
+        return "auth";
+    return null;
+}
+export function scanRiskSurfaces(root, opts = {}) {
+    const now = isoNow();
+    const surfaces = new Map();
+    const add = (s) => {
+        if (!surfaces.has(s.key))
+            surfaces.set(s.key, { ...s, firstSeen: now });
+    };
+    const { files, truncated } = listRepoFiles(root, { maxFiles: opts.maxFiles ?? 50_000 });
+    const secretIgnore = secretIgnorePaths(tryLoadManifest(root));
+    let scanned = 0;
+    for (const file of files) {
+        const isTest = TEST_FILE.test(file);
+        if (isEnvFile(file)) {
+            add({ key: `secret:${file}:env-file`, type: "secret", path: file, detail: "environment file present in working tree (check it is not committed)" });
+        }
+        if (isDependencyManifest(file)) {
+            const content = readTextFile(join(root, file));
+            if (content !== null) {
+                for (const dep of parseDependencies(file, content)) {
+                    if (dep === SELF_PACKAGE)
+                        continue; // the tool itself, not a surface to review
+                    add({ key: `dependency:${file}:${dep}`, type: "dependency", path: file, detail: `Dependency: ${dep}` });
+                    const cat = depCategory(dep);
+                    if (cat)
+                        add({ key: `${cat}:${file}:${dep}`, type: cat, path: file, detail: `Dependency: ${dep}` });
+                }
+            }
+        }
+        const wantCode = SOURCE_EXT.test(file) && (opts.includeTests || !isTest);
+        const content = readTextFile(join(root, file));
+        if (content === null)
+            continue;
+        scanned++;
+        const lines = content.split(/\r?\n/);
+        // Secrets: every text file, tests included (test fixtures leak real keys too).
+        for (const { kind, lines: hit } of matchAny(secretIgnore, file) ? [] : findSecrets(content)) {
+            add({ key: `secret:${file}:${kind}`, type: "secret", path: file, detail: `Possible ${kind} (value redacted)`, lines: hit });
+        }
+        if (!wantCode)
+            continue;
+        for (const [type, patterns] of Object.entries(CODE_PATTERNS)) {
+            const hit = [];
+            lines.forEach((l, i) => {
+                if (hit.length < 5 && l.length < 2000 && patterns.some((p) => p.test(l)))
+                    hit.push(i + 1);
+            });
+            if (hit.length)
+                add({ key: `${type}:${file}`, type, path: file, detail: `${type} pattern`, lines: hit });
+        }
+    }
+    return { surfaces: [...surfaces.values()].sort((a, b) => a.key.localeCompare(b.key)), scannedFiles: scanned, truncated };
+}
+function baselineKey(s) {
+    // v1.0.2 baselines had no `key`; reconstruct the same shape they were compared by.
+    if (s.key)
+        return s.key;
+    const dep = s.detail?.match(/^Dependency: (.+)$/)?.[1];
+    return dep ? `${s.type}:${s.path}:${dep}` : `${s.type}:${s.path}`;
+}
+export function readBaseline(path) {
+    const r = readJson(path);
+    if (!r.ok)
+        return r.error.startsWith("cannot read") ? { ok: true, value: null } : { ok: false, error: r.error };
+    if (!Array.isArray(r.value?.surfaces))
+        return { ok: false, error: `${path}: baseline has no surfaces array` };
+    return { ok: true, value: r.value };
+}
+export function auditRisk(root, baselinePath, opts = {}) {
+    const scan = scanRiskSurfaces(root, opts);
+    const base = readBaseline(baselinePath);
+    if (!base.ok)
+        throw new Error(base.error);
+    const baseKeys = new Map((base.value?.surfaces ?? []).map((s) => [baselineKey(s), s]));
+    // Preserve the original firstSeen for known surfaces.
+    for (const s of scan.surfaces) {
+        const known = baseKeys.get(s.key);
+        if (known?.firstSeen)
+            s.firstSeen = known.firstSeen;
+    }
+    const current = new Set(scan.surfaces.map((s) => s.key));
+    const newList = base.value ? scan.surfaces.filter((s) => !baseKeys.has(s.key)) : scan.surfaces;
+    const resolved = [...baseKeys.keys()].filter((k) => !current.has(k));
+    const byType = {};
+    for (const s of scan.surfaces)
+        byType[s.type] = (byType[s.type] ?? 0) + 1;
+    return {
+        totalSurfaces: scan.surfaces.length,
+        newSurfaces: newList.length,
+        resolvedSurfaces: resolved.length,
+        baselineExists: base.value !== null,
+        scannedFiles: scan.scannedFiles,
+        truncated: scan.truncated,
+        byType,
+        newSurfacesList: newList,
+        resolvedList: resolved,
+        surfaces: scan.surfaces,
+    };
+}
+/**
+ * Accept surfaces into the baseline. `acceptKeys` undefined → accept the full
+ * current scan (after human review). Otherwise baseline = previously accepted
+ * surfaces that still exist + the listed new keys. Unknown keys are rejected.
+ */
+export function updateBaseline(root, baselinePath, acceptKeys, opts = {}) {
+    const audit = auditRisk(root, baselinePath, opts);
+    const byKey = new Map(audit.surfaces.map((s) => [s.key, s]));
+    let chosen;
+    if (acceptKeys === undefined) {
+        chosen = audit.surfaces;
+    }
+    else {
+        const unknown = acceptKeys.filter((k) => !byKey.has(k));
+        if (unknown.length)
+            throw new Error(`unknown surface keys (re-run risk_audit): ${unknown.join(", ")}`);
+        const newKeys = new Set(audit.newSurfacesList.map((s) => s.key));
+        const accepted = new Set(acceptKeys);
+        chosen = audit.surfaces.filter((s) => !newKeys.has(s.key) || accepted.has(s.key));
+    }
+    const baseline = { version: "2", lastScan: isoNow(), surfaces: chosen };
+    atomicWrite(baselinePath, JSON.stringify(baseline, null, 2) + "\n");
+    return {
+        updated: baselinePath,
+        count: chosen.length,
+        stillUnaccepted: audit.surfaces.length - chosen.length,
+        dropped: audit.resolvedList.length,
+    };
+}
