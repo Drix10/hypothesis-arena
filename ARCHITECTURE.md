@@ -19,10 +19,17 @@ trail).
 ## 1. Root files
 
 Tracked: `.env.example`, `.gitattributes`, `.gitignore`, `.gitleaks.toml`,
-`AGENTS.md`, `ARCHITECTURE.md`, `README.md`, `TODO.md`. `.env` holds real
-values and is git-ignored.
+`.risk-baseline.json`, `AGENTS.md`, `ARCHITECTURE.md`, `CLAUDE.md`,
+`CONTEXT_MANIFEST.json`, `README.md`, `TODO.md`. `.env` holds real values and
+is git-ignored.
 
-- `AGENTS.md` - session rules.
+- `AGENTS.md` - session rules. `CLAUDE.md` imports it for Claude Code;
+  `kernel/AGENTS.md` and `research/AGENTS.md` add module rules.
+- `CONTEXT_MANIFEST.json` - agent-flow: protected paths, risk boundaries and
+  the gates agents must pass; `.risk-baseline.json` is the accepted risk-surface
+  baseline. `.agent-flow-runtime/` is the vendored agent-flow CLI the guard and
+  pre-commit hooks run; `.claude/` holds its skills and hook wiring.
+  `.github/CODEOWNERS` covers the protected paths.
 - `README.md` - status table, quick start, repo map.
 - `TODO.md` - the live build ledger. History lives in git.
 - `.env` / `.env.example` - canonical config. `.env.example` is the tracked
@@ -36,11 +43,12 @@ values and is git-ignored.
   `plan/system-manifest.yaml` (versions, pins, risk rules, component
   presence). Exit 0 is PASS. `pre-commit-secrets.sh` (gitleaks hook) and
   `sign-stage.sh` (human STAGE sign-off) sit beside it.
-- `.github/workflows/ci.yml` - six jobs on every push, pull request and
+- `.github/workflows/ci.yml` - seven jobs on every push, pull request and
   manual dispatch: `stdlib` (collector suites), `evidence` (isolation,
   sources, adapters, seam, strategy and ops suites), `plane` (plane, hardening,
   emit, seam-graph), `kernel` (`WITH_CURL=1 build.sh` + freeze-check),
-  `kernel-sanitizer` (ASan+UBSan), `secrets` (gitleaks over full history).
+  `kernel-sanitizer` (ASan+UBSan), `secrets` (gitleaks over full history), `agent-flow` (doctor +
+  audit-risk against the baseline).
 
 ## 2. plan/ (13 docs + manifest + appendix/ + reviews/)
 
