@@ -927,7 +927,7 @@ const DEVICE = /^\/dev\/(null|stdout|stderr|tty|fd\/\d+)$/;
 // ---------------------------------------------------------------------------
 // The CLI twins of agent-flow's own mutating tools
 // ---------------------------------------------------------------------------
-const CLI_COMMANDS = new Set(["doctor", "init", "audit-risk", "baseline", "classify", "check-staged", "state", "worktree", "scan", "install", "hook", "schema", "template", "report", "repair", "guard", "audit", "gates", "manifest", "codeowners"]);
+const CLI_COMMANDS = new Set(["doctor", "init", "audit-risk", "baseline", "classify", "check-staged", "state", "worktree", "scan", "install", "hook", "schema", "template", "report", "repair", "guard", "audit", "gates", "manifest", "codeowners", "update"]);
 /**
  * May `role` run `agent-flow <argv…>`? Returns a block reason, or null if allowed.
  * `argv` is what follows the binary (process.argv.slice(2)). Applies the same
@@ -972,8 +972,8 @@ export function roleMayRunCli(role, argv) {
         if (sub === "gates" && act === "run" && READ_ONLY_ROLES.includes(role)) {
             return `role "${role}" may not run \`agent-flow gates run\` — the orchestrator runs gates and hands the report over.`;
         }
-        if (sub === "install" || (sub === "hook" && act === "install")) {
-            return `role "${role}" may not run \`agent-flow ${sub === "hook" ? "hook install" : "install"}\` — it rewrites agent/hook configuration; a human runs setup.`;
+        if (sub === "install" || sub === "update" || (sub === "hook" && act === "install")) {
+            return `role "${role}" may not run \`agent-flow ${sub === "hook" ? "hook install" : sub}\` — it rewrites agent/hook configuration; a human runs setup.`;
         }
     }
     return null;
