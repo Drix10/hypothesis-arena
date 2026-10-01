@@ -58,15 +58,19 @@ export function agentsSkeleton(root, scan, branch) {
         L.push("| Task | Command | Source |", "|---|---|---|");
         const seen = new Set();
         for (const c of scan.commands) {
-            if (seen.has(c.name))
+            // package.json scripts and Makefile targets are one per name; CI and build-script commands are several per name.
+            const fromPackage = c.source.startsWith("package.json");
+            const key = fromPackage || c.source === "Makefile" ? c.name : c.command;
+            if (seen.has(key))
                 continue;
-            seen.add(c.name);
-            const cmd = c.source === "Makefile" ? c.command : runner(scan, c.name);
-            L.push(`| ${c.name} | \`${cmd}\` | ${c.source === "Makefile" ? "Makefile" : "package.json scripts"} [HIGH CONFIDENCE] |`);
+            seen.add(key);
+            const cmd = fromPackage ? runner(scan, c.name) : c.command;
+            const label = fromPackage ? "package.json scripts" : c.source === "Makefile" ? "Makefile" : c.source;
+            L.push(`| ${c.name} | \`${cmd.replace(/\|/g, "\\|")}\` | ${label} [HIGH CONFIDENCE] |`);
         }
     }
     else
-        L.push("[NEEDS VERIFICATION] No package.json scripts or Makefile targets found. How do you build, test and lint?");
+        L.push("[NEEDS VERIFICATION] No package.json scripts, Makefile targets, CI steps or build scripts found. How do you build, test and lint?");
     L.push("", "## Paved paths", "", "<!-- The one way we do common things, each with an example file. -->", "", "## Local traps", "", "<!-- Things that look right and are wrong here — and what to do instead. -->", "", "## Rules", "", "- Never modify protected paths (see `CONTEXT_MANIFEST.json` → `protected_paths`). Escalate instead.", ...(branch ? [`- Changes land via PR; never push to \`${branch}\` directly.`] : []), "- New dependencies need risk review (`agent-flow audit-risk`).", "- If code contradicts this file, trust the code and flag it.", "");
     return L.join("\n");
 }
