@@ -65,11 +65,16 @@ def check(d, broker):
         covered = {}
         try:
             for o in openo:
+                # The legs of one order (OCO/bracket: take-profit and stop) are alternatives: only one can fill,
+                # so the order covers the largest leg, not their sum.
+                group = {}
                 for x in [o] + (o.get("legs") or []):
                     if x.get("side") == "sell" and x.get("status") in (
                             "new", "accepted", "held", "partially_filled", "pending_new"):
                         rest = float(x.get("qty") or 0) - float(x.get("filled_qty") or 0)
-                        covered[x.get("symbol")] = covered.get(x.get("symbol"), 0.0) + rest
+                        group[x.get("symbol")] = max(group.get(x.get("symbol"), 0.0), rest)
+                for sym, rest in group.items():
+                    covered[sym] = covered.get(sym, 0.0) + rest
             for p in pos:
                 qty = float(p.get("qty", 0))
                 if qty > 0 and covered.get(p["symbol"], 0.0) < qty:

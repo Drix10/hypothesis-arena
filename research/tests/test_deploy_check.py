@@ -73,6 +73,14 @@ class CheckTest(unittest.TestCase):
         b = FakeBroker([{"symbol": "SPY", "qty": "100"}], [parent, sell("SPY", 60)])
         self.assertEqual(self.run_check(b), [])
 
+    def test_oco_legs_are_alternatives_not_additive(self):
+        self.journal([jrow(1, "g", "a")])
+        oco = sell("SPY", 50, "new", legs=[sell("SPY", 50, "held")])
+        b = FakeBroker([{"symbol": "SPY", "qty": "100"}], [oco])
+        self.assertTrue(any("NO STOP" in f for f in self.run_check(b)))
+        full = sell("SPY", 100, "new", legs=[sell("SPY", 100, "held")])
+        self.assertEqual(self.run_check(FakeBroker([{"symbol": "SPY", "qty": "100"}], [full])), [])
+
     def test_partially_filled_sell_counts_remaining(self):
         self.journal([jrow(1, "g", "a")])
         b = FakeBroker([{"symbol": "SPY", "qty": "100"}],
