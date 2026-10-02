@@ -32,7 +32,7 @@ struct LoopIO {
 // writes it, and only ever to true: absent data cannot set it and nothing
 // here clears it (an operator removes dd-kill.latch and restarts).
 struct KillFeed {
-    bool drawdown_r5 = false;  // equity <= -15% from hwm.txt, latched
+    bool drawdown_r5 = false;  // equity strictly over 10% below hwm.txt, latched
 };
 inline void KillFeedInputs(void* ctx, kill::KillInputs* out) {
     if (!ctx || !out) return;
@@ -74,7 +74,7 @@ class PaperLoop {
     LoopIO io_;
     LoopConfig cfg_;
     LoopStats stats_;
-    bool dd_latched_ = false;          // -15% from hwm seen (persisted)
+    bool dd_latched_ = false;          // over 10% below hwm seen (persisted)
     int64_t daily_loss_day_ = -1;      // session day of a >3% daily-loss trip
     SettleBook book_;  // proceeds of exits this loop submitted (R18)
 };

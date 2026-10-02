@@ -349,7 +349,7 @@ int main(int argc, char** argv) {
           ParseAccount(nolast, &nav) &&
               nav.last_equity_cents == nav.equity_cents);
 
-    // 11c. -15% drawdown from hwm.txt raises the kill input (latched).
+    // 11c. over-10% drawdown from hwm.txt raises the kill input (latched).
     KillFeed feed;
     LoopConfig lc2 = lc;
     lc2.kill_feed = &feed;
@@ -357,16 +357,20 @@ int main(int argc, char** argv) {
     kill::KillInputs ki;
     KillFeedInputs(&feed, &ki);
     CHECK("dd-feed-quiet-at-start", !ki.drawdown_r5);
-    g_account = Acct("86000", "86000");  // -14%: below the line
+    g_account = Acct("91000", "91000");  // -9%: below the line
     dd.Tick(NOW_S * 1000000000LL);
     KillFeedInputs(&feed, &ki);
-    CHECK("dd-14pct-no-kill", !ki.drawdown_r5 && !feed.drawdown_r5);
-    g_account = Acct("85000", "85000");  // exactly -15%
+    CHECK("dd-9pct-no-kill", !ki.drawdown_r5 && !feed.drawdown_r5);
+    g_account = Acct("90000", "90000");  // exactly -10.0%: no kill
+    dd.Tick(NOW_S * 1000000000LL);
+    KillFeedInputs(&feed, &ki);
+    CHECK("dd-10.0pct-no-kill", !ki.drawdown_r5 && !feed.drawdown_r5);
+    g_account = Acct("89990", "89990");  // -10.01%: kill
     dd.Tick(NOW_S * 1000000000LL);
     ki = kill::KillInputs();
     KillFeedInputs(&feed, &ki);
     kill::LevelResult lr = kill::EvaluateLevel(ki);
-    CHECK("dd-15pct-kills", ki.drawdown_r5 &&
+    CHECK("dd-10.01pct-kills", ki.drawdown_r5 &&
                                 lr.level == risk::KillLevel::MEDIUM &&
                                 std::strcmp(lr.reason, "kill:drawdown-r5") == 0);
     CHECK("dd-latch-persisted", !Slurp(env.dir + "/dd-kill.latch").empty());
@@ -388,7 +392,7 @@ int main(int argc, char** argv) {
     dd.Tick(NOW_S * 1000000000LL);
     dec = Slurp(env.dir + "/decisions.jsonl");
     CHECK("dd-holds-entry-named", dd.stats().proceeded == 0 &&
-              dec.rfind("drawdown-15pct-kill") != std::string::npos);
+              dec.rfind("drawdown-10pct-kill") != std::string::npos);
     g_positions = "[{\"symbol\":\"VTI\",\"qty\":\"40\",\"side\":\"long\","
                   "\"market_value\":\"10020.00\"}]";
     Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 57, "SELL"));

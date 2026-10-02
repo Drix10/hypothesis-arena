@@ -220,7 +220,7 @@ bool DailyLossBreach(int64_t equity, int64_t last_equity) {
 }
 bool DrawdownKill(int64_t equity, int64_t hwm) {
     if (equity <= 0 || hwm <= 0) return false;
-    return (__int128)(hwm - equity) * 100 >= (__int128)hwm * 15;
+    return (__int128)(hwm - equity) * 10 > (__int128)hwm;  // strictly > 10%
 }
 
 }  // namespace
@@ -321,12 +321,12 @@ bool PaperLoop::Tick(int64_t now_ns) {
             WriteInt(hp, av.equity_cents);
             peak = av.equity_cents;
         }
-        // -15% from the high-water mark latches the kill (never cleared here).
+        // More than 10% below the high-water mark latches the kill (never cleared here).
         if (!dd_latched_ && DrawdownKill(av.equity_cents, peak)) {
             dd_latched_ = true;
-            AppendLine((cfg_.dir + "/dd-kill.latch").c_str(), "drawdown-15pct");
+            AppendLine((cfg_.dir + "/dd-kill.latch").c_str(), "drawdown-10pct");
             Alert((cfg_.dir + "/alerts.jsonl").c_str(), "MEDIUM",
-                  "drawdown-kill", "equity -15% from high-water mark", now_ns);
+                  "drawdown-kill", "equity over 10% below high-water mark", now_ns);
         }
         // Daily loss > 3% of last_equity holds entries for the session day.
         if (daily_loss_day_ != session_today &&
@@ -462,7 +462,7 @@ bool PaperLoop::Tick(int64_t now_ns) {
             d = exec::Decide(in);
             // Name the account-level cause; exits bypass entry_halt upstream.
             if (!d.proceed && d.reason == "entry-halt" && !other_halt)
-                d.reason = dd_latched_ ? "drawdown-15pct-kill"
+                d.reason = dd_latched_ ? "drawdown-10pct-kill"
                                        : "daily-loss-3pct";
             if (d.proceed && d.intent.kind == risk::IntentKind::EXIT &&
                 exiting.count(d.symbol)) {
