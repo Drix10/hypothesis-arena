@@ -315,12 +315,19 @@ bool PaperLoop::Tick(int64_t now_ns) {
                                        (now_s + EtOffsetSeconds(now_s)) / 86400);
     int64_t session_today = (now_s + EtOffsetSeconds(now_s)) / 86400;
     if (stats_.account_ok) {
-        std::string hp = cfg_.dir + "/hwm.txt";
-        int64_t peak = ReadInt(hp);
-        if (av.equity_cents > peak) {
-            WriteInt(hp, av.equity_cents);
-            peak = av.equity_cents;
+        // R5 peak: intraday_hwm (hwm.txt) moves every tick; daily_close_hwm
+        // moves only while the session is closed, i.e. at the close equity.
+        int64_t intraday = ReadInt(cfg_.dir + "/hwm.txt");
+        if (av.equity_cents > intraday) {
+            WriteInt(cfg_.dir + "/hwm.txt", av.equity_cents);
+            intraday = av.equity_cents;
         }
+        int64_t close_hwm = ReadInt(cfg_.dir + "/hwm-close.txt");
+        if (!SessionOpen(clock) && av.equity_cents > close_hwm) {
+            WriteInt(cfg_.dir + "/hwm-close.txt", av.equity_cents);
+            close_hwm = av.equity_cents;
+        }
+        int64_t peak = close_hwm > intraday ? close_hwm : intraday;
         // More than 10% below the high-water mark latches the kill (never cleared here).
         if (!dd_latched_ && DrawdownKill(av.equity_cents, peak)) {
             dd_latched_ = true;
@@ -431,9 +438,10 @@ bool PaperLoop::Tick(int64_t now_ns) {
                 if (p.is_long && p.qty > 0) in.held_qty[p.symbol] = p.qty;
             risk::RiskSnapshot& s = in.state;
             s.equity_cents = av.equity_cents;
-            int64_t hwm = ReadInt(cfg_.dir + "/hwm.txt");
-            if (av.equity_cents > hwm) hwm = av.equity_cents;
-            s.daily_close_hwm_cents = s.intraday_hwm_cents = hwm;
+            int64_t intraday = ReadInt(cfg_.dir + "/hwm.txt");
+            if (av.equity_cents > intraday) intraday = av.equity_cents;
+            s.daily_close_hwm_cents = ReadInt(cfg_.dir + "/hwm-close.txt");
+            s.intraday_hwm_cents = intraday;
             int64_t session_day = (now_s + EtOffsetSeconds(now_s)) / 86400;
             s.settled_cash_cents =
                 book_.SettledCents(av.settled_cash_cents, session_day) - spent_cents;
