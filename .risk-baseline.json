@@ -1,6 +1,6 @@
 {
   "version": "2",
-  "lastScan": "2026-10-01T14:24:27.130Z",
+  "lastScan": "2026-10-02T12:07:24.937Z",
   "surfaces": [
     {
       "key": "auth:collector/jev.py",
@@ -133,6 +133,16 @@
         651
       ],
       "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "data-mutation:ops/deploy/test_run.sh",
+      "type": "data-mutation",
+      "path": "ops/deploy/test_run.sh",
+      "detail": "data-mutation pattern",
+      "lines": [
+        6
+      ],
+      "firstSeen": "2026-10-02T12:07:24.548Z"
     },
     {
       "key": "data-mutation:ops/event_shadow.py",
