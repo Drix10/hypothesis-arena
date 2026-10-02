@@ -185,7 +185,8 @@ The paper run is started with `bash ops/deploy/start.sh ~/g2` (see `ops/deploy/R
   - [x] Collector background poller (opt-in `WITH_COLLECTOR=1`). [x] macro-lite shadow ledger (`ops/macro_shadow.py`, needs FRED_API_KEY).
   - [x] JEV paired A/B twins per sleeve (`ops/jev_twin.py`, needs OPENROUTER_API_KEY; live run pending).
   - [ ] Netting router: not on the critical path (G0b is one champion; none passed A-gate). Build with the K5 exit sequence when a champion exists.
-  - [x] Account kill inputs wired (daily loss 3% entry hold, drawdown 15% latch). [x] per-sleeve limits reported in `sleeves/status.json`.
+  - [x] Account kill inputs wired (daily loss 3% entry hold, drawdown over 10% latch). [x] per-sleeve limits reported in `sleeves/status.json`.
+  - [x] Paper-loop `DrawdownKill` latches strictly above 10% of the high-water mark (plan/05 R5), same integer test as `kernel/risk/veto.cpp`; test: 10.0% holds, 10.01% latches.
 - [x] G0-STAGE Sign the G0 bootstrap STAGE file (doc 10 §10.5). Signed by the operator 2026-09-29 (`scripts/sign-stage.sh ~/g0`, mode 0600).
 - [ ] G0b Broker paper: one champion sleeve through the kernel on Alpaca
       paper [BLOCKED on K-exit + a B-gate pass + G0-STAGE].
