@@ -156,6 +156,8 @@ A box is checked only with evidence (commit and test output, or a report path).
   - Done: exit proceeds are booked before the order is sent, keyed by cid and estimated from the live mark +1% (broker cash reconciles the rest next session).
   - Decision: no MOC or timed exits for the passive core (its exits are explicit SELL candidates during the session); early-close days (13:00 ET) are listed in `early_close_YYYY` arrays of the calendar and honored by the data-age gate; a torn final journal line is trimmed on recovery (bytes kept in `journal.jsonl.torn`, MEDIUM alert `journal-torn-tail`); `ops/deploy/session_calendar.json` covers 2026-2028.
   - Open: STAGE signature and approved.json (G0-STAGE) remain.
+- [x] K14 R5 high-water marks in `PaperLoop` (doc 05 R5): `hwm.txt` is the intraday mark (every tick), `hwm-close.txt` the daily-close mark (session closed only); both feed `RiskSnapshot` and the drawdown kill uses the larger.
+  - Done: restart persistence of both files and the max rule in `test_paper_loop` (hwm-* checks); kernel gate PASS.
 - [ ] K-exit P3.5 CLOSED (K1-K7 + K10 green).
 
 ## Track P - research plane (parallel)

@@ -31,6 +31,7 @@ using namespace jev::runner;
 static std::string g_fix;                 // fixtures dir
 static std::string g_account, g_bracket;  // fixture bodies
 static bool g_account_up = true;
+static bool g_clock_open = true;
 static bool g_data_up = true;
 static std::string g_positions = "[]";
 static std::string g_orders = "[]";
@@ -148,7 +149,8 @@ int main(int argc, char** argv) {
     io.rest = [](const char*, const std::string& path, int* st,
                  std::string* body) {
         *st = 200;
-        if (path == "/v2/clock") *body = "{\"is_open\":true}";
+        if (path == "/v2/clock")
+            *body = g_clock_open ? "{\"is_open\":true}" : "{\"is_open\":false}";
         else if (path == "/v2/account") {
             if (!g_account_up) return false;
             *body = g_account;
@@ -402,6 +404,50 @@ int main(int argc, char** argv) {
     KillFeedInputs(nullptr, &ki);  // null-safe
     std::remove((env.dir + "/dd-kill.latch").c_str());
     std::remove((env.dir + "/daily-loss.day").c_str());
+
+    // 11d. two high-water marks: intraday every tick, daily close only with
+    // the session closed; both persist and the kill reads the larger.
+    std::remove((env.dir + "/hwm-close.txt").c_str());
+    {
+        KillFeed f;
+        LoopConfig lc3 = lc;
+        lc3.kill_feed = &f;
+        PaperLoop hw(runner, io, lc3);
+        g_account = Acct("105000", "105000");
+        hw.Tick(NOW_S * 1000000000LL);
+        CHECK("hwm-intraday-moves-open", Slurp(env.dir + "/hwm.txt") == "10500000");
+        CHECK("hwm-close-not-moved-open", Slurp(env.dir + "/hwm-close.txt").empty());
+        g_clock_open = false;
+        g_account = Acct("104000", "104000");
+        hw.Tick(NOW_S * 1000000000LL);
+        CHECK("hwm-close-set-at-close", Slurp(env.dir + "/hwm-close.txt") == "10400000");
+        g_clock_open = true;
+        g_account = Acct("106000", "106000");
+        hw.Tick(NOW_S * 1000000000LL);
+        CHECK("hwm-close-holds-open", Slurp(env.dir + "/hwm-close.txt") == "10400000" &&
+                                          Slurp(env.dir + "/hwm.txt") == "10600000");
+        // A restart reads both files; the larger close mark decides the kill.
+        Write(env.dir + "/hwm-close.txt", "11000000");
+        KillFeed f2;
+        lc3.kill_feed = &f2;
+        PaperLoop hw2(runner, io, lc3);
+        g_account = Acct("98000", "98000");  // -7.5% of 106000, -10.9% of 110000
+        hw2.Tick(NOW_S * 1000000000LL);
+        CHECK("hwm-restart-keeps-both", Slurp(env.dir + "/hwm.txt") == "10600000" &&
+                                            Slurp(env.dir + "/hwm-close.txt") == "11000000");
+        CHECK("hwm-max-rule-kills", f2.drawdown_r5);
+        std::remove((env.dir + "/dd-kill.latch").c_str());
+        KillFeed f3;
+        lc3.kill_feed = &f3;
+        Write(env.dir + "/hwm-close.txt", "10000000");
+        PaperLoop hw3(runner, io, lc3);
+        hw3.Tick(NOW_S * 1000000000LL);  // 98000 vs max(100000, 106000): -7.5%
+        CHECK("hwm-max-rule-intraday-wins", !f3.drawdown_r5);
+        std::remove((env.dir + "/daily-loss.day").c_str());
+        std::remove((env.dir + "/hwm-close.txt").c_str());
+        Write(env.dir + "/hwm.txt", "10000000");
+        g_account = acct_ok;
+    }
 
     // 12. a calendar with no holiday in the traded year fails closed.
     Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1"));
