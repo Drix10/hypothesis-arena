@@ -43,13 +43,24 @@ export OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-$(envval OPENROUTER_API_KEY)}"
 [ -n "$ALPACA_KEY_ID" ] && [ -n "$ALPACA_SECRET" ] || { echo "ALPACA_KEY_ID/ALPACA_SECRET missing in .env" >&2; exit 2; }
 
 echo "== preflight =="
-positions="$(curl -fsS -m 15 -H "APCA-API-KEY-ID: $ALPACA_KEY_ID" -H "APCA-API-SECRET-KEY: $ALPACA_SECRET" \
-    https://paper-api.alpaca.markets/v2/positions)" || { echo "Alpaca paper is not reachable or the keys are refused" >&2; exit 2; }
-if [ "$positions" != "[]" ] && [ "${ALLOW_POSITIONS:-0}" != 1 ]; then
-    echo "the paper account holds positions with no stop from this run. Close them (and cancel open orders)" >&2
-    echo "in the Alpaca paper dashboard first, or run with ALLOW_POSITIONS=1 to accept that." >&2; exit 2
+alpaca_get() {
+    curl -fsS -m 15 -H "APCA-API-KEY-ID: $ALPACA_KEY_ID" -H "APCA-API-SECRET-KEY: $ALPACA_SECRET" \
+        "https://paper-api.alpaca.markets$1"
+}
+unreachable() { echo "Alpaca paper is not reachable or the keys are refused" >&2; exit 2; }
+positions="$(alpaca_get /v2/positions)" || unreachable
+orders="$(alpaca_get '/v2/orders?status=open&limit=500')" || unreachable
+if [ "${ALLOW_POSITIONS:-0}" != 1 ]; then
+    if [ "$positions" != "[]" ]; then
+        echo "the paper account holds positions with no stop from this run. Close them (and cancel open orders)" >&2
+        echo "in the Alpaca paper dashboard first, or run with ALLOW_POSITIONS=1 to accept that." >&2; exit 2
+    fi
+    if [ "$orders" != "[]" ]; then
+        echo "the paper account has open or working orders. Cancel them in the Alpaca paper dashboard first," >&2
+        echo "or run with ALLOW_POSITIONS=1 to accept that." >&2; exit 2
+    fi
 fi
-echo "account reachable, no open positions"
+echo "account reachable, no open positions or orders"
 
 mkdir -p "$dir/logs" "$dir/backup"
 [ -f "$dir/approved.json" ] || cp ops/deploy/approved.json.example "$dir/approved.json"
