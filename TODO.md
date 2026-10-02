@@ -187,6 +187,7 @@ The paper run is started with `bash ops/deploy/start.sh ~/g2` (see `ops/deploy/R
   - [ ] Netting router: not on the critical path (G0b is one champion; none passed A-gate). Build with the K5 exit sequence when a champion exists.
   - [x] Account kill inputs wired (daily loss 3% entry hold, drawdown 15% latch). [x] per-sleeve limits reported in `sleeves/status.json`.
 - [x] G0-STAGE Sign the G0 bootstrap STAGE file (doc 10 §10.5). Signed by the operator 2026-09-29 (`scripts/sign-stage.sh ~/g0`, mode 0600).
+- [x] G0-supervisor `ops/deploy/run.sh` stops the run if the supervisor is killed (EXIT/INT/TERM trap, no double stop, no stop on a clean finish); `bash ops/deploy/test_run.sh`.
 - [ ] G0b Broker paper: one champion sleeve through the kernel on Alpaca
       paper [BLOCKED on K-exit + a B-gate pass + G0-STAGE].
 - [ ] G0-ops Daily summary, weekly replay, §6.2a drills on the live loop.
