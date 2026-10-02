@@ -8,7 +8,8 @@ Fails when any of these hold:
   - alerts.jsonl holds a flatten*, unprotected-position, journal-* or kill alert
   - the order journal hash chain is broken
   - loop.log or sleeves.log contains a traceback
-  - (broker) a held position has no resting sell order, or an open order is stuck
+  - a non-empty journal row is not a 7-field row
+  - (broker) a held position is not fully covered by resting sell quantity
 Read-only: it never places or cancels anything.
 --watch N repeats every N seconds and stops at the first FAIL (exit 1)."""
 import json
@@ -38,7 +39,11 @@ def check(d, broker):
         code = str(a.get("code", ""))
         if any(code.startswith(b) or b in code for b in BAD_ALERT):
             fails.append("alert %s: %s" % (code, a.get("detail", "")))
-    rows = [ln.split("|") for ln in monitor.read_lines(os.path.join(d, "journal.jsonl"))]
+    rows = [ln.split("|") for ln in monitor.read_lines(os.path.join(d, "journal.jsonl"))
+            if ln.strip()]
+    bad = [i + 1 for i, p in enumerate(rows) if len(p) != 7]
+    if bad:
+        fails.append("journal row malformed: %d row(s), first at row %d" % (len(bad), bad[0]))
     rows = [p for p in rows if len(p) == 7]
     try:
         if not all(rows[i][5] == rows[i - 1][6] and int(rows[i][0]) == int(rows[i - 1][0]) + 1
@@ -57,16 +62,24 @@ def check(d, broker):
         except Exception as e:
             fails.append("broker unreachable: %s" % e)
             return fails, notes
-        sells = set()
-        for o in openo:
-            for x in [o] + (o.get("legs") or []):
-                if x.get("side") == "sell" and x.get("status") in (
-                        "new", "accepted", "held", "partially_filled", "pending_new"):
-                    sells.add(x.get("symbol"))
-        for p in pos:
-            if float(p.get("qty", 0)) > 0 and p["symbol"] not in sells:
-                fails.append("NO STOP: long %s x%s has no resting sell" % (p["symbol"], p["qty"]))
-        notes.append("positions %d, symbols with a stop %s" % (len(pos), sorted(sells)))
+        covered = {}
+        try:
+            for o in openo:
+                for x in [o] + (o.get("legs") or []):
+                    if x.get("side") == "sell" and x.get("status") in (
+                            "new", "accepted", "held", "partially_filled", "pending_new"):
+                        rest = float(x.get("qty") or 0) - float(x.get("filled_qty") or 0)
+                        covered[x.get("symbol")] = covered.get(x.get("symbol"), 0.0) + rest
+            for p in pos:
+                qty = float(p.get("qty", 0))
+                if qty > 0 and covered.get(p["symbol"], 0.0) < qty:
+                    fails.append("NO STOP: long %s x%s has resting sell qty %g"
+                                 % (p["symbol"], p["qty"], covered.get(p["symbol"], 0.0)))
+        except (TypeError, ValueError) as e:
+            fails.append("broker payload unreadable: %s" % e)
+            return fails, notes
+        notes.append("positions %d, symbols with a stop %s"
+                     % (len(pos), sorted(k for k, v in covered.items() if v > 0)))
     return fails, notes
 
 

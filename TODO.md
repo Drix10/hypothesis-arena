@@ -43,6 +43,8 @@ A box is checked only with evidence (commit and test output, or a report path).
   - Done: exported `OPENROUTER_API_KEY` now wins over `.env` (a rotated key takes effect).
   - Done: `config.py` handles `export KEY=` and unquoted inline comments; `HTTPError` responses are closed (`collector/tests/test_o7.py`, in CI).
   - Decision: the 8 MiB call-log rotation loses no spend evidence, because spend accounting reads the per-day ledgers.
+- [x] O8 `ops/deploy/check.py` fails on any malformed non-empty journal row and on resting sell quantity
+      (nested legs included) below the position quantity (`research/tests/test_deploy_check.py`, 8 checks).
 
 ## Track A - alpha (critical path)
 
