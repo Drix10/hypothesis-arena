@@ -1,14 +1,14 @@
 {
-  "version": "1.1.7",
+  "version": "1.2.0",
   "harness": "claude",
   "files": {
-    ".claude/skills/bootstrap": "5c60e921fd6050907b6e402394e98e287bbfc3dc1b9b5eac9fbfaaac111e76af",
+    ".claude/skills/bootstrap": "22ea5bef067f07668f6a6a6918fd7fe46d1d90e950045aacc1165ca6a35e84b0",
     ".claude/skills/gardener": "6dc15a00bd2bda707e19c87cb1ab2dd6de672ee6ffdf48880db4de08e3e02a26",
     ".claude/skills/implementer": "2dc92015965a687463acc25197938c66e802f27c45296fa2e0883b92d5f8bc89",
-    ".claude/skills/invoking-agents": "9ed3e7ac5b3923f06a5d04b874ff60c66757f525f92f648ae8b2e5794dfb0665",
+    ".claude/skills/invoking-agents": "c48441b929d189bcf61ebef2f6ca6d37cf9be377419ffccb0de1315fa55a4853",
     ".claude/skills/qa": "c1499e88e879eadfeb6fc64342a0148bc6bd6c2b7f63fe9de8430fab3106a843",
     ".claude/skills/reviewer": "1c75d58ebd061207da773e11c84cf901aba30c25bfe535dbbc213590b621de17",
     ".claude/agents/reviewer.md": "ee90ce2b23892bfb0bf44b019018e140d9ef369408a9a88473ef9f421c125899",
-    ".agent-flow-runtime": "563d3d9ade26d5e11f7d441adaecd2068231ff6b9c082e2dc0325d79826e93a1"
+    ".agent-flow-runtime": "9e783a7364ac95d834f4b5ebd942fc9eedeeae5dc5c77d220be0ab1cef795176"
   }
 }
