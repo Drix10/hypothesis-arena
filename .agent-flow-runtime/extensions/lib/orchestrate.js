@@ -244,8 +244,9 @@ export function findingsFor(dir, r) {
  * model's first instinct (`cd <worktree>; git status` in PowerShell) is denied and a turn is wasted; and a Reviewer whose
  * deny-list names only Bash would still have a shell. The guard hook judges PowerShell writes like Bash ones.
  */
+/** `dirs` are the issue folder and the worktree. A role that `cd`s into its worktree would otherwise lose permission to read the issue and packet in it (Claude Code scopes tool access to its working directory). */
 export function claudeArgs(role, p) {
-    const base = ["claude", "-p", ...(p.model ? ["--model", p.model] : [])];
+    const base = ["claude", "-p", ...(p.model ? ["--model", p.model] : []), ...(p.dirs?.length ? ["--add-dir", ...p.dirs] : [])];
     if (role === "implementer")
         return [...base, "--permission-mode", "acceptEdits", "--allowedTools", "Bash,PowerShell,Skill", "--output-format", "json", p.prompt];
     if (role === "reviewer")
@@ -530,7 +531,7 @@ export async function runIssue(i) {
             const env = { AGENT_FLOW_ROLE: role };
             if (role === "implementer")
                 env.AGENT_FLOW_WORKTREE = WT;
-            let argv = claudeArgs(role, { prompt: prompts[role], model: o.model });
+            let argv = claudeArgs(role, { prompt: prompts[role], model: o.model, dirs: [A, WT] });
             for (let attempt = 0; attempt < 2; attempt++) {
                 const res = await i.spawner({ argv, env, cwd: root, base: stem, timeoutSec: i.timeoutSec });
                 const rep = af([
