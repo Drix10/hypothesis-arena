@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """kill-probe.py — Phase-D deployment box 5 (supervisor WALL_S kill/reap).
 
-Checks the shipped kill ladder (plane/timeout.py::run_in_process, which
+Checks the shipped kill ladder (engine/timeout.py::run_in_process, which
 the production supervisor drives with timeout_s=WALL_S=480s) with short
 deadlines (the mechanism is the same at any value):
   1. SIGTERM-ignoring runaway -> CallTimeout in bounded time (a child that
@@ -25,7 +25,7 @@ if os.name != "posix":
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from plane import timeout as timeout_mod
+from engine import timeout as timeout_mod
 
 PASS, FAIL = 0, 0
 

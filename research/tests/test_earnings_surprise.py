@@ -7,7 +7,7 @@ import unittest
 import zipfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from research.strategy import pead_data as P
+from research.strategy import earnings_surprise as P
 
 D = datetime.date
 SUB = ["adsh", "cik", "name", "sic", "form", "period", "filed", "accepted",

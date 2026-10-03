@@ -60,6 +60,15 @@ def build_query(symbol, kind, start, end, timeframe=None, adjustment="raw"):
     return q
 
 
+def load_alpaca_env():
+    """Copy the Alpaca data keys from the repo .env (via collector.config,
+    the only loader) into the environment unless already exported."""
+    from collector.config import load
+    for n, v in load()["values"].items():
+        if n in ("ALPACA_KEY_ID", "ALPACA_SECRET"):
+            os.environ.setdefault(n, v)
+
+
 def default_http_get(url, headers):
     req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=60) as r:

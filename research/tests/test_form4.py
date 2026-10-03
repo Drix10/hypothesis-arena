@@ -7,7 +7,7 @@ import unittest
 import zipfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from research.strategy import insider_data as I
+from research.strategy import form4 as I
 
 D = datetime.date
 

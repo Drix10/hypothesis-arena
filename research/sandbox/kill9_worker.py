@@ -21,8 +21,8 @@ sys.path.insert(0, TESTS)
 ROOT = os.path.dirname(TESTS)
 sys.path.insert(0, ROOT)
 
-import test_plane as T  # noqa: E402
-from plane import graph as G  # noqa: E402
+import test_engine as T  # noqa: E402
+from engine import graph as G  # noqa: E402
 
 
 def main():

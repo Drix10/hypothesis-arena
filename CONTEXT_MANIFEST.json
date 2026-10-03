@@ -2,9 +2,9 @@
   "$schema": "./.agent-flow-runtime/schemas/context-manifest.schema.json",
   "version": "2",
   "repo": "hypothesis-arena",
-  "generated_by": "agent-flow@1.1.6 manifest sync",
+  "generated_by": "agent-flow@1.2.1 manifest sync",
   "generated_at": "2026-10-01T13:47:33.323Z",
-  "last_full_scan": "2026-10-01T14:14:53.926Z",
+  "last_full_scan": "2026-10-03T06:52:42.586Z",
   "default_branch": "main",
   "staleness_threshold_days": 30,
   "context_files": [
@@ -14,138 +14,180 @@
         {
           "path": "plan/00-INDEX.md",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "plan/07-build-roadmap.md",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "plan/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "plan/appendix/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "scripts/sign-stage.sh",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "plan/system-manifest.yaml",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/build.sh",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "collector/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "collector/tests/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "research/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/engine/",
+          "type": "directory",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/strategy/",
+          "type": "directory",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/sources/",
+          "type": "directory",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "research/requirements.txt",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "ops/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "ops/forward_ledgers.py",
+          "type": "file",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "ops/forward_eval.py",
+          "type": "file",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "ops/forward_register.py",
+          "type": "file",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "ops/deploy/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "ops/deploy/README.md",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "scripts/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "scripts/freeze-check.sh",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "scripts/pre-commit-secrets.sh",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": ".github/workflows/ci.yml",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "research/strategy/requirements.txt",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "collector/config.py",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "research/sandbox/langfuse/docker-compose.yml",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/tests/test_core_passive.py",
+          "type": "file",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         }
       ],
       "confidence_markers": {
-        "high_confidence": 5,
+        "high_confidence": 4,
         "inferred": 0,
         "needs_verification": 1
       }
@@ -165,67 +207,67 @@
         {
           "path": "kernel/exec/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/broker/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/kill/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/risk/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/build.sh",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/ingest/test_noalloc.cpp",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/jev_vectors/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "research/strategy/gen_jev_vectors.py",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "scripts/freeze-check.sh",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/log/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/stage/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         }
       ],
@@ -239,21 +281,63 @@
       "path": "research/AGENTS.md",
       "references": [
         {
-          "path": "research/tests/test_candidate.py",
-          "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "path": "research/engine/",
+          "type": "directory",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/strategy/",
+          "type": "directory",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/sources/",
+          "type": "directory",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/sandbox/",
+          "type": "directory",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "research/ledger/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "research/prereg/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/reports/",
+          "type": "directory",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/tests/test_candidate.py",
+          "type": "file",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/",
+          "type": "directory",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/tests/test_emit.py",
+          "type": "file",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         }
       ],
@@ -282,12 +366,12 @@
   "gates": [
     {
       "name": "collector",
-      "command": "for t in test_ctx test_jev test_pipeline test_config test_collect test_o7; do python3 collector/tests/$t.py || exit 1; done",
+      "command": "for t in test_ctx test_jev test_pipeline test_config test_collect test_env_loading; do python3 collector/tests/$t.py || exit 1; done",
       "timeout_seconds": 900
     },
     {
       "name": "research",
-      "command": "for t in test_a_run test_alert_relay test_baseline test_bea test_bls test_costs_v2 test_edgar test_event_shadow test_forward_register test_fred test_gates test_insider_data test_insider_sleeve test_intraday_mom test_isolation test_jev_filter test_jev_shadow test_jev_twin test_ledger test_long_history test_macro_shadow test_pead_data test_pead_sleeve test_portfolio test_prereg test_s5 test_sector_mom test_settlement test_sip_fetch test_sleeve_eval test_sleeve_shadow test_source_seam test_stats test_tier_a test_treasury test_trend; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
+      "command": "for t in test_alert_relay test_baseline test_bea test_bls test_costs_v2 test_costs_v3 test_deploy_check test_edgar test_forward_register test_fred test_gates test_form4 test_isolation test_jev_filter test_ledger test_earnings_surprise test_portfolio test_prereg test_settlement test_sip_fetch test_forward_eval test_forward_ledgers test_source_seam test_stats test_tier_a test_treasury; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
       "timeout_seconds": 1800
     },
     {
@@ -297,6 +381,26 @@
         "linux"
       ],
       "timeout_seconds": 600
+    },
+    {
+      "name": "engine",
+      "command": "for t in test_engine test_hardening test_emit test_seam_graph test_event_direction; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
+      "timeout_seconds": 1800
+    },
+    {
+      "name": "research-pytest",
+      "command": "python3 -m pytest -q research/tests/test_candidate.py",
+      "timeout_seconds": 300
+    },
+    {
+      "name": "collector-soak",
+      "command": "MIRO_CONTACT=gate@example.invalid python3 collector/tests/test_soak_check.py",
+      "timeout_seconds": 300
+    },
+    {
+      "name": "deploy-scripts",
+      "command": "bash ops/deploy/test_run.sh && bash ops/tests/test_start_preflight.sh",
+      "timeout_seconds": 300
     },
     {
       "name": "freeze-check",
@@ -390,6 +494,10 @@
   ],
   "pipeline": {
     "max_review_rounds": 2,
-    "auto_merge_low_risk": true
+    "auto_merge_low_risk": true,
+    "models": {
+      "high_reasoning": "claude-opus-5-5"
+    },
+    "max_cost_usd": 10
   }
 }

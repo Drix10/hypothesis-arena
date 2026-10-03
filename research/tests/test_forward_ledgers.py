@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from ops import sleeve_shadow as S
+from ops import forward_ledgers as S
 
 NOW = datetime.datetime(2026, 12, 2, 21, 0, tzinfo=datetime.timezone.utc)
 
@@ -41,14 +41,14 @@ class Shadow(unittest.TestCase):
         S.FORWARD_START = self._old
 
     def test_only_forward_sessions_recorded_and_rebased(self):
-        u, fac, _ = self.specs["trend_etf_v1"]
-        rows = S.replay("trend_etf_v1", self.prices, fac, u)
+        u, fac, _ = self.specs["core_passive_v1"]
+        rows = S.replay("core_passive_v1", self.prices, fac, u)
         self.assertEqual(rows[0]["date"], self.fwd)
         self.assertAlmostEqual(rows[0]["equity"], S.CASH0, places=2)
         self.assertTrue(all(r["date"] >= self.fwd for r in rows))
 
     def test_replay_is_deterministic_and_prefix_stable(self):
-        u, fac, _ = self.specs["sector_mom_v1"]
+        u, fac, _ = self.specs["core_passive_v1"]
         full = S.replay("s", self.prices, fac, u)
         cut = {s: {d: v for d, v in p.items() if d <= full[-40]["date"]}
                for s, p in self.prices.items()}
@@ -81,15 +81,15 @@ class Shadow(unittest.TestCase):
         S.fetch_prices = fake
         try:
             with tempfile.TemporaryDirectory() as d:
-                bad, summ = S.run(d, NOW, event_sleeves=False)
+                bad, summ = S.run(d, NOW)
                 self.assertEqual(bad, [])
                 self.assertEqual(set(summ), set(self.specs))
-                bad, _ = S.run(d, NOW, verify=True, event_sleeves=False)
+                bad, _ = S.run(d, NOW, verify=True)
                 self.assertEqual(bad, [])
                 for s in self.prices["VTI"]:  # provider revises history
                     o, c = self.prices["VTI"][s]
                     self.prices["VTI"][s] = (o * 1.3, c * 1.3) if s > self.dates[350] else (o, c)
-                bad, _ = S.run(d, NOW, verify=True, event_sleeves=False)
+                bad, _ = S.run(d, NOW, verify=True)
                 self.assertTrue(bad)
         finally:
             S.fetch_prices = old
@@ -98,10 +98,6 @@ class Shadow(unittest.TestCase):
         self.assertTrue(set(S.BENCHMARKS) <= set(self.specs))
         self.assertEqual(self.specs[S.BENCH_CASH][0], ["BIL"])
         self.assertEqual(self.specs[S.BENCH_SPY][0], ["SPY"])
-        t1 = S._prereg("t1_trend_etf_v1.json")["universe"]
-        t2 = S._prereg("t2_sector_mom_v1.json")["universe"]
-        self.assertEqual(self.specs[S.BENCH_EW_TREND][0], t1)
-        self.assertEqual(self.specs[S.BENCH_EW_SECTOR][0], t2)
         self.assertIn("SPY", self.prices)
         for sid in S.BENCHMARKS:
             u, fac, _ = self.specs[sid]
@@ -116,19 +112,13 @@ class Shadow(unittest.TestCase):
             self.assertEqual(len(res["weights"]), 1, sid)
             self.assertAlmostEqual(sum(res["weights"][0][1].values()), 1.0)
             self.assertTrue(all(r["target"] is None for r in rows), sid)
-        w = S.portfolio.run(
-            S.common_sessions({s: self.prices[s] for s in t1}),
-            {s: self.prices[s] for s in t1},
-            self.specs[S.BENCH_EW_TREND][1](None), cash0=S.CASH0)["weights"][0][1]
-        self.assertEqual(set(w), set(t1))
-        self.assertTrue(all(abs(x - 1.0 / len(t1)) < 1e-12 for x in w.values()))
 
-    def test_run_writes_benchmark_ledgers_and_no_twin_for_them(self):
+    def test_run_writes_benchmark_ledgers(self):
         old = S.fetch_prices
         S.fetch_prices = lambda symbols, now, http_get=None: self.prices
         try:
             with tempfile.TemporaryDirectory() as d:
-                bad, summ = S.run(d, NOW, event_sleeves=False)
+                bad, summ = S.run(d, NOW)
                 self.assertEqual(bad, [])
                 for sid in S.BENCHMARKS:
                     self.assertIn(sid, summ)

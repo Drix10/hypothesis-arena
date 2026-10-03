@@ -4,7 +4,7 @@ boundary), spend governor (projection/tiers/holds), digest,
 retention, emit/publisher hardening, graph with FORCED invocation
 boundaries and frozen tier effects.
 
-Graph tests run the REAL production publish path (plane/publish.py)
+Graph tests run the REAL production publish path (engine/publish.py)
 against scratch canonical.db + pinned map file, and round-trip through
 the FROZEN ctx reader. Hypothesis/critique reach the (fake) provider
 ONLY through workers.run_gated() fed by deps["provider_factory"] —
@@ -36,10 +36,10 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, ".."))  # repo root: collector/
 
 from collector import ctx_read
-from plane import attribution, budgets, cadence, digest, emit as emit_mod
-from plane import locks, r15, retention, schema, spend as spend_mod
-from plane import timeout as timeout_mod
-from plane import publish, workers
+from engine import attribution, budgets, cadence, digest, emit as emit_mod
+from engine import locks, r15, retention, schema, spend as spend_mod
+from engine import timeout as timeout_mod
+from engine import publish, workers
 
 graph_mod = None
 
@@ -47,7 +47,7 @@ graph_mod = None
 def _graph():
     global graph_mod
     if graph_mod is None:
-        from plane import graph as _g
+        from engine import graph as _g
         graph_mod = _g
     return graph_mod
 

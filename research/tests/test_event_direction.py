@@ -12,10 +12,10 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)  # research/: plane/
+sys.path.insert(0, ROOT)  # research/: engine/
 
-from plane import event_direction as ed
-from plane import schema
+from engine import event_direction as ed
+from engine import schema
 
 ASOF = 1_700_000_000_000_000_000
 SYM = "AAPL"
@@ -193,7 +193,7 @@ def test_14_boundary_ts():
 
 def test_15_no_foreign_capability():
     import ast as _ast
-    with open(os.path.join(ROOT, "plane",
+    with open(os.path.join(ROOT, "engine",
                            "event_direction.py")) as _fh:
         src = _fh.read()
     tree = _ast.parse(src)

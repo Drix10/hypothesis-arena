@@ -6,7 +6,7 @@ What this proves on ANY host (no daemon, no root needed):
    (features-<epoch>-<hex>), never derived from untrusted input, so no
    bundle content can redirect a write to journal/HALT/STAGE/creds.
 2. The worker import gate rejects every non-allowlisted import (tested
-   in test_plane.py): generated code cannot import subprocess/socket/
+   in test_engine.py): generated code cannot import subprocess/socket/
    os/pickle even before the container firewall sees it.
 3. The manifest/reader chain never follows a path outside outdir
    (basenames only).
@@ -28,8 +28,8 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from plane import emit as emit_mod
-from plane import schema
+from engine import emit as emit_mod
+from engine import schema
 
 
 class ConfinementTest(unittest.TestCase):

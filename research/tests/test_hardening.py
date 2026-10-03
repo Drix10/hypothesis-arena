@@ -16,12 +16,12 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, ".."))  # repo root: collector/
-sys.path.insert(0, ROOT)  # research/: plane/
+sys.path.insert(0, ROOT)  # research/: engine/
 
-import test_plane as T
-from plane import attribution, budgets, locks, r15
-from plane import spend as spend_mod
-from plane import workers
+import test_engine as T
+from engine import attribution, budgets, locks, r15
+from engine import spend as spend_mod
+from engine import workers
 
 
 def _wait_go(d, tag, timeout=60.0):
@@ -112,7 +112,7 @@ class AtomicReserveTest(unittest.TestCase):
         # Boundary is exact: spent + holds + usd > cap refuses, so
         # landing EXACTLY on the cap admits and one cent over does
         # not. Pinned through the real transaction, not arithmetic.
-        from plane import attribution
+        from engine import attribution
         d = tempfile.mkdtemp()
         log = os.path.join(d, "spans.jsonl")
         now = int(time.time())
@@ -125,7 +125,7 @@ class AtomicReserveTest(unittest.TestCase):
     def test_duplicate_lease_refused(self):
         # The same lease twice is a clean refusal, never a double
         # hold: the hold row is keyed, the second insert dies.
-        from plane import attribution
+        from engine import attribution
         d = tempfile.mkdtemp()
         log = os.path.join(d, "spans.jsonl")
         now = int(time.time())
@@ -144,8 +144,8 @@ class AtomicReserveTest(unittest.TestCase):
     def test_reserved_expires_invoked_persists(self):
         # A pre-spawn crash releases (reserved reaps after TTL);
         # post-spawn stays (invoked never reaps and blocks).
-        from plane import spend as spend_mod
-        from plane import attribution
+        from engine import spend as spend_mod
+        from engine import attribution
         d = tempfile.mkdtemp()
         log = os.path.join(d, "spans.jsonl")
         gov = spend_mod.SpendGovernor(
@@ -162,8 +162,8 @@ class AtomicReserveTest(unittest.TestCase):
     def test_missing_price_never_prices(self):
         # No price row means no dollar figure, ever — not zero, not
         # estimated. Unpriced models never reach authorization.
-        from plane import spend as spend_mod
-        from plane import workers
+        from engine import spend as spend_mod
+        from engine import workers
         d = tempfile.mkdtemp()
         log = os.path.join(d, "spans.jsonl")
         gov = spend_mod.SpendGovernor(
@@ -1189,7 +1189,7 @@ class TierStateTest(unittest.TestCase):
     def _tier2_gov(self, d):
         # Governor that transitions 0 -> 2 on first evaluation
         # ($30 spend vs $150 G0 cap), leaving a rev-1 journal row.
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         log = os.path.join(d, "spans.jsonl")
         now = int(time.time())
         attribution.append_span(log, 1, "seed", "m", cycle_id="c",
@@ -1207,7 +1207,7 @@ class TierStateTest(unittest.TestCase):
         # The snapshot triple comes from ONE durable pass,
         # so (allow, 3) is unproducible: allow means the pass read
         # tier 0, and a durably raised tier reads deny with tier 3.
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         log = os.path.join(d, "spans.jsonl")
         gov = spend_mod.SpendGovernor(
@@ -1238,7 +1238,7 @@ class TierStateTest(unittest.TestCase):
         # still succeed. Real writer, fresh instances. A forged transition inside
         # the window still denies.
         import json as _json
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         log = os.path.join(d, "spans.jsonl")
 
@@ -1280,7 +1280,7 @@ class TierStateTest(unittest.TestCase):
         # the same second another instance evaluated. A evaluates Tier 0 at T; B
         # then persists Tier 1 with evaluated_at=T. A's next evaluation at T must
         # read the durable Tier 1, not a cached Tier 0.
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         log = os.path.join(d, "spans.jsonl")
         sdir = os.path.join(d, "spend")
@@ -1309,7 +1309,7 @@ class TierStateTest(unittest.TestCase):
         # locked transition heals the tail before appending. Buried
         # partials can never accumulate.
         import json as _json
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         gov, now = self._tier2_gov(d)  # 0 -> 2, journal rev 1
         jpath = os.path.join(d, "spend", "tier_journal.jsonl")
@@ -1334,7 +1334,7 @@ class TierStateTest(unittest.TestCase):
     def test_tier_journal_malformed_denies(self):
         # A damaged tier journal must deny, never resolve
         # to the older weaker tier on disk.
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         gov, now = self._tier2_gov(d)
         jpath = os.path.join(d, "spend", "tier_journal.jsonl")
@@ -1349,7 +1349,7 @@ class TierStateTest(unittest.TestCase):
         # Transitions on record (rev 1) plus a missing journal =
         # deleted evidence -> deny. Missing journal with rev 0
         # stays a fresh path.
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         gov, now = self._tier2_gov(d)
         jpath = os.path.join(d, "spend", "tier_journal.jsonl")
@@ -1357,7 +1357,7 @@ class TierStateTest(unittest.TestCase):
         with self.assertRaises(spend_mod.StateUnavailable):
             gov._load_state(now + 7200)
         d2 = tempfile.mkdtemp()
-        from plane import spend as _sp
+        from engine import spend as _sp
         gov2 = _sp.SpendGovernor(
             os.path.join(d2, "spans.jsonl"), dict(T.PRICING), "G0",
             state_dir=os.path.join(d2, "spend"))
@@ -1368,7 +1368,7 @@ class TierStateTest(unittest.TestCase):
         # Journal rows older than the state's rev (lost tail rows)
         # deny: the surviving history cannot prove the transition.
         import json as _json
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         gov, now = self._tier2_gov(d)
         jpath = os.path.join(d, "spend", "tier_journal.jsonl")
@@ -1387,7 +1387,7 @@ class TierStateTest(unittest.TestCase):
         # continuing the chain) must deny — the chain plus the
         # state-mirror rule proves it was not governor-written.
         import json as _json
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         gov, now = self._tier2_gov(d)
         jpath = os.path.join(d, "spend", "tier_journal.jsonl")
@@ -1408,7 +1408,7 @@ class TierStateTest(unittest.TestCase):
         # A chain-broken row (first transition not from Tier 0)
         # denies even though every field is well-typed.
         import json as _json
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         gov, now = self._tier2_gov(d)
         jpath = os.path.join(d, "spend", "tier_journal.jsonl")
@@ -1427,7 +1427,7 @@ class TierStateTest(unittest.TestCase):
         # the revision chain through legacy recovery — once
         # revisioned history exists, rev-less rows are corruption.
         import json as _json
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         gov, now = self._tier2_gov(d)
         jpath = os.path.join(d, "spend", "tier_journal.jsonl")
@@ -1447,7 +1447,7 @@ class TierStateTest(unittest.TestCase):
         # (or a snapshot from the future) denies — same defect
         # class as future start_wall.
         import json as _json
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         gov, now = self._tier2_gov(d)
         jpath = os.path.join(d, "spend", "tier_journal.jsonl")
@@ -1560,7 +1560,7 @@ class RatioDaysTest(unittest.TestCase):
         # instances (the real restart path). After recovery, journal
         # deletion must fail closed, never read as a fresh streak.
         import json as _json
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         gov, log = self._gov(d, [1.0])
         dia = int(time.time())
@@ -1623,7 +1623,7 @@ class RatioDaysTest(unittest.TestCase):
     def test_ratio_untouched_chain_forces_tier3(self):
         # Control: the rig is decision-capable — untouched chained
         # history forces Tier 3 on a fresh instance.
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         _gov, _log, now = self._failed_3day(d)
         gov2, _log2 = self._gov(d, [1.0])
@@ -1638,7 +1638,7 @@ class RatioDaysTest(unittest.TestCase):
         # untouched) breaks the chain — denies, never suppresses
         # the breaker.
         import json as _json
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         _gov, _log, now = self._failed_3day(d)
         jp, rows = self._ratio_journal(d)
@@ -1658,7 +1658,7 @@ class RatioDaysTest(unittest.TestCase):
         # keeps the chain internally valid, but the proven head no
         # longer matches — denies on the anchor, never reads ok.
         import json as _json
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         _gov, _log, now = self._failed_3day(d)
         jp, rows = self._ratio_journal(d)
@@ -1684,7 +1684,7 @@ class RatioDaysTest(unittest.TestCase):
         # A legacy-shaped row inside the chain era is a
         # forged format downgrade even when the day order is valid.
         import json as _json
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         _gov, _log, now = self._failed_3day(d)
         jp, rows = self._ratio_journal(d)
@@ -1718,7 +1718,7 @@ class RatioDaysTest(unittest.TestCase):
         # dies the instant the ratio append returns (fsynced row on
         # disk, no state persist after it, nothing else runs).
         import unittest.mock as _mock
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
 
         class _Crash(BaseException):
             pass
@@ -1751,7 +1751,7 @@ class RatioDaysTest(unittest.TestCase):
         # instance: the new row links to the chain tail, not the stale state
         # anchor. One row per day, continuous chain, the 3-day streak still forces
         # Tier 3, and deletion still denies.
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         gov, log, now = self._base(d)
         self.assertEqual(gov.evaluate(now)[0], 0)
@@ -1791,7 +1791,7 @@ class RatioDaysTest(unittest.TestCase):
         # its first visible row and the anchor still pins it: long history reads,
         # and a flip inside the window (digests recomputed forward) still denies.
         import json as _json
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         gov, log = self._gov(d, [1e12])  # every day ok
         dia = int(time.time())
@@ -1828,7 +1828,7 @@ class RatioDaysTest(unittest.TestCase):
         # head; two validly-chained forged rows (yesterday failed,
         # today ok) are fabricated history, not a crash window.
         import json as _json
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         gov, log, now = self._base(d)
         gov.evaluate(now)
@@ -1852,7 +1852,7 @@ class RatioDaysTest(unittest.TestCase):
 
     def test_ratio_impossible_head_day_and_dropped_head_deny(self):
         import json as _json
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         gov, log, now = self._base(d)
         for i in range(3):
@@ -1880,7 +1880,7 @@ class RatioDaysTest(unittest.TestCase):
 
     def test_ratio_malformed_digest_shape_denies(self):
         import json as _json
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         gov, log, now = self._base(d)
         gov.evaluate(now)
@@ -2098,7 +2098,7 @@ class PublisherHardeningTest(unittest.TestCase):
         return c
 
     def test_malformed_direct_calls_closed(self):
-        from plane import publish as pub
+        from engine import publish as pub
         d = tempfile.mkdtemp()
         mapp, _dbp, _msha = T._fixtures(d)
         state = {"epoch": 1, "fused": [self._cand()]}
@@ -2152,7 +2152,7 @@ class PublisherHardeningTest(unittest.TestCase):
 
     def test_map_rejections(self):
         import json as _json
-        from plane import publish as pub
+        from engine import publish as pub
         d = tempfile.mkdtemp()
         mapp, _dbp, _msha = T._fixtures(d)
         state = {"epoch": 1, "fused": [self._cand()]}
@@ -2182,11 +2182,11 @@ class PublisherHardeningTest(unittest.TestCase):
 class ManifestBoundTest(unittest.TestCase):
     def test_strict_rows_and_huge_manifest(self):
         import json as _json
-        from plane import emit as emit_mod
+        from engine import emit as emit_mod
         d = tempfile.mkdtemp()
         mapp, dbp, msha = T._fixtures(d)
         outdir = os.path.join(d, "out")
-        ok, (_feat, _c) = __import__('plane.resolver', fromlist=['x']).resolve(
+        ok, (_feat, _c) = __import__('engine.resolver', fromlist=['x']).resolve(
             {"kind": "filing_event", "symbols": ["AAPL"],
              "value": {"type": "enum", "v": "8-K:item-2.02"},
              "effect": "bullish",
@@ -2237,12 +2237,12 @@ class ManifestBoundTest(unittest.TestCase):
 
     def test_reader_falls_back_past_throwing_generation(self):
         import json as _json
-        from plane import emit as emit_mod
+        from engine import emit as emit_mod
         from collector import ctx_read
         d = tempfile.mkdtemp()
         mapp, dbp, msha = T._fixtures(d)
         outdir = os.path.join(d, "out")
-        ok, (_feat, _c) = __import__('plane.resolver', fromlist=['x']).resolve(
+        ok, (_feat, _c) = __import__('engine.resolver', fromlist=['x']).resolve(
             {"kind": "filing_event", "symbols": ["AAPL"],
              "value": {"type": "enum", "v": "8-K:item-2.02"},
              "effect": "bullish",
@@ -2292,7 +2292,7 @@ class ManifestBoundTest(unittest.TestCase):
 
 class DigestConflictTest(unittest.TestCase):
     def test_conflict_not_duplicate(self):
-        from plane import digest as digest_mod
+        from engine import digest as digest_mod
         d = tempfile.mkdtemp()
         ok, why = digest_mod.append_digest(d, 1, "AAPL", "hypothesize",
                                            "thesis-one")
@@ -2312,7 +2312,7 @@ class DigestConflictTest(unittest.TestCase):
         # A malformed digest row poisons the authority (fail
         # closed): neither fresh appends nor exact-duplicate
         # answers may come from a subset of the file.
-        from plane import digest as digest_mod
+        from engine import digest as digest_mod
         d = tempfile.mkdtemp()
         ok, why = digest_mod.append_digest(d, 1, "AAPL", "hypothesize",
                                            "thesis-one")
@@ -2328,7 +2328,7 @@ class DigestConflictTest(unittest.TestCase):
         self.assertEqual((ok, why), (False, "digest-corrupt"))
 
     def test_many_epochs_bound_memory(self):
-        from plane import digest as digest_mod
+        from engine import digest as digest_mod
         d = tempfile.mkdtemp()
         for e in range(4200):
             ok, _why = digest_mod.append_digest(d, e, "AAPL",
@@ -2360,7 +2360,7 @@ class MirrorAndEmitBoundTest(unittest.TestCase):
         self.assertIn('"span_id": "s1"', rows[0])
 
     def test_emit_bundle_rejects_hostile_input(self):
-        from plane import emit as emit_mod
+        from engine import emit as emit_mod
         d = tempfile.mkdtemp()
         wm = {"entity_map_version": "v", "entity_map_sha256": "a",
               "sources": {}}
@@ -2571,7 +2571,7 @@ class ReauditFixTest(unittest.TestCase):
     def test_pipe_missing_result_is_loud_and_fast(self):
         # A child that dies with no envelope reads as immediate EOF
         # (all write ends closed): loud, never a wait to the deadline.
-        from plane import timeout as timeout_mod
+        from engine import timeout as timeout_mod
         t0 = time.monotonic()
         with self.assertRaises(RuntimeError) as cm:
             timeout_mod.run_in_process(_silent_exit, 20)
@@ -2583,7 +2583,7 @@ class ReauditFixTest(unittest.TestCase):
         # ~1 MB result >> 64 KiB OS pipe buffer: the parent drains
         # concurrently, so the child's send() never blocks against a
         # parent that only reads after death
-        from plane import timeout as timeout_mod
+        from engine import timeout as timeout_mod
         t0 = time.monotonic()
         out = timeout_mod.run_in_process(_big_result, 60, 1 << 20)
         dt = time.monotonic() - t0
@@ -2748,7 +2748,7 @@ class ReauditFixTest(unittest.TestCase):
         # Hard-deadline semantics: the kill ladder begins within a
         # fraction of a second of the deadline — never seconds
         # later — and the attempt is still ambiguous (CallTimeout).
-        from plane import timeout as timeout_mod
+        from engine import timeout as timeout_mod
         t0 = time.monotonic()
         with self.assertRaises(timeout_mod.CallTimeout):
             timeout_mod.run_in_process(_hang_forever, 2)
@@ -2861,7 +2861,7 @@ class ReauditFixTest(unittest.TestCase):
         # three-distinct-failed-days rule without any malformed
         # JSON. The journal must be a strictly increasing sequence.
         import json as _json
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         gov = self._ratio_gov(d, "G2")
         now = int(time.time())
@@ -2896,7 +2896,7 @@ class ReauditFixTest(unittest.TestCase):
         # A future checkpoint extends the budget window
         # like a future start_wall; a naive timestamp has no
         # provable age (host-local interpretation). Both reject.
-        from plane import graph as graph_mod
+        from engine import graph as graph_mod
         import datetime as _dt
         future = (_dt.datetime.now(_dt.timezone.utc) +
                   _dt.timedelta(days=1)).isoformat()
@@ -2956,7 +2956,7 @@ class ReauditFixTest(unittest.TestCase):
         # A failed checkpoint LIST is not an empty set
         # (which would silently grow retention); individually bad
         # entries are still skipped.
-        from plane import retention as retention_mod
+        from engine import retention as retention_mod
 
         class _Tup:
             def __init__(self, tid, ts):
@@ -3580,7 +3580,7 @@ class ReauditFixTest(unittest.TestCase):
         # A present-but-unreadable tier state (directory in the way)
         # denies — it must not initialize a fresh Tier 0 that would
         # loosen T1/T2/T3 gating.
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         sdir = os.path.join(d, "spend")
         os.makedirs(sdir)
@@ -3594,7 +3594,7 @@ class ReauditFixTest(unittest.TestCase):
         self.assertEqual(verdict, "deny")
 
     def _ratio_gov(self, d, stage):
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         log = os.path.join(d, "spans.jsonl")
         now = int(time.time())
         attribution.append_span(log, 1, "seed", "m", cycle_id="c",
@@ -3611,7 +3611,7 @@ class ReauditFixTest(unittest.TestCase):
         # journaled and tripwired in state. Deleting the journal then
         # denies (streak cannot reset to zero); corrupting it denies
         # too.
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         gov = self._ratio_gov(d, "G2")
         t0 = int(time.time())
@@ -3637,7 +3637,7 @@ class ReauditFixTest(unittest.TestCase):
         # journal lines (a list, a string, a dict with wrong
         # keys/types) are corruption — history controlling Tier 3
         # must not silently lose records.
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         gov = self._ratio_gov(d, "G2")
         t0 = int(time.time())
@@ -3681,7 +3681,7 @@ class ReauditFixTest(unittest.TestCase):
         # Upgrade path: tier history (G0, suspended, never journaled)
         # plus no ratio journal is a fresh streak, not a deletion —
         # the first counted day journals cleanly.
-        from plane import spend as spend_mod
+        from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         g0 = self._ratio_gov(d, "G0")
         g0.evaluate()
@@ -3732,7 +3732,7 @@ class ReauditFixTest(unittest.TestCase):
         # refused (same cycle_id must never mint a second budget);
         # new threads, recent threads, and unreadable saver state
         # proceed.
-        from plane import graph as graph_mod
+        from engine import graph as graph_mod
         import datetime as _dt
         old = (_dt.datetime.now(_dt.timezone.utc) -
                _dt.timedelta(days=8)).isoformat()
@@ -3801,7 +3801,7 @@ class ReauditFixTest(unittest.TestCase):
         d = tempfile.mkdtemp()
         con = sqlite3.connect(os.path.join(d, "ckpt.sqlite3"),
                               check_same_thread=False)
-        from plane import retention as retention_mod
+        from engine import retention as retention_mod
         from langgraph.graph import StateGraph, END
         from typing import TypedDict
 
@@ -3831,7 +3831,7 @@ class ReauditFixTest(unittest.TestCase):
         # proves the deadline bound AND the post-kill thread exit
         # (no thread debt).
         import threading as _th
-        from plane import timeout as timeout_mod
+        from engine import timeout as timeout_mod
         release = _th.Event()
 
         class _StalledConn:

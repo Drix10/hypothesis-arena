@@ -4,8 +4,8 @@ the loop directory and never places orders.
     python3 ops/monitor.py <loop_dir> [--interval 3] [--once] [--no-broker]
 
 Panels: loop heartbeat, incoming candidates, per-candidate decisions (with the
-veto reason and sizing), order journal (chain check + lifecycle), JEV shadow
-verdicts, and the Alpaca PAPER account, positions and recent orders (needs
+veto reason and sizing), order journal (chain check + lifecycle), forward
+ledgers, and the Alpaca PAPER account, positions and recent orders (needs
 ALPACA_KEY_ID / ALPACA_SECRET in the environment or the repo .env)."""
 import json
 import os
@@ -208,19 +208,6 @@ def panel_journal(d, out):
         out.append("  #%s %s %-9s intent %s" % (p[0], ts(p[1]), col(p[2], c), short(p[3], 12)))
 
 
-def panel_shadow(d, out):
-    rows = jrows(os.path.join(d, "jev_shadow.jsonl"))
-    verdicts = Counter((r.get("verdict"), r.get("reason")) for r in rows)
-    out.append(col("JEV SHADOW (%d, log-only, no effect on orders)" % len(rows), BOLD))
-    if verdicts:
-        out.append("  " + "  ".join("%s/%s x%d" % (v, r, n)
-                                   for (v, r), n in verdicts.most_common(5)))
-    for r in rows[-3:]:
-        out.append("  %s %-5s %s %s" % (
-            time.strftime("%H:%M:%S", time.localtime(r.get("at", 0))),
-            r.get("symbol"), r.get("verdict"), r.get("reason")))
-
-
 def eval_line(ev, sid, last):
     """EVAL line from sleeves/eval.json (read-only): checkpoint state and HAC
     t-stat of the paired active return; flagged stale if the eval lags the
@@ -249,7 +236,7 @@ def panel_sleeves(d, out):
     names = sorted(f for f in os.listdir(sd) if f.endswith(".jsonl")) if os.path.isdir(sd) else []
     if not names:
         out.append("  " + col("none yet (runs after each close)", DIM))
-    try:  # written by ops/sleeve_eval.py (shadow --loop); absent is fine
+    try:  # written by ops/forward_eval.py (shadow --loop); absent is fine
         with open(os.path.join(sd, "eval.json")) as f:
             ev = json.load(f)
     except (OSError, ValueError):
@@ -322,7 +309,6 @@ def render(d, broker):
         time.strftime("%Y-%m-%d %H:%M:%S"), d), ""]
     panels = [lambda: panel_loop(d, out, now), lambda: panel_candidates(d, out),
               lambda: panel_decisions(d, out), lambda: panel_journal(d, out),
-              lambda: panel_shadow(d, out),
               lambda: panel_sleeves(d, out)]
     if broker:
         panels.append(lambda: panel_broker(broker, out))

@@ -4,7 +4,7 @@
 #   bash ops/deploy/start.sh stop
 # Order of work: preflight (keys, flat account), STAGE sign-off, build a copy of
 # the repo on the Linux filesystem (~/ha), wait for the US session to open,
-# emit candidates, start the loop, then run the log-only JEV shadow.
+# emit candidates, start the loop and the forward ledgers.
 # Logs: <loop_dir>/logs. Pid: <loop_dir>/loop.pid.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -14,8 +14,7 @@ loop_bin="$build/kernel/g0_paper_loop"
 
 if [ "${1:-}" = stop ]; then
     pkill -f "^$loop_bin " || true
-    pkill -f "ops/jev_shadow.py" || true
-    pkill -f "ops/sleeve_shadow.py" || true
+    pkill -f "ops/forward_ledgers.py" || true
     pkill -f "collector/soak.py" || true
     echo stopped; exit 0
 fi
@@ -39,7 +38,6 @@ envval() {  # KEY from .env: tolerates BOM, CRLF, export, spaces, quotes, traili
 }
 export ALPACA_KEY_ID="${ALPACA_KEY_ID:-$(envval ALPACA_KEY_ID)}"
 export ALPACA_SECRET="${ALPACA_SECRET:-$(envval ALPACA_SECRET)}"
-export OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-$(envval OPENROUTER_API_KEY)}"
 [ -n "$ALPACA_KEY_ID" ] && [ -n "$ALPACA_SECRET" ] || { echo "ALPACA_KEY_ID/ALPACA_SECRET missing in .env" >&2; exit 2; }
 
 echo "== preflight =="
@@ -92,14 +90,10 @@ sleep 5
 kill -0 "$(cat "$dir/loop.pid")" 2>/dev/null || { tail -5 "$dir/logs/loop.log" >&2; echo "the loop exited at once" >&2; exit 5; }
 echo "loop running (pid $(cat "$dir/loop.pid")). live view: python3 ops/monitor.py $dir"
 # Forward shadow ledgers for the non-routed sleeves (log-only, no orders).
-setsid nohup python3 ops/sleeve_shadow.py "$dir" --loop </dev/null >>"$dir/logs/sleeves.log" 2>&1 &
+setsid nohup python3 ops/forward_ledgers.py "$dir" --loop </dev/null >>"$dir/logs/sleeves.log" 2>&1 &
 echo "sleeve shadow ledgers running (log: $dir/logs/sleeves.log, data: $dir/sleeves/)"
 # Optional: macro/filing collector (frozen code, writes only repo data/, nothing reads it yet).
 if [ "${WITH_COLLECTOR:-0}" = "1" ]; then
     setsid nohup python3 collector/soak.py --loop </dev/null >>"$dir/logs/collector.log" 2>&1 &
     echo "collector running (log: $dir/logs/collector.log)"
-fi
-
-if [ -n "$OPENROUTER_API_KEY" ]; then
-    timeout 180 python3 ops/jev_shadow.py "$dir" >>"$dir/logs/shadow.log" 2>&1 || echo "shadow did not finish, see $dir/logs/shadow.log" >&2
 fi

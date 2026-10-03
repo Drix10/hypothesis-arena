@@ -14,7 +14,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 
-from plane import attribution as attribution_mod  # noqa: E402
+from engine import attribution as attribution_mod  # noqa: E402
 
 d = sys.argv[1]
 dbp = attribution_mod._db_for(os.path.join(d, "spans.jsonl"))

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""O7 regressions (plan/appendix/09): exported variables win over .env in both
+"""Environment loading (exception record: plan/appendix/09): exported variables win over .env in both
 readers, `export KEY=` lines and unquoted inline comments parse, and provider
 HTTP errors are closed. Hermetic: each case points ROOT at a temp directory,
 so the repo .env is never read or written.
-Run: python3 collector/tests/test_o7.py"""
+Run: python3 collector/tests/test_env_loading.py"""
 import io
 import os
 import sys
@@ -99,5 +99,5 @@ finally:
 check("jev-http-error-classified-and-closed",
       got == (None, "provider-http-500") and Closed.closed)
 
-print("ALL O7 CHECKS PASS" if not fails else "O7 FAILURES: %d" % fails)
+print("ALL ENV-LOADING CHECKS PASS" if not fails else "ENV-LOADING FAILURES: %d" % fails)
 sys.exit(1 if fails else 0)

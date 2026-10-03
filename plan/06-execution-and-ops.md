@@ -1,26 +1,37 @@
 # 06 - Execution and Ops
 
 This doc covers the H1 order lifecycle, execution rules per sleeve, the
-cost model (the evaluation authority), cash-account settlement operations,
-and outbound-only alerting. The close-ownership / incident-identity /
-recovery contract (§6.1b) is in
+cost model (the evaluation authority), account operations (India-set settlement,
+US-set margin and borrow), and outbound-only alerting. The close-ownership /
+incident-identity / recovery contract (§6.1b) is in
 `appendix/06b-close-ownership-and-recovery-record.md` and is binding.
 
 ## 6.0 Execution by sleeve
 
 | Sleeve | Signal time | Entry order | Protection | Normal exit |
 |---|---|---|---|---|
-| T1/T2 trend/sector | month-end official close (SIP) | next session: sells-to-close first (MOC), buys the following session with settled proceeds (MOC) | OTO stop-only, GTC catastrophe stop (`exit_trend_v1`) | MOC at the next rebalance when the signal flips |
-| I1 intraday | 10:00 ET (SIP, delayed) | 15:30 ET marketable limit (limit = ask + 1 tick cap, IEX quote) | OTO stop-only, day (`exit_intraday_v1`) | MOC the same day |
-| E1/E2 events | EDGAR acceptance time (R12) | next session 10:00 ET marketable limit | OTO stop-only, GTC (`exit_event_v1`) | MOC on the holding-period day |
-| B0 baseline (shadow only) | per doc 12 | per doc 12 | bracket (`exit_profile_v1`) | stop / TP / time_exit |
+| Link Momentum and Filing Change (monthly) | month-end official close (SIP) | next session: closes first (MOC), then opens; under the India set buys wait for settled proceeds | OTO stop-only, GTC catastrophe stop at 3 × 20-day ATR; sell-stop for longs, buy-stop for shorts (`exit_link_v1`) | MOC at the rebalance when the name leaves its band |
+| Event Ripple (events) | `ripple_hypothesis` availability (R12) | next session 10:00 ET marketable limit, unless already priced (doc 02 Event Ripple) | OTO stop-only, GTC (`exit_event_v1`) | MOC on the horizon day |
+| ETF Trend, long-short (monthly) | month-end official close | next session: closes first, then opens | OTO stop-only, GTC (`exit_trend_v1`) | MOC at the rebalance when the signal flips |
+| `baseline_v1` control (shadow only) | per doc 12 | per doc 12 | bracket (`exit_profile_v1`) | stop / TP / time_exit |
+
+Short-side rules (US set, after kernel short selling is built): a short open is a SELL on a symbol not
+held, sent only after R20 passes at order time; a cover is a BUY of at
+most the short quantity; the protective leg is a buy-stop; the
+stop-before-MOC rule below applies with sides reversed. A name that flips
+side at a rebalance (long to short or the reverse) is closed in the
+rebalance session and opened at the next session: Alpaca rejects an order
+while an opposite-side order is open on the symbol (wash-trade
+protection), and R4 forbids a quick round trip. The resting protective
+stop is an opposite-side order, so it is cancelled and confirmed before
+any new order on the same symbol.
 
 Ordering rules for every sleeve:
 - Marketable limits, never naked market orders, for entries; the limit cap
   is the pre-registered slippage bound (no fill worse than the cap; an
   unfilled entry is cancelled at the sleeve's window end, never chased).
 - MOC exits go in before the broker-declared MOC cutoff (adapter data).
-  MOC vs protective stop (K5, observed on Alpaca paper 2026-09-29): the
+  MOC vs protective stop (stop-before-close fix, observed on Alpaca paper 2026-09-29): the
   broker rejects both MOC and market sells while an OTO stop is live, so
   the stop is cancelled before MOC submission if it is live (if the stop
   is no longer active, the close moves to the next cycle). If the stop
@@ -31,8 +42,8 @@ Ordering rules for every sleeve:
   session open (journaled incident).
 - Whole shares for protected orders (adapter constraint); rounding is the
   last step of the sizing hierarchy and never rounds up past a cap.
-- No extended-hours orders in v1. No order in the first 5 minutes after
-  the open except the E-sleeve window, which starts at 10:00 ET.
+- No extended-hours orders. No order in the first 5 minutes after the
+  open; event entries start at 10:00 ET.
 
 ## 6.0a Cost model and TCA (the evaluation authority)
 
@@ -46,22 +57,24 @@ and does not simulate dividends. Therefore:
   per-leg fill rule used by `baseline_v1` and S2/S5 reproductions.
 - `cost_v2` (used by every sleeve pre-registration) = `paper_fill_v1`
   priced from SIP NBBO at the decision time (delayed history in
-  research; the live quote in G0b shadow accounting) + SEC Section 31 fee
+  research; the live quote in paper trading shadow accounting) + SEC Section 31 fee
   and FINRA TAF on sells + a participation cap (order ≤ 1% of the
   symbol's 20-day median volume and ≤ displayed size at the touch; larger
   orders are split across sessions or not placed) + dividends credited
   from the corporate-action layer (paper does not simulate them).
   Stress legs 1×/1.5×/2×/3× on the spread + fee component.
+- `cost_v3` (US-set sleeves) = `cost_v2` + square-root market impact + borrow
+  fees + margin interest + dividends owed on shorts, no rebate on short
+  proceeds (doc 14 §14.10).
 - TCA per fill: implementation shortfall vs arrival mid (decision time)
   and vs the modeled cost; daily and per-sleeve aggregates in the summary.
   Live (G1+) realized shortfall > 1.5× modeled over 30 fills → S3 pause.
 
-## 6.0b Cash-account settlement operations
+## 6.0b Account operations
 
+India set (cash account):
 - The settlement ledger (doc 04 §4.2 5c) is rebuilt at startup from the
   journal + broker account and reconciled every cycle (S2).
-- Intraday sleeves use two alternating capital tranches so that each
-  day's buys are funded by settled cash; the ledger enforces it (R18).
 - Monthly sleeves sell first and buy the next session with settled
   proceeds (the rebalance is two sessions by design).
 - A T-bill ETF used as the cash leg is itself subject to T+1: moving from
@@ -70,6 +83,25 @@ and does not simulate dividends. Therefore:
 - Any broker-reported good-faith or free-riding flag is a HARD-class
   compliance incident: entries stop, human review, root cause in the
   journal before resuming.
+
+US set (margin account, after kernel short selling is built):
+- The US-set paper run uses its own Alpaca paper account (Alpaca allows up to
+  three per owner), started at $25,000, apart from the India set plumbing run, so
+  the two books never net or share buying power.
+- Alpaca paper does not simulate dividends. The account ledger books them
+  itself from the corporate-action data: credited on longs, charged on
+  shorts. Without this, paper shorts look cheaper than live ones.
+- The account ledger tracks margin requirement, maintenance buffer (R18
+  US set), each short's borrow status, accrued margin interest and dividends
+  owed; it reconciles with the broker's margin data every cycle (S2).
+- Borrow status is re-read from the broker's asset flags before every short
+  open and once per session for every held short; a change to
+  hard-to-borrow, a recall or a buy-in notice schedules a cover for the
+  next session (R20).
+- A rebalance closes first, then opens; opens are sized against the
+  buffer that remains after the closes are acknowledged.
+- A broker margin call is a MEDIUM kill (R18 US set): no new risk, gross cut
+  to half the sleeve target, human review.
 
 ## 6.1 Order lifecycle (locked; broker-native protection)
 
@@ -81,9 +113,8 @@ cannot survive losing, so protection is established broker-side first:
 intent (risk PASS) → re-check HALT file → journal row → send entry +
   protective SL/TP through a broker-specific protected mode (E1: entry is
   permitted ONLY through an order mode whose adapter implementation
-  positively establishes the entry↔protection relationship - OANDA
-  stopLossOnFill/takeProfitOnFill; Alpaca bracket legs with adapter-proven
-  semantics). Each adapter proves: entry ack, protection ack, partial-fill
+  positively establishes the entry↔protection relationship - Alpaca
+  bracket or OTO legs with adapter-proven semantics). Each adapter proves: entry ack, protection ack, partial-fill
   behavior, cancel/replace behavior, double-trigger behavior, including
   fast-market edge behavior. The requirement is no naked entry, not a
   cross-broker atomic primitive. → ack/timeout → query once:
@@ -148,9 +179,9 @@ HARD chain integrity and attribution durability, overflow-safe parsing,
 state-file integrity, single-process ownership, recovery-before-mutation,
 per-book orphan coverage, and the rest) is in
 `appendix/06b-close-ownership-and-recovery-record.md` and is binding.
-Long-only: every live close is a SELL of a long position; a close that
-would exceed the held quantity is refused before the POST (the kernel does
-not rely on the venue to reject it).
+Every live close is a SELL of a long position or, under the US set, a BUY-to-cover
+of a short; a close that would exceed the held quantity is refused before
+the POST (the kernel does not rely on the venue to reject it).
 
 ## 6.2 Reflection (after every closed trade)
 
@@ -206,7 +237,7 @@ fails toward paper.
   NOT resume (restart + flag required). MEDIUM and HARD per doc 10 §10.3,
   drilled monthly.
 - Outbound-only alert adapter (`ops/alert_relay.py`), required before
-  unattended operation of G0b: a one-way push (authenticated HTTPS POST to
+  unattended operation of paper trading: a one-way push (authenticated HTTPS POST to
   a push-notification endpoint, or SMTP send-only) carrying bounded,
   redacted alert records. It accepts no inbound messages, runs no
   commands, holds no broker credential, and is not a chat agent (the
@@ -225,7 +256,7 @@ fails toward paper.
 - [ ] Reconcile drill (forced drift detected + synced + logged), including
       a settlement-ledger mismatch.
 - [ ] Daily summary runs from the journal alone.
-- [ ] `cost_v2` implemented in the research harness and in G0b shadow
+- [ ] `cost_v2` implemented in the research harness and in paper trading shadow
       accounting; TCA per fill in the summary.
 - [ ] Transport wired and drilled on Alpaca paper (doc 04 5b).
 - [ ] OTO stop-only protection + MOC exit sequencing drilled, including
@@ -233,7 +264,7 @@ fails toward paper.
 - [ ] Journal retention 90 days local + daily backup; redaction by grep.
 - [ ] Outbound-only alert adapter delivers a real notification on a
       forced HARD kill.
-- [ ] 30 clean G0b paper days with zero R-rule violations.
+- [ ] 30 clean paper trading paper days with zero R-rule violations.
 - [ ] Every §6.2a row drilled at least once, exits proven alive.
 
 ## Locked decisions
@@ -262,11 +293,11 @@ fails toward paper.
 - Alerts are outbound-only; nothing on a capital host accepts inbound
   commands.
 - AUDIT STOP RULE (frozen engineering-process rule): reopening audit is
-  allowed only for (1) P0/P1 decision-outcome changes,
+  allowed only for (1) P0/the reader-tier step decision-outcome changes,
   (2) corruption/loss of durable trading state, (3) duplicate-order /
   wrong-side / wrong-quantity risk, (4) security boundary violations,
   (5) reproducibility / lookahead / statistical-validity failures, (6) a
-  failing correctness/drill gate. P2 cleanup collects into one bounded
+  failing correctness/drill gate. the model-pin step cleanup collects into one bounded
   backlog, never another cascade. Alpha-first: no hardening round may
   start on a component whose stage does not yet need it while a strategy
   gate on the critical path is open; priority is decided by whether the

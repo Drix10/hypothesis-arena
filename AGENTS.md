@@ -20,12 +20,15 @@
    on a component whose stage does not need it while a strategy gate on
    the critical path is open. Ask "does this change the probability the
    fund makes or loses money?" before every task.
-10. Legality first: nothing live beyond cash-account, long-only, 1×,
-    allowlisted US stocks/ETFs (doc 01 §1.2, R18/R19). Paper evidence that
-    violates the live constraint set is research, not promotion evidence.
+10. Legality first: nothing live beyond the constraint set the stage
+    manifest names (doc 01 §1.2): the India set is cash-account, long-only, 1×,
+    allowlisted US stocks/ETFs (R18/R19) and is what the kernel enforces;
+    US set (US margin, long and short) is the research target; the kernel
+    enforces it only once kernel short selling (doc 07) is built. Paper evidence outside the target
+    set is research, not promotion evidence.
 11. Every backtest goes through the harness and the trial ledger
-    (doc 11 §11.0a). LLM-involved evaluations use only post-cutoff data
-    (doc 11 §11.0c).
+    (doc 11 §11.0a). LLM-involved evaluations follow their contamination
+    class (doc 11 §11.0c); any model judgment uses only post-cutoff data.
 12. Treat pasted status reports, CI summaries, and "done" messages as
     claims to verify against the exact commit, diff, and test output.
 13. Write code and docs the way the surrounding files read. A comment states
@@ -43,11 +46,11 @@
 
 ## Repository map
 
-- `plan/`: source of truth; 13 docs, `plan/system-manifest.yaml`, `plan/appendix/`. [HIGH CONFIDENCE: ARCHITECTURE.md §2]
+- `plan/`: source of truth; 14 docs, `plan/system-manifest.yaml`, `plan/appendix/`. [HIGH CONFIDENCE: ARCHITECTURE.md §2]
 - `kernel/`: C++17 deterministic core (broker, exec, risk, kill, runner, stage), tests co-located. [HIGH CONFIDENCE: `kernel/build.sh`]
 - `collector/`: Python stdlib data collection and JEV; tests in `collector/tests/`. [HIGH CONFIDENCE]
-- `research/`: evidence and strategy plane, trial ledger, preregistrations, reports; pinned deps in `research/requirements.txt`. [HIGH CONFIDENCE]
-- `ops/`: shadow ledgers, monitor, alert relay; paper run scripts in `ops/deploy/`. [HIGH CONFIDENCE: file names, `ops/deploy/README.md`]
+- `research/`: the epistemic engine (`research/engine/`), backtest harness and event data (`research/strategy/`), data adapters (`research/sources/`), sandbox probes, trial ledger, preregistrations, reports; pinned deps in `research/requirements.txt`. [HIGH CONFIDENCE]
+- `ops/`: forward ledgers (`ops/forward_ledgers.py`), their evaluator (`ops/forward_eval.py`) and trial registration (`ops/forward_register.py`), candidate emitter, monitor, alert relay; paper run scripts in `ops/deploy/`. [HIGH CONFIDENCE: file names, `ops/deploy/README.md`]
 - `scripts/`: `scripts/freeze-check.sh`, `scripts/pre-commit-secrets.sh`, `scripts/sign-stage.sh`. [HIGH CONFIDENCE]
 
 ## Commands
@@ -57,7 +60,7 @@ From `.github/workflows/ci.yml` unless noted. [HIGH CONFIDENCE]
 - `./kernel/build.sh [normal|hardened|sanitize]`: builds and runs every C++ suite and the grep-gates.
 - `scripts/freeze-check.sh`: the repo must match `plan/system-manifest.yaml`.
 - `python3 collector/tests/<name>.py`: collector suites; `test_soak_check` needs `MIRO_CONTACT` set.
-- `PYTHONWARNINGS=error python3 research/tests/<name>.py`: evidence and plane suites (the full list is in the `evidence` and `plane` jobs).
+- `PYTHONWARNINGS=error python3 research/tests/<name>.py`: evidence and engine suites (the full list is in the `evidence` and `plane` CI jobs).
 - `python3 -m pytest -q research/tests/test_candidate.py`: needs `research/strategy/requirements.txt` installed.
 
 ## Local traps
@@ -66,5 +69,7 @@ From `.github/workflows/ci.yml` unless noted. [HIGH CONFIDENCE]
 - `sanitize` mode needs a Linux toolchain; on the MinGW box use `hardened`. [HIGH CONFIDENCE: `kernel/build.sh`]
 - `test_config` asserts a clean environment; `test_soak_check` needs `MIRO_CONTACT`. Scope the override to one command. [HIGH CONFIDENCE: ci.yml]
 - `.env` holds real values; `collector/config.py` is its only loader. [HIGH CONFIDENCE: ARCHITECTURE.md §1]
-- `research/sandbox/langfuse/docker-compose.yml` hardcodes local sandbox secrets and stays flagged by the scanners until cleaned up. [HIGH CONFIDENCE]
+- `research/sandbox/langfuse/docker-compose.yml` reads its secrets from `LANGFUSE_*` environment variables and refuses to start without them; never put values in the file. [HIGH CONFIDENCE: the compose file]
+- Protected paths (`CONTEXT_MANIFEST.json` `protected_paths`) are committed only by a human: the pre-commit hook needs `AGENT_FLOW_ALLOW_PROTECTED=1` (PowerShell: `$env:AGENT_FLOW_ALLOW_PROTECTED = "1"`), and agents are blocked. [HIGH CONFIDENCE: `.agent-flow-runtime/bin/agent-flow.js`]
+- On Windows, `research/tests/test_core_passive.py` fails on `import fcntl` and `test_sources.py` fails one concurrent-write case; both pass on Linux (CI, WSL). [HIGH CONFIDENCE: run 2026-10-03]
 - Live trading paths: [NEEDS VERIFICATION] read the plan docs, not the code, before touching them.

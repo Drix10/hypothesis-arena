@@ -7,7 +7,7 @@
 - ARCHITECTURE.md §4 describes the frozen P1 pipeline (collect.py ->
   data/signals), which keeps running. In Phase 2.5 there is one poll
   path per source: adapter singletons owned here for the seam's
-  lifetime (plane/runner.py owns the seam per process).
+  lifetime (engine/runner.py owns the seam per process).
 - Credentials live only in seam construction (env). Outage evidence
   travels via stamps + heartbeat files. Nothing here trades or sits on
   the exit path.
@@ -34,7 +34,7 @@
   canon + raw checksums, and cross-checked against the records row and
   classify.content_hash(raw_json) on every miss; absent, corrupt or
   mismatched fails closed). History recovers only from
-  manifest-committed verified generations (plane.emit.
+  manifest-committed verified generations (engine.emit.
   committed_histories), each hash bound to records lineage per source.
   Watermarks come from the checkpointed cycle harvest state, so a resumed
   emit reuses the original coverage. With no durable state the tail is
@@ -506,7 +506,7 @@ class Seam:
 
     def restore_from_bundles(self, outdir):
         """Rebuild bounded history tails from verified manifest-committed
-        generations (plane.emit.committed_histories). Each recovered hash
+        generations (engine.emit.committed_histories). Each recovered hash
         must also be bound to canonical lineage for its source, else the
         entry is dropped. Returns {source: kept}. With no committed
         generations the tails stay empty (warming) until real polls

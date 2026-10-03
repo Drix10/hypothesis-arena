@@ -84,8 +84,7 @@ def main(argv, now=None, is_open=market_is_open):
         raise SystemExit("usage: emit_candidates.py <loop_dir> [--require-open]")
     d = args[0]
     now = now or datetime.datetime.now(datetime.timezone.utc)
-    from research.strategy import a_run
-    a_run._load_env()
+    sip_fetch.load_alpaca_env()
     if "--require-open" in argv and not is_open():
         print("market is closed: nothing emitted (the loop would drop it)",
               file=sys.stderr)

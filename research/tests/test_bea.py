@@ -365,7 +365,7 @@ class TestBEA(unittest.TestCase):
         import sys as _sys
         _sys.path.insert(
             0, _os.path.abspath(_os.path.join(ROOT, "..")))
-        from plane import schema
+        from engine import schema
         from collector import ctx_read
         self.assertEqual(schema.EMITTERS["bea_nipa_gdp"],
                          ("macro_release",))

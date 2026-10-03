@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from research.strategy import a_run, sip_fetch
+from research.strategy import sip_fetch
 
 MIN_INTERVAL_S = 0.33
 WORKERS = 20
@@ -29,7 +29,7 @@ class _Throttle:
 
 def fetch_all(symbols, adjustment, outdir, start, end, log=print):
     """Returns (done, failed). Existing verified datasets are skipped."""
-    a_run._load_env()
+    sip_fetch.load_alpaca_env()
     throttle = _Throttle(MIN_INTERVAL_S)
     lock = threading.Lock()
     state = {"done": 0, "seen": 0}

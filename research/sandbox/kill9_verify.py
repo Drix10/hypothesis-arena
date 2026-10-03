@@ -19,8 +19,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
-from plane import attribution as attribution_mod  # noqa: E402
-from plane import emit as emit_mod  # noqa: E402
+from engine import attribution as attribution_mod  # noqa: E402
+from engine import emit as emit_mod  # noqa: E402
 
 d, n = sys.argv[1], int(sys.argv[2])
 fails = []

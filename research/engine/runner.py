@@ -55,7 +55,7 @@ class Runner:
         self.seam = seam
 
     def run(self, watchlist, epoch, thread_id):
-        from plane import graph as _graph
+        from engine import graph as _graph
         return _graph.run_cycle(self.app, watchlist, epoch, thread_id)
 
 
@@ -66,9 +66,9 @@ def build_runner(graph_deps, seam_kwargs=None, publish_paths=None):
     a heartbeat sink is refused. Returns the Runner; the emit node
     publishes through publish.resolve_emit into outdir and the bundle
     path appears on the cycle output."""
-    from plane import graph as _graph
-    from plane import publish as _publish
-    from plane import source_seam as _seam_mod
+    from engine import graph as _graph
+    from engine import publish as _publish
+    from engine import source_seam as _seam_mod
     seam_kwargs = dict(seam_kwargs or {})
     for owned in ("harvest", "parser_extract", "resolve_emit"):
         if owned in graph_deps:

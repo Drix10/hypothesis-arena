@@ -1,4 +1,4 @@
-# 12 - Controls and Benchmarks (freeze v3; `baseline_v1` frozen as negative control)
+# 12 - Controls and Benchmarks (`baseline_v1` frozen as negative control)
 
 `baseline_v1` is a negative control: it is frozen, reproducible and never
 edited. S2 measured it and it loses money for a structural reason (§12.7),
@@ -61,23 +61,28 @@ never filled. Nothing else. No research plane, no JEV, no text.
 - Sessions America/New_York for stocks; forex needs open venue feed. Halts and
   missing data → excluded, never interpolated.
 
-## 12.6 Benchmark set (v3) - what every sleeve is scored against
+## 12.6 Benchmark set - what every sleeve is scored against
 
-Computed on the same window, calendar and `cost_v2`, on daily returns:
+Computed on the same window, calendar and cost model, on daily returns:
 
 1. Cash: the T-bill leg (BIL total return). A sleeve must beat cash net of
    cost.
 2. Vol-matched passive: buy-and-hold of the sleeve's natural passive
    counterpart (SPY for equity sleeves; the equal-weight buy-and-hold of
-   the sleeve's own universe for T1/T2), scaled to the sleeve's realized
-   volatility with cash (no leverage: scale ≤ 1, so the comparison is
-   at matched volatility by de-risking whichever is riskier).
+   the sleeve's own universe for ETF sleeves), scaled to the sleeve's
+   realized volatility with cash (no leverage: scale ≤ 1, so the comparison
+   is at matched volatility by de-risking whichever is riskier).
 3. 60/40 (SPY/IEF monthly rebalanced) as a sanity reference.
-4. The same sleeve without its AI component (paired; doc 11 §11.3b).
+4. The same sleeve without its AI component (paired; doc 11 §11.3b): the
+   deterministic graph for the Link Momentum LLM variant, `event_ripple_rules_v1` for Event Ripple.
 5. `baseline_v1` - negative control and harness regression check: its
    frozen S2 numbers must reproduce bit-for-bit from the same manifests.
+6. The reference book for the spanning test (doc 11 §11.3a): the
+   vol-matched passive core plus every promoted sleeve at its registered
+   risk weight. Long-short sleeves also report Fama-French five-factor plus
+   momentum alpha.
 
-## 12.7 S2 result and diagnosis (recorded 2026-09-28)
+## 12.7 S2 result and diagnosis
 
 S2 (Alpaca IEX 1 h bars, equities, validation slice): the primary
 spread-eligible ledger was empty (no quotes fetched, so every candidate
@@ -93,9 +98,9 @@ costs on a near-random walk. A successor to `baseline_v1` needs a
 horizon-consistent exit profile, which is a new versioned strategy (a
 doc 02 sleeve), never an edit of v1.
 
-S2 closure (doc 07 A1): rerun on SIP bars + SIP quotes so the primary
-ledger exists; record the numbers; the FX leg is dropped (forex is
-research-only). A recorded negative result closes S2.
+Closing the measurement (parked until Checkpoint 1, doc 07 §7.2): rerun on
+SIP bars + SIP quotes so the primary ledger exists; record the numbers; the FX leg is dropped (forex is
+research-only). A recorded negative result closes the measurement.
 
 ## Locked decisions
 
@@ -106,9 +111,12 @@ research-only). A recorded negative result closes S2.
   reproduce this file exactly.
 - Every sleeve and every AI component is scored against the §12.6
   benchmark set on the same window with the same costs. A sleeve that loses net of
-  cost to cash or to the vol-matched passive benchmark is not promotable.
+  cost to cash, or fails the doc 11 §11.3a spanning test against the
+  reference book, is not promotable; the head-to-head result against the
+  vol-matched passive benchmark is always reported.
   An AI layer that loses to its own no-AI variant is removed, not tuned.
-- No control or sleeve may depend on data that is not freely available
-  point in time (the point-in-time S&P-500 constituent artifact required
+- No control or live sleeve signal may depend on data that is not freely
+  available point in time; paid research data (doc 09 §9.1b) may only
+  extend a backtest's history (the point-in-time S&P-500 constituent artifact required
   by §12.1 is not free; `baseline_v1` equity runs therefore state their
   universe hash and its survivorship limitation explicitly).

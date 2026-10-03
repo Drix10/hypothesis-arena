@@ -1,258 +1,239 @@
-# 02 - Strategy Book: Alpha Sleeves (freeze v3, `strategy_book_version: sb1`)
-
-> Legacy filename. This doc previously held the X-lists signal system; that
-> material is HISTORICAL / NON-PRODUCTION and lives in
-> `appendix/02-x-lists-archive.md` (X stays out of production: its §2.6).
-> The path is kept because `scripts/freeze-check.sh` verifies the archive
-> label here.
+# 02 - Strategy Book (`strategy_book_version: sb2`)
 
 This doc defines what the fund trades, why it might work, and how we will
-know if it does not. Every sleeve below is a hypothesis with an evidence
-grade, a pre-registration draft, and kill criteria. None is authorized to
-trade until it passes the doc 11 gates. Parameters are literature defaults
-frozen at pre-registration; variants count against the trial ledger
-(doc 11 §11.0).
+know if it does not. Every sleeve is a hypothesis with an evidence grade,
+a pre-registration, and kill criteria. None trades until it passes the
+doc 11 gates. Parameters come from the cited literature and are frozen at
+pre-registration; variants count against the trial ledger (doc 11 §11.0).
+The mathematics behind each signal is in doc 14; the graph and events
+they read are built by the engine (doc 08).
 
 ## 2.0 The funnel (every sleeve, no shortcuts)
 
 ```
-idea (research factory or human) → pre-registration (frozen spec + variant
-count + data window + holdout) → A-gate: historical backtest on SIP data,
-trial-ledgered, net of cost_v2 → B-gate: G0a shadow on live data for its
-minimum window → champion candidate → G0b paper orders through the kernel
-→ G0→G1 human gate → G1 live (one liquid ETF) …
+hypothesis (human, research factory, or engine) → pre-registration
+(frozen spec + variant count + data window + holdout + contamination
+class) → backtest gate: historical backtest, trial-ledgered, net of costs →
+Shadow gate: shadow testing on live data → champion candidate → paper orders
+through the kernel → G0→G1 human gate → G1 live
 ```
 
 A sleeve that fails any gate is recorded with its numbers and archived.
 It is not modified until it passes: a new idea is a new pre-registration.
 
-## 2.1 Evidence grades (used below)
+## 2.1 Evidence grades
 
 - **A** - multiple peer-reviewed studies + documented post-publication
   out-of-sample persistence.
-- **B** - peer-reviewed, but out-of-sample evidence limited, contested, or
+- **B** - peer-reviewed, out-of-sample evidence limited or contested, or
   concentrated in segments we can only partly trade.
-- **C** - contested or failed replications; worth testing only because the
-  test itself answers a question the fund needs answered.
+- **C** - contested or failed replications; tested because the answer
+  matters to the fund.
 - **D** - speculative. Research factory only.
 
-Published effects are haircut: average post-publication decay is ≈58%
-(McLean–Pontiff), and new factors need t ≥ 3 (Harvey–Liu–Zhu).
-Expected-return statements in this doc are planning ranges only.
+Published effects are haircut by 50% for planning (McLean-Pontiff: about
+58% lower post-publication); new, non-literature signals need t ≥ 3
+(Harvey-Liu-Zhu).
 
 ## 2.2 Sleeve spec template (every sleeve fills every field)
 
 `id / version` · hypothesis · evidence grade + sources · mechanism (why it
-should persist) · universe · data (dataset + manifest hash) · signal
-(exact) · schedule (signal time, order time, order type) · exit profile ·
-sizing · turnover/capacity · cash-account mechanics · AI involvement ·
-known failure modes · kill criteria · minimum evaluation windows · status.
+should persist) · universe · data (dataset + manifest hash) ·
+contamination class (doc 11 §11.0c) · signal (exact) · schedule (signal
+time, order time, order type) · exit profile · sizing · turnover/capacity ·
+account mechanics (India-set settlement or US-set margin and borrow) · AI involvement and
+its no-AI twin · known failure modes · kill criteria · minimum evaluation
+windows · status.
 
 ## 2.3 Sleeves
 
-### T1 `trend_etf_v1` - ETF time-series trend (first champion candidate)
+### Link Momentum (`link_momentum_v1`): connected-firm momentum on the Market Link Graph
 
-- **Hypothesis:** asset-class returns show time-series momentum; holding an
-  asset only while its price is above its long moving average captures
-  most of its return with far smaller drawdowns.
-- **Grade B+.** Time-series momentum is documented across asset classes
-  (Moskowitz–Ooi–Pedersen 2012; century-long studies); post-2008 Sharpe
-  broadly comparable to pre-2008, but with long flat spells (2009–2013)
-  and alpha partly attributable to volatility scaling. Long-only ETF
-  implementations (moving-average timing) are widely replicated.
-- **Mechanism:** under-reaction then slow adjustment; hedging demand;
-  crisis-alpha from exiting risk assets in trends down.
-- **Universe (5 = kernel cap):** VTI (US equity), VEU (ex-US equity), VNQ
-  (US REITs), IEF (7–10y Treasuries), DBC (commodities). Cash leg: BIL
-  (T-bills). Common history starts 2007 in the literature; the free SIP feed reaches back only to 2016-01-04 (doc 09 §9.1a).
-- **Signal (primary):** on the last trading day of the month, asset held
-  for the next month iff its month-end close > the mean of its last 10
-  month-end closes; else its slot is cash.
-  **Registered variant (counts as 2 trials):** 12-month total return minus
-  T-bill return > 0.
-- **Schedule:** signal from the official close (SIP daily bar); orders the
-  next session: sells-to-close first via market-on-close; buys the session
-  after (settled proceeds, R18). One rebalance per month.
-- **Exit profile `exit_trend_v1`:** signal exit at rebalance; broker-native
-  catastrophe stop at entry × (1 − 3 × 20-day ATR%) (GTC, re-placed each
-  rebalance). Requires the OTO stop-only protection shape (doc 13 P3.5).
-- **Sizing:** equal weight 1/5 of sleeve capital per slot (fewest free
-  parameters); whole shares; the kernel's risk-budget hierarchy still
-  caps each position (doc 03 §3.3 steps 3–6).
-- **Turnover/capacity:** ~2–4 trades/month; capacity is not a constraint at
-  this scale.
-- **AI involvement:** none in the signal. The research factory may
-  propose variants; each is a new trial.
-- **Failure modes:** whipsaw in range-bound years; correlated drawdown
-  when all assets fall together before signals flip; month-end timing
-  luck.
-- **Kill:** A-gate fail; or G0a/G0b drawdown > 1.5× the backtest's worst
-  12-month drawdown; or Sharpe lower bound < 0 after the minimum window.
-- **Minimum windows:** A-gate full history with an untouched final 3-year
-  holdout; B-gate 3 months shadow (few trades - judged on tracking error
-  vs its backtest, not on Sharpe).
+- **Hypothesis:** a firm's next-month return follows the past-month return
+  of the firms it is linked to, because investors process linked-firm news
+  slowly.
+- **Grade B+.** Ali-Hirshleifer (JFE 2020): connected-firm momentum
+  1.68%/month, t = 9.67, subsuming industry, customer, technology and
+  geographic momentum, weaker in recent years; Scherbina-Schlusche: news
+  co-mention links cross-predict returns (survival after costs shown so
+  far only in a Chinese-market study); Cohen-Frazzini (JF 2008);
+  Menzly-Ozbas (JF 2010). Caveats: shared analyst coverage (the strongest
+  link source) needs paid I/B/E/S data and is replaced by free proxies;
+  single-link versions decayed after publication; spillover is stronger
+  when the linked firm draws little attention.
+- **Graph (doc 08 §8.2, point in time at each month-end):** edges from
+  (a) customer/supplier disclosures in 10-K filings, (b) the 10 nearest
+  10-K business-description peers, (c) GDELT news co-mentions over the
+  trailing 90 days, (d) common institutional ownership from 13F filings
+  (Anton-Polk, JF 2014). Each source's weights are normalized per firm; the
+  four sources combine with equal weights (doc 14 §14.3).
+- **Signal:** `link_ret_i` = edge-weighted mean of linked firms' returns
+  over the past month, neutralized for the firm's own return, size and
+  industry return (doc 14 §14.4). Tradable book: the 20 most extreme names
+  a side; the full quintile spread is reported as the research measure.
+- **Universe:** US common stock, price ≥ $5, 60-day median dollar volume
+  ≥ $10M, market cap ≥ $500M, at least one link from two different edge
+  sources; short side additionally ≥ $1B (an easy-to-borrow proxy for
+  history; live check is the broker flag) and passes the R20 crowding
+  filter.
+- **Expected economics (planning only):** connected-firm momentum earned
+  1.13-1.68%/month in its papers on analyst links; our free-data proxies
+  are weaker and the haircut halves what remains, so a spread of
+  0.4-0.6%/month before costs is the planning case, against roughly
+  0.3%/month of costs at $25,000 (doc 14 §14.10). The margin is thin; the
+  sleeve can fail on costs alone.
+- **Registered variants (3 trials):** `filings` uses edges (a)+(b)+(d),
+  deterministic, 2016+; `news` adds (c) GDELT; `intraday` is `news` with
+  the peer return measured
+  intraday only (Wang, JFQA 2025: peer intraday returns continue, peer
+  overnight returns reverse).
+- **AI twin:** `link_momentum_llm_v1` replaces the regex customer extractor
+  with the reader-tier extractor (anonymized, span-verified; extraction
+  class). Judged by the doc 11 §11.3b paired delta against the `news`
+  variant.
+- **Schedule:** signal from the month-end close; trades the next session;
+  monthly rebalance; 20 names a side at $25,000.
+- **Exit `exit_link_v1`:** signal exit at rebalance; broker-native GTC
+  catastrophe stop at 3 × 20-day ATR (sell-stop for longs, buy-stop for
+  shorts).
+- **Failure modes:** crowding of the published effect; costs in smaller
+  names; short squeezes; graph errors from bad entity resolution;
+  momentum-style crashes in sharp market rebounds, when the short leg
+  (recent losers' links) rallies hardest (Daniel-Moskowitz, JFE 2016),
+  partly contained by the 10% volatility target and the R2 net band.
+- **Kill:** backtest gate fail; or shadow gate tracking outside band; or drawdown over
+  1.5× the backtest's worst 12-month drawdown.
 
-### T2 `sector_mom_v1` - sector relative + absolute momentum
+### Filing Change (`filing_change_v1`): changes in periodic filings
 
-- **Hypothesis:** industries with the strongest 12-month returns (skipping
-  the last month) keep outperforming over the next month; an absolute
-  filter avoids holding equities in downtrends.
-- **Grade B.** Industry momentum (Moskowitz–Grinblatt 1999) persists
-  but decays and suffers momentum crashes.
-- **Universe:** 9 original SPDR sector ETFs (XLB, XLE, XLF, XLI, XLK, XLP,
-  XLU, XLV, XLY; from 1998). Cash leg BIL.
-- **Signal:** rank on 12-1-month total return; hold the top 3 equally,
-  each only if its 12-month return exceeds the T-bill return, else cash.
-- **Schedule:** monthly; sell day D (MOC), buy day D+1 with settled
-  proceeds (keeps ≤ 3 symbols per kernel epoch).
-- **Exit `exit_trend_v1`**, sizing 1/3 per slot. **AI:** none.
-- **Failure modes:** momentum crash at trend reversals; sector
-  concentration. **Kill** as T1.
+- **Hypothesis:** firms whose 10-K/10-Q text changes substantially against
+  the same filing a year earlier underperform; firms that barely change
+  outperform.
+- **Grade B−.** Cohen-Malloy-Nguyen (JF 2020): up to 188 bp/month; a
+  2009-2026 S&P 100 replication found no effect. The test therefore runs
+  on mid caps outside the most-scrutinized firms, where the paper's effect
+  concentrated.
+- **Signal:** deterministic similarity of each filing to its prior-year
+  counterpart, section by section (risk factors, MD&A); quintiles; monthly
+  rebalance; a name is held about 3 months after its filing.
+- **Universe:** as Link Momentum, excluding the 100 largest firms by market cap.
+- **Contamination class:** A (deterministic).
+- **Known risk:** firms that later delist are short-leg winners; missing
+  prices for them trigger the 5% void rule and the paid-data trigger (doc 09
+  §9.1b).
 
-### I1 `intraday_mom_v1` - market intraday momentum (the T2-tier sleeve)
+### Event Ripple (`event_ripple_v1`): LLM ripple reasoning on events
 
-- **Hypothesis:** the market's first half-hour return (previous close →
-  10:00 ET) predicts its last half-hour return, more so on high-volatility
-  and macro-release days.
-- **Grade B−.** Gao–Han–Li–Zhou (JFE 2018), SPY 1993–2013 with
-  out-of-sample R² ≈ 1.6%, present in 10 other liquid ETFs. Persistence
-  after 2013 is unverified here and must be re-tested on SIP minute bars.
-- **Mechanism:** late-day informed trading and rebalancing flows that
-  follow early information.
-- **Universe:** SPY (primary); QQQ, IWM as separate pre-registered tests.
-- **Signal:** r1 = log(price at 10:00 ET / previous official close). If
-  r1 > 0 → BUY at 15:30 ET; else flat (long only).
-  **Registered variant:** trade only on days whose r1 magnitude is above
-  its trailing-60-day median.
-- **Schedule/orders:** marketable limit at 15:30 (limit = ask + 1 tick
-  cap); exit at the close via market-on-close before the broker's MOC
-  cutoff; protective stop leg attached at entry (OTO stop-only) at
-  entry − 3 × 30-min ATR. The MOC must reconcile with the live stop
-  (doc 06 §6.0: the stop is cancelled only after the MOC ack; a stop fill
-  makes the MOC an over-sell that the cash account rejects; both paths
-  are journaled).
-- **Exit profile `exit_intraday_v1`**; sizing: full sleeve tranche.
-- **Cash-account mechanics:** buy with settled cash, sell the same day is
-  permitted; the proceeds settle T+1, so two alternating capital tranches
-  are required (effective utilization ≈ 50%). R18 enforces it.
-- **Turnover:** ≤ 1 round trip/day; edge per trade is a few bp, so it
-  lives or dies on cost - 2× cost stress is decisive.
-- **AI:** none in the signal. **Kill:** A-gate fail at 2× cost; or live
-  implementation shortfall > 2× modeled.
+- **Hypothesis:** when a material event hits one firm, a model that reads
+  the event and the firm's link neighborhood identifies which linked firms
+  move, in which direction, better than a fixed propagation rule.
+- **Grade C.** Supporting: Chen-Kelly-Xiu (LLM news signals),
+  Huang et al. 2026 (LLM-typed links), FinRipple (ACL Findings 2025, ripple
+  prediction with knowledge graphs). Against: LLM reasoning is largely
+  recall of training data ("causal parrots", Zečević et al., TMLR 2023);
+  headline-signal returns decayed with adoption (Lopez-Lira-Tang). The
+  sleeve exists to measure whether reasoning beats a rule.
+- **Events (doc 08 §8.3):** 8-K material items, earnings releases with
+  XBRL surprise, abnormal returns above 3 standard deviations on volume,
+  GDELT news bursts naming the firm from at least 3 independent outlets,
+  and disasters reported in news that names the firm. Mapping disasters to
+  disclosed facility locations (10-K Item 2) is a later research card.
+- **Brain (doc 08 §8.4):** for each event, retrieves the firm's two-hop
+  neighborhood and recent events, and writes at most 5 typed ripple
+  hypotheses: target firm, direction, horizon (5 / 21 / 63 sessions),
+  mechanism (enum), and the evidence path. An independent verifier (a
+  different model family plus deterministic span checks) must pass every
+  hypothesis before it becomes a `ripple_hypothesis` feature.
+- **Sleeve rule (deterministic):** a verified hypothesis becomes a
+  candidate at the next session 10:00 ET (marketable limit) unless the
+  target has already moved more than 1 × its 20-day ATR in the hypothesized
+  direction since the event (already priced). Hold for the horizon;
+  `exit_event_v1` (time exit + catastrophe stop); equal risk slots; at most
+  10 concurrent positions; one position per target.
+- **Deterministic twin, Event Ripple rules (`event_ripple_rules_v1`):** same events, one-hop propagation
+  with the sign table of doc 14 §14.5, same entry and exit. The twin is
+  deterministic (deterministic class) and runs its own backtest gate on history.
+- **Contamination class:** C for the brain (post-cutoff only, doc 11
+  §11.0c). Pre-cutoff runs with chronologically consistent models are
+  research, never promotion evidence.
+- **AI cost:** at most 20 events/day reach the brain; cost per event and
+  per closed trade is reported (doc 10 §10.4).
+- **X corroboration (`x_corroboration_v1`, doc 09 §9.1c):** a separate filter test on
+  the twin's (and later Event Ripple's) candidates: does a bot-filtered X burst
+  before the decision improve them? X never creates an event or a
+  candidate.
+- **Kill:** paired delta (Event Ripple − twin) fails at the power-based minimum
+  sample (doc 11 §11.3b, about 1,000 resolved candidates per arm), or the
+  kill-only monitor shows harm earlier → the brain is removed; the twin
+  continues on its own merits.
 
-### E1 `insider_buy_v1` - EDGAR Form 4 opportunistic insider purchases
+### ETF Trend (`etf_trend_ls_v1`): time-series momentum on ETFs, long and short
 
-- **Hypothesis:** open-market purchases by officers/directors who do not
-  trade on a routine calendar pattern predict positive abnormal returns
-  over the following month.
-- **Grade B.** Cohen–Malloy–Pomorski (JF 2012) "opportunistic" vs
-  "routine"; effect stronger in small/illiquid names we partly exclude.
-- **Universe:** US common stocks with price ≥ $5 and 60-day median dollar
-  volume ≥ $20M at the filing date (point-in-time from SIP daily bars).
-- **Signal (deterministic, no LLM):** Form 4 XML, transaction code `P`,
-  officer or director reporter, not flagged as a Rule 10b5-1 plan trade,
-  reporter not "routine" (traded in the same calendar month in each of
-  the prior 3 years). Aggregate per issuer per filing day.
-- **Schedule:** signal time = EDGAR acceptance datetime (R12); BUY at the
-  next session open + 30 min (marketable limit); hold 21 trading days;
-  at most 5 concurrent names (kernel cap), oldest signal wins ties.
-- **Exit `exit_event_v1`:** time exit at day 21 (MOC) + catastrophe stop
-  at entry − 3 × 20-day ATR. Sizing: equal slots of sleeve capital / 5.
-- **Data risk:** delisted names' price history may be incomplete from the
-  free feed → survivorship bias; the exclusion count is reported with
-  every run and a run with > 5% excluded events is void.
-- **Kill** as T1; plus decay monitor (rolling 12-month event alpha).
+- **Hypothesis:** an asset's 12-month excess-return sign predicts its next
+  month (Moskowitz-Ooi-Pedersen, JFE 2012). The published strategy is
+  long-short; the short side carries the crisis-period return.
+- **Grade A.** Century-long replications; weaker in the 2010s.
+- **Universe:** about 10 liquid unlevered ETFs across US and ex-US equity,
+  Treasuries, TIPS, commodities and gold; BIL is the cash leg.
+- **Signal:** sign of the 12-month return minus T-bills; inverse-volatility
+  weights to a 10% annual target; monthly.
+- **Role:** a low-correlation diversifier for the link sleeves and the
+  cheapest test of the US-set harness.
+- **Caveat:** 2016-2026 includes a holdout already seen by the retired
+  long-only trend sleeve, so the report is labeled `seen-window` and the
+  shadow gate minimum doubles to 6 rebalances.
 
-### E2 `earnings_reader_v1` - AI-assisted earnings press-release reader
+### Controls
 
-- **Hypothesis:** a reader-tier LLM extracts guidance changes from 8-K
-  item 2.02 press releases (EX-99.1) that predict post-announcement drift
-  *beyond* what a deterministic XBRL-based surprise measure predicts.
-- **Grade C.** PEAD disappeared for large caps around 2006 (Martineau)
-  but is contested by 2025 studies; press-release text is as informative
-  as the surprise for the *announcement-day* return (arXiv 2509.24254),
-  which we cannot trade competitively (latency tier T1, doc 01 §1.4). Our window starts the
-  next session. The prior is weak; the sleeve exists to answer one
-  question: does AI reading add incremental edge?
-- **Design:** paired test, same events, same entry/exit:
-  E2-det (deterministic features only: XBRL actuals vs prior-year, filing
-  timing) vs E2-ai (E2-det + reader-tier extracted guidance direction
-  per metric: raised / maintained / lowered / withdrawn / none).
-  Candidate: BUY next session open + 30 min iff guidance raised on ≥1
-  metric and lowered on none; hold 10 trading days; `exit_event_v1`.
-- **Contamination rule:** only events after the reader model's pinned
-  knowledge cutoff + 30-day embargo count (doc 11 §11.0c). Evidence is
-  therefore mostly forward shadow; the A-gate uses E2-det history only.
-- **AI involvement:** reader tier only (no tools, no network, schema-capped
-  JSON), deterministic resolver verifies every extracted number against
-  the document text and XBRL where present (doc 08 §8.3).
-- **Kill:** paired delta (E2-ai − E2-det) CI includes 0 after the minimum
-  event count → the AI component is removed (the E2-det sleeve may
-  continue on its own merits).
-
-### M1 `vol_target_overlay_v1` - portfolio volatility targeting
-
-- **Hypothesis:** scaling exposure inversely to recent realized volatility
-  improves risk-adjusted returns and keeps drawdowns inside R5.
-- **Grade B−.** Moreira–Muir (2017) find gains; Cederburg et al. (2020)
-  find weak out-of-sample benefit across many portfolios. Primary role
-  here is risk control (keep the book's drawdown inside R5), judged
-  on drawdown/Sharpe of the sleeve it overlays.
-- **Rule:** exposure multiplier = min(1, 8% / annualized 20-day realized
-  vol of the sleeve's return stream); applied at rebalance only. Never
-  above 1 (no leverage).
-- **Macro context (M2, research only):** FRED curve slopes (T10Y2Y,
-  T10Y3M), real yield (DFII10), breakeven (T10YIE), credit spread
-  (BAA10Y), NFCI, VIXCLS - logged as CONTEXT features with zero live
-  effect until a pre-registered overlay rule passes doc 11.
-
-### X1 `fx_carry_mom_research_v1` - FX research (never executed)
-
-- G10 FX carry (3-month interbank-rate differentials) and 12-1 momentum
-  from FRED daily exchange rates and OECD short rates, simulated
-  dollar-neutral long-short. **Research only**: forex spot is not a legal
-  live target (doc 01 §1.2). A future long-only currency-ETF expression
-  would be a different sleeve and needs the jurisdiction gate first.
-
-### B0 `baseline_v1` - frozen negative control
-
-Doc 12. Never edited, never promoted. It measured negative in S2; the
-cause (exit/horizon mismatch) is diagnosed there. It is the regression
-control for the harness itself.
+- `core_passive_v1` (VTI/IEF): the passive core and reference book base.
+- Cash (BIL), vol-matched passive, 60/40 and `baseline_v1` (doc 12).
 
 ## 2.4 Portfolio construction
 
-- G0b runs exactly one champion sleeve through the kernel at a time
-  (`EXEC_UNIVERSE_MAX = 5`); every other sleeve runs in G0a shadow with
-  harness fills on live data. Multi-sleeve live allocation is a G2+
-  design that first needs a versioned universe-cap change (doc 13).
-- Shadow portfolio (research, for planning G2): sleeve risk budgets by
-  equal risk contribution on trailing 12-month shadow returns, no sleeve
-  above 50% of risk, rebalanced monthly; book gross ≤ 100% of settled
-  cash (cash account), M1 applied at the book level.
-- Order of testing (not a promise of promotion): T1 → I1 → E1 → T2 →
-  E2 (forward) → M1 on the survivors. T1 is the first champion candidate
-  because it is simple, low-turnover, long-only by nature, and fits the
-  kernel cap.
+- paper trading runs exactly one champion sleeve through the kernel at a time; every
+  other sleeve runs in shadow testing with harness fills on live data.
+- Shadow book (research, for planning G2): sleeve risk budgets by equal
+  risk contribution on trailing 12-month shadow returns, no sleeve above
+  50% of risk, rebalanced monthly; gross within the constraint set.
+- Multi-sleeve live allocation needs the netting router and a versioned
+  universe-cap change (doc 13).
+- Order of testing (not a promise of promotion): ETF Trend → Link
+  Momentum (filings, news, intraday) → Filing Change → Event Ripple
+  rules. The Event Ripple brain's forward shadow starts as soon as the
+  engine produces verified hypotheses, because its evidence is
+  forward-only.
 
-## 2.5 What "done" means (strategy book)
+## 2.5 Retired sleeves (record)
 
-- [ ] Each sleeve has a frozen pre-registration file (spec + variants +
-      windows + holdout + cost model + kill criteria) committed before its
-      first backtest run.
-- [ ] Every sleeve run writes to the global trial ledger (doc 11 §11.0a).
-- [ ] T1 and I1 A-gate reports produced on SIP data with manifests.
-- [ ] At least one sleeve passes A-gate and B-gate → G0b champion.
-- [ ] E2 paired test running in forward shadow with contamination control.
+All ran their backtest gate on the 2023-09-01..2026-08-31 holdout under the India set and
+failed (`plan/reviews/2026-09-29-alpha-results.md`, `research/reports/`).
+Their forward ledgers ran from 2026-09-30 and stopped on 2026-10-03, when
+the sleeves were retired; their code is in git history.
+
+| Sleeve | Result |
+|---|---|
+| ETF trend, long or cash (`trend_etf_v1`) | Sharpe about equal to passive; excess over cash, DSR, MinTRL fail |
+| Sector momentum (`sector_mom_v1`) | same pattern, weaker |
+| Intraday momentum (`intraday_mom_v1`) | negative net Sharpe, negative at 2× cost |
+| Insider purchases (`insider_buy_v1`) | below passive, 27% drawdown, 7.9% events unpriced |
+| Post-earnings drift (`earnings_reader_v1`) | no drift in tradable names |
+| Volatility-target overlay (`vol_target_overlay_v1`) | not tested (no survivor to overlay) |
+| FX carry and momentum (`fx_carry_mom_research_v1`) | research only; forex is not a live target |
+
+The X-lists signal system is HISTORICAL / NON-PRODUCTION; its record is
+`appendix/02-x-lists-archive.md`. X input is not used in production.
 
 ## Locked decisions
 
-- The fund trades sleeves, not opinions. Each sleeve is a deterministic
-  rule set with a pre-registration, an evidence grade, and kill criteria.
+- The fund trades sleeves, not opinions. Each sleeve is a rule set with a
+  pre-registration, an evidence grade, a contamination class and kill
+  criteria.
 - Parameters come from the cited literature and are frozen at
   pre-registration; no tuning on data already seen. Variants are trials.
-- Live sleeves are long-only, cash-account, 1×, allowlisted instruments.
-- AI enters a sleeve only through reader-tier features that are verified
-  deterministically, and only if a paired test proves incremental value.
-- One champion sleeve in G0b at a time; everything else in shadow.
-- X material is HISTORICAL / NON-PRODUCTION (appendix); no X input in v1.
+- Live sleeves obey the constraint set named in their stage manifest
+  (doc 01 §1.2).
+- AI enters a sleeve as engine features verified deterministically
+  (the Link Momentum LLM variant) or as verified ripple hypotheses (Event Ripple). Every AI sleeve has a
+  deterministic twin on the same events, and the AI stays only if the
+  paired test proves incremental value net of its cost.
+- One champion sleeve in paper trading at a time; everything else in shadow.

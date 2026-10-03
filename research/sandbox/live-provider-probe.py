@@ -27,9 +27,9 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, ".."))
 
 from collector import config as config_mod
-from plane import spend as spend_mod
-from plane import workers as workers_mod
-from plane import attribution as attr_mod
+from engine import spend as spend_mod
+from engine import workers as workers_mod
+from engine import attribution as attr_mod
 
 IN_PER_1K = 0.00010
 OUT_PER_1K = 0.00020

@@ -1,6 +1,6 @@
 {
   "version": "2",
-  "lastScan": "2026-10-02T12:07:24.937Z",
+  "lastScan": "2026-10-03T06:38:39.346Z",
   "surfaces": [
     {
       "key": "auth:collector/jev.py",
@@ -14,39 +14,9 @@
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
     {
-      "key": "auth:ops/jev_twin.py",
+      "key": "auth:research/engine/workers.py",
       "type": "auth",
-      "path": "ops/jev_twin.py",
-      "detail": "auth pattern",
-      "lines": [
-        414
-      ],
-      "firstSeen": "2026-10-01T14:24:26.745Z"
-    },
-    {
-      "key": "auth:ops/macro_shadow.py",
-      "type": "auth",
-      "path": "ops/macro_shadow.py",
-      "detail": "auth pattern",
-      "lines": [
-        187
-      ],
-      "firstSeen": "2026-10-01T14:24:26.745Z"
-    },
-    {
-      "key": "auth:ops/sleeve_shadow.py",
-      "type": "auth",
-      "path": "ops/sleeve_shadow.py",
-      "detail": "auth pattern",
-      "lines": [
-        302
-      ],
-      "firstSeen": "2026-10-01T14:24:26.745Z"
-    },
-    {
-      "key": "auth:research/plane/workers.py",
-      "type": "auth",
-      "path": "research/plane/workers.py",
+      "path": "research/engine/workers.py",
       "detail": "auth pattern",
       "lines": [
         391,
@@ -145,20 +115,9 @@
       "firstSeen": "2026-10-02T12:07:24.548Z"
     },
     {
-      "key": "data-mutation:ops/event_shadow.py",
+      "key": "data-mutation:research/engine/attribution.py",
       "type": "data-mutation",
-      "path": "ops/event_shadow.py",
-      "detail": "data-mutation pattern",
-      "lines": [
-        229,
-        356
-      ],
-      "firstSeen": "2026-10-01T14:24:26.745Z"
-    },
-    {
-      "key": "data-mutation:research/plane/attribution.py",
-      "type": "data-mutation",
-      "path": "research/plane/attribution.py",
+      "path": "research/engine/attribution.py",
       "detail": "data-mutation pattern",
       "lines": [
         204,
@@ -170,9 +129,9 @@
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
     {
-      "key": "data-mutation:research/plane/budgets.py",
+      "key": "data-mutation:research/engine/budgets.py",
       "type": "data-mutation",
-      "path": "research/plane/budgets.py",
+      "path": "research/engine/budgets.py",
       "detail": "data-mutation pattern",
       "lines": [
         132,
@@ -184,9 +143,9 @@
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
     {
-      "key": "data-mutation:research/plane/emit.py",
+      "key": "data-mutation:research/engine/emit.py",
       "type": "data-mutation",
-      "path": "research/plane/emit.py",
+      "path": "research/engine/emit.py",
       "detail": "data-mutation pattern",
       "lines": [
         162,
@@ -196,9 +155,9 @@
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
     {
-      "key": "data-mutation:research/plane/locks.py",
+      "key": "data-mutation:research/engine/locks.py",
       "type": "data-mutation",
-      "path": "research/plane/locks.py",
+      "path": "research/engine/locks.py",
       "detail": "data-mutation pattern",
       "lines": [
         153
@@ -206,9 +165,9 @@
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
     {
-      "key": "data-mutation:research/plane/source_seam.py",
+      "key": "data-mutation:research/engine/source_seam.py",
       "type": "data-mutation",
-      "path": "research/plane/source_seam.py",
+      "path": "research/engine/source_seam.py",
       "detail": "data-mutation pattern",
       "lines": [
         292
@@ -216,9 +175,9 @@
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
     {
-      "key": "data-mutation:research/plane/spend.py",
+      "key": "data-mutation:research/engine/spend.py",
       "type": "data-mutation",
-      "path": "research/plane/spend.py",
+      "path": "research/engine/spend.py",
       "detail": "data-mutation pattern",
       "lines": [
         697
@@ -297,9 +256,9 @@
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
     {
-      "key": "data-mutation:research/strategy/fsds_fetch.py",
+      "key": "data-mutation:research/strategy/sec_financial_statements.py",
       "type": "data-mutation",
-      "path": "research/strategy/fsds_fetch.py",
+      "path": "research/strategy/sec_financial_statements.py",
       "detail": "data-mutation pattern",
       "lines": [
         77
@@ -412,9 +371,9 @@
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
     {
-      "key": "exec:research/plane/workers.py",
+      "key": "exec:research/engine/workers.py",
       "type": "exec",
-      "path": "research/plane/workers.py",
+      "path": "research/engine/workers.py",
       "detail": "exec pattern",
       "lines": [
         1112
@@ -459,30 +418,6 @@
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
     {
-      "key": "external-api:ops/event_shadow.py",
-      "type": "external-api",
-      "path": "ops/event_shadow.py",
-      "detail": "external-api pattern",
-      "lines": [
-        35,
-        90,
-        91
-      ],
-      "firstSeen": "2026-10-01T14:24:26.745Z"
-    },
-    {
-      "key": "external-api:ops/long_history_fetch.py",
-      "type": "external-api",
-      "path": "ops/long_history_fetch.py",
-      "detail": "external-api pattern",
-      "lines": [
-        20,
-        63,
-        68
-      ],
-      "firstSeen": "2026-10-01T14:24:26.745Z"
-    },
-    {
       "key": "external-api:ops/monitor.py",
       "type": "external-api",
       "path": "ops/monitor.py",
@@ -495,9 +430,9 @@
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
     {
-      "key": "external-api:research/plane/workers.py",
+      "key": "external-api:research/engine/workers.py",
       "type": "external-api",
-      "path": "research/plane/workers.py",
+      "path": "research/engine/workers.py",
       "detail": "external-api pattern",
       "lines": [
         407,
@@ -636,9 +571,9 @@
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
     {
-      "key": "external-api:research/strategy/fsds_fetch.py",
+      "key": "external-api:research/strategy/sec_financial_statements.py",
       "type": "external-api",
-      "path": "research/strategy/fsds_fetch.py",
+      "path": "research/strategy/sec_financial_statements.py",
       "detail": "external-api pattern",
       "lines": [
         8,
@@ -654,29 +589,8 @@
       "detail": "external-api pattern",
       "lines": [
         11,
-        64,
-        65
-      ],
-      "firstSeen": "2026-10-01T14:24:26.745Z"
-    },
-    {
-      "key": "secret:research/sandbox/langfuse/docker-compose.yml:credential assigned to a secret-named variable",
-      "type": "secret",
-      "path": "research/sandbox/langfuse/docker-compose.yml",
-      "detail": "Possible credential assigned to a secret-named variable (value redacted)",
-      "lines": [
-        64
-      ],
-      "firstSeen": "2026-10-01T14:24:26.745Z"
-    },
-    {
-      "key": "secret:research/sandbox/langfuse/docker-compose.yml:database URL with password",
-      "type": "secret",
-      "path": "research/sandbox/langfuse/docker-compose.yml",
-      "detail": "Possible database URL with password (value redacted)",
-      "lines": [
-        57,
-        58
+        73,
+        74
       ],
       "firstSeen": "2026-10-01T14:24:26.745Z"
     }
