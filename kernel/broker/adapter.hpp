@@ -1,4 +1,4 @@
-// Broker adapter interface (doc 04 4.2.5a, doc 06 6.1).
+// Broker adapter interface.
 //
 // A normal entry is one broker-native protected operation whose ack covers
 // the entry<->protection relationship. A separate protection operation exists
@@ -12,30 +12,27 @@
 #include <cstdio>
 #include <string>
 
-namespace jev {
+namespace kernel {
 namespace broker {
 
 enum class Venue : std::uint8_t {
-    ALPACA_PAPER = 0  // stocks-only G0 venue
+    ALPACA_PAPER = 0  // stocks-only paper venue
 };
 
 enum class OrderSide : std::uint8_t { BUY = 0, SELL = 1 };
 
-// Protection attached to an entry: a bracket (TP + stop, exit_profile_v1) or
-// a stop only (OTO, exit_intraday_v1 / exit_event_v1 / trend sleeves whose
-// take-profit is a timed or signal exit).
+// Protection attached to an entry: a bracket (TP + stop, the trend rule) or a
+// stop only (OTO, the link and event rules, whose exit is timed or signalled).
 enum class Protection : std::uint8_t { BRACKET = 0, OTO_STOP = 1 };
 
-// Protected-entry specification. Stop and TP are mandatory (doc 05 5.2: the
-// veto rejects an intent without a stop upstream; the adapter also refuses
-// non-positive stop/tp). Fixed-size: the order core is allocation-free.
+// Protected-entry specification. Stop and TP are mandatory. Fixed-size: the order core is allocation-free.
 struct ProtectedOrder {
     char symbol[16];
     OrderSide side = OrderSide::BUY;
     std::int64_t qty_shares = 0;  // integer shares; <= 0 refused
     std::int64_t stop_cents = 0;  // broker-unit cents; <= 0 refused
     std::int64_t tp_cents = 0;    // <= 0 refused
-    char client_order_id[65];     // hex64, doc 06 6.1 recipe
+    char client_order_id[65];     // hex64 recipe
     char intent_id[65];
     Protection protection = Protection::BRACKET;  // OTO_STOP ignores tp_cents
     bool gtc = false;  // entry (and so its legs) good-till-cancelled
@@ -82,7 +79,7 @@ struct OrderQuery {
                             // collapsed
     char status_raw[32]{};  // verbatim venue status word (zero-filled when
                              // absent). The runner quarantines done_for_day /
-                             // calculated / replaced off this (doc 06); the
+                             // calculated / replaced off this; the
                              // normalized state cannot carry that distinction.
     bool protection_active = false;  // legs strictly proven (nested)
     bool bracket_class = false;  // bracket + TP/SL held as a unit, legs
@@ -115,7 +112,7 @@ struct CloseResult {
 };
 
 // CancelResult.accepted means "request accepted", never final cancellation.
-// The G0 runner owns the production seam: cancel_confirmed comes only from an
+// The paper runner owns the production seam: cancel_confirmed comes only from an
 // authoritative final observation (QueryOnce found+cancelled, or the
 // trade-update stream's terminal canceled event), with cancel_filled_qty from
 // that same observation. A bare 204 never reaches CANCELLED; the router
@@ -143,7 +140,7 @@ class IAdapter {
 // null/empty/short/uppercase/bad-hyphen/path-like/overlong.
 bool IsBrokerUuid(const char* s);
 
-// Client order ID (doc 06 6.1 recipe): one intent, one ID, no attempt field
+// Client order ID: one intent, one ID, no attempt field
 // (it would mint a fresh ID per retry and double-fill).
 // hex(sha256(broker|account|context|symbol|side|intent)) with 0x1F
 // separators. Returns false (out untouched) on empty fields or a short
@@ -153,10 +150,10 @@ bool MakeClientOrderId(const char* broker, const char* account,
                        const char* symbol, OrderSide side,
                        const char* intent_id, char* out65);
 
-// Paper fill model (doc 06 locked decisions, 2026-09-18): BUY at mid + one
+// Paper fill model: BUY at mid + one
 // full spread adverse, SELL at mid - one full spread adverse (minimum 1bp),
 // full size, flagged simulated, no partials. P&L against this model is
-// G1->G2 evidence (doc 10 10.2). Integer cents.
+// tiny to scaled evidence. Integer cents.
 struct Quote {
     std::int64_t mid_cents = 0;
     std::int64_t spread_cents = 0;  // full spread, >= 0
@@ -164,4 +161,4 @@ struct Quote {
 std::int64_t PaperFillPrice(OrderSide side, const Quote& q);
 
 }  // namespace broker
-}  // namespace jev
+}  // namespace kernel

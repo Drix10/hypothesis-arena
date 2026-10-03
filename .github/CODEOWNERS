@@ -4,7 +4,7 @@
 /.github/workflows/  @Drix10
 /.gitleaks.toml  @Drix10
 /scripts/pre-commit-secrets.sh  @Drix10
-/scripts/freeze-check.sh  @Drix10
+/scripts/check-manifest.sh  @Drix10
 /plan/system-manifest.yaml  @Drix10
 /plan/appendix/  @Drix10
 /kernel/exec/  @Drix10

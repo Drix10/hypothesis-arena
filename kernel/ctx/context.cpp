@@ -1,10 +1,11 @@
-// Slice G implementation. Canonical recipe: see snapshot.hpp.
+// Snapshot validation and canonical serialization. Canonical recipe: see
+// snapshot.hpp.
 #include "snapshot.hpp"
 
 #include <cstdio>
 
-#include "../jev_wire.hpp"  // jev::Sha256Hex (P3.1 primitive)
-#include "../stage/stage.hpp"   // Slice E stage vocabulary
+#include "../wire.hpp"  // kernel::Sha256Hex
+#include "../stage/stage.hpp"   // stage vocabulary
 
 namespace ctx {
 namespace {
@@ -28,7 +29,7 @@ bool NameOk(const std::string& s) {
 }
 
 bool Hex64(const std::string& s) {
-    // Lowercase 64-hex only, matching Slice C ingest (which rejects uppercase).
+    // Lowercase 64-hex only, matching ingest (which rejects uppercase).
     if (s.size() != 64) return false;
     for (char c : s) {
         if ((c < '0' || c > '9') && (c < 'a' || c > 'f')) return false;
@@ -147,12 +148,6 @@ std::string ValidateSnapshot(const Snapshot& s) {
         return "research-incoherent";  // revision 0 IS absent
     if (!(s.present_mask & kResearch) && has_research)
         return "research-ghost";
-    if (!s.calib.empty() && !IsCalib(s.calib)) return "calib";
-    bool has_calib = !s.calib.empty() || s.brier_d6 != 0;
-    if ((s.present_mask & kCalib) && s.calib.empty())
-        return "calib-incoherent";  // verdict is the section core;
-    if (!(s.present_mask & kCalib) && has_calib)
-        return "calib-ghost";
     bool has_settle = s.settled_cash_ud != 0 || s.unsettled_ud != 0 ||
                       s.next_settle_day != 0;
     if (!(s.present_mask & kSettlement) && has_settle)
@@ -165,16 +160,14 @@ std::string ValidateSnapshot(const Snapshot& s) {
         if ((s.unsettled_ud > 0) != (s.next_settle_day > 0))
             return "settlement-incoherent";
     }
-    if (s.present_mask & ~0xFFFu) return "mask-reserved";
+    if (s.present_mask & ~0x7FFu) return "mask-reserved";
     return "";
 }
 
 std::string CanonicalSnapshot(const Snapshot& s) {
     // Top-level keys ASCII-sorted; nested objects fixed order.
     std::string o = "{";
-    o += "\"brier_d6\":" + std::to_string(s.brier_d6);
-    o += ",\"buying_power_ud\":" + std::to_string(s.buying_power_ud);
-    o += ",\"calib\":" + Esc(s.calib);
+    o += "\"buying_power_ud\":" + std::to_string(s.buying_power_ud);
     o += ",\"equity_ud\":" + std::to_string(s.equity_ud);
     o += ",\"exposure_ud\":" + std::to_string(s.exposure_ud);
     std::string feat =
@@ -212,7 +205,6 @@ std::string CanonicalSnapshot(const Snapshot& s) {
              std::to_string(s.next_settle_day) + ",\"settled_cash_ud\":" +
              std::to_string(s.settled_cash_ud) + ",\"unsettled_ud\":" +
              std::to_string(s.unsettled_ud) + "}";
-        o += ",\"snapshot_version\":2";
     }
     o += ",\"sources\":[";
     for (size_t i = 0; i < s.sources.size(); ++i) {
@@ -229,7 +221,7 @@ std::string CanonicalSnapshot(const Snapshot& s) {
 }
 
 std::string ContextHash(const Snapshot& s) {
-    return jev::Sha256Hex(CanonicalSnapshot(s));
+    return kernel::Sha256Hex(CanonicalSnapshot(s));
 }
 
 }  // namespace ctx

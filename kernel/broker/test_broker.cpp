@@ -1,7 +1,7 @@
-// H1 gate [correctness]: broker recipe + Alpaca semantics proof.
+// Broker recipe + Alpaca semantics proof.
 // The fake transport asserts the protected-request shape (single
 // bracket: entry + TP + SL) and scripts acks; no live network exists
-// in H1. Usage: ./test_broker
+// in the router. Usage: ./test_broker
 #include <cstdio>
 #include <cstring>
 
@@ -19,14 +19,14 @@ static void Check(bool cond, const char* name) {
     }
 }
 
-using jev::broker::AlpacaPaperAdapter;
-using jev::broker::CloseState;
-using jev::broker::HttpRequest;
-using jev::broker::HttpResult;
-using jev::broker::OrderSide;
-using jev::broker::PaperFillPrice;
-using jev::broker::ProtectedOrder;
-using jev::broker::Quote;
+using kernel::broker::AlpacaPaperAdapter;
+using kernel::broker::CloseState;
+using kernel::broker::HttpRequest;
+using kernel::broker::HttpResult;
+using kernel::broker::OrderSide;
+using kernel::broker::PaperFillPrice;
+using kernel::broker::ProtectedOrder;
+using kernel::broker::Quote;
 
 static char g_last_method[16];
 static char g_last_path[256];
@@ -81,7 +81,7 @@ static bool Has(const char* body, const char* needle) {
 }
 
 int main() {
-    using jev::broker::MakeClientOrderId;
+    using kernel::broker::MakeClientOrderId;
     // 1. ID recipe: deterministic, namespaced, no attempt field
     {
         char a[65], b[65], c[65];
@@ -133,7 +133,7 @@ int main() {
                                  "i", nullptr),
               "id-rejects-null");
     }
-    // 1b. Identity-hash inputs are length-bounded (doc 06 6.1b): a full-width
+    // 1b. Identity-hash inputs are length-bounded: a full-width
     // unterminated context hashes exactly its 64 bytes, identical to the
     // NUL-terminated form and stable across different trailing garbage (else
     // order ids would differ across restarts and break pre-flight dedupe).
@@ -160,7 +160,7 @@ int main() {
             if (u[i] != v[i] || u[i] != w[i]) same = false;
         Check(same, "id-bounded-context");
     }
-    // 2. paper fill model (frozen): adverse full spread, min 1bp
+    // 2. paper fill model: adverse full spread, min 1bp
     {
         Quote q;
         q.mid_cents = 23110;
@@ -230,7 +230,7 @@ int main() {
         Check(Has(g_last_body, "take_profit"), "bracket-tp");
         Check(Has(g_last_body, "stop_loss"), "bracket-sl");
         Check(ack.accepted && ack.protection_accepted, "bracket-acked");
-        // P0-3: the accepted POST UUID is captured on the ack.
+        // the accepted POST UUID is captured on the ack.
         Check(Has(ack.broker_order_id,
                   "6d7c5cb4-2682-4a53-a742-5df876a2d1aa"),
               "post-uuid-captured");
@@ -285,7 +285,7 @@ int main() {
         auto ack8 = ad.SubmitProtected(o);
         Check(ack8.accepted && !ack8.protection_accepted,
               "untyped-leg-refused");
-        // P0-1: accepted/naked POST with real fills populates the
+        // accepted/naked POST with real fills populates the
         // ack quantity (never silent zero).
         g_reply =
             "{\"id\":\"6d7c5cb4-2682-4a53-a742-5df876a2d1aa\","
@@ -306,7 +306,7 @@ int main() {
         Check(!ackn.accepted && !ackn.transport_ok,
               "post-qty-malformed-ambiguous");
         g_status = 200;
-        // P1-1 legs representations: only null is constructive;
+        // legs representations: only null is constructive;
         // object/string/bool/empty-array/omitted -> unknown.
         const char* leg_shapes[5] = {
             "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\",\"filled_qty\":\"10\",\"order_class\":\"bracket\","
@@ -331,7 +331,7 @@ int main() {
                       !ql.bracket_class,
                   leg_names[li]);
         }
-        // P1-7 send outcomes: 400/422 permanent; 401/403 auth;
+        // send outcomes: 400/422 permanent; 401/403 auth;
         // 429 throttled; other-4xx/500/malformed-200 ambiguous
         // (reconcile, never terminal here).
         g_status = 422;
@@ -443,7 +443,7 @@ int main() {
         g_status = 422;
         auto c4 = ad.Cancel(q.broker_order_id);
         Check(!c4.accepted && c4.failed, "cancel-422-failed");
-        // P1-2 Cancel boundary: malformed/path-like IDs never touch
+        // Cancel boundary: malformed/path-like IDs never touch
         // the transport (no DELETE issued).
         g_status = 204;
         g_calls = 0;
@@ -488,7 +488,7 @@ int main() {
         Check(!q429.found && !q429.transport_ok && q429.rate_limited &&
                   q429.broker_status == 429,
               "query-429-rate");
-        // P0-3 query UUID grammar: short/upper/bad-hyphen/slash/
+        // query UUID grammar: short/upper/bad-hyphen/slash/
         // overlong ids are malformed (unknown), never found, never
         // reach DELETE.
         g_status = 200;
@@ -510,7 +510,7 @@ int main() {
             auto qb = ad.QueryOnce(id);
             Check(!qb.found && !qb.transport_ok, bad_names[bi]);
         }
-        // P1-6 filled_qty strict: missing/non-numeric/negative/
+        // filled_qty strict: missing/non-numeric/negative/
         // overlong qty is unknown, never silent zero.
         const char* bad_qty[4] = {
             "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\"}",
@@ -529,7 +529,7 @@ int main() {
             auto qq = ad.QueryOnce(id);
             Check(!qq.found && !qq.transport_ok, qty_names[qi]);
         }
-        // P0-1 by-client-ID shape: bracket held as a unit with legs
+        // by-client-ID shape: bracket held as a unit with legs
         // null (unexpanded) -> bracket_class, not protection-absent.
         g_reply =
             "{\"id\":\"0193abcd-1234-5678-9abc-def012345678\","
@@ -556,7 +556,7 @@ int main() {
         Check(qsmp.found && !qsmp.protection_active &&
                   !qsmp.bracket_class,
               "query-simple-no-bracket");
-        // P1-1 query status normalization (exit reconciliation
+        // query status normalization (exit reconciliation
         // reads this, not just filled/cancelled). Venue truth:
         // "partially_filled" is the order status (PARTIAL);
         // trade-event spellings never classify (checked below).
@@ -587,7 +587,7 @@ int main() {
             std::snprintf(qn, sizeof(qn), "query-status-%d", si);
             Check(qst.found && qst.close_state == want_st[si], qn);
         }
-        // Quarantine words never route DEAD (doc 06 locked):
+        // Quarantine words never route DEAD:
         // replaced may have a live replacement id; done_for_day /
         // calculated may resume tomorrow. UNKNOWN waits; the raw
         // word rides along for the runner freeze/alert.
@@ -682,7 +682,7 @@ int main() {
         Check(!ad.EstablishProtection(o) && g_calls == before,
               "repair-price-guard");
         // MarketClose posts a market order carrying the exit's stable
-        // client ID and reports the full close lifecycle (P0-2): a
+        // client ID and reports the full close lifecycle: a
         // 2xx + UUID alone never means executed.
         g_calls = 0;
         g_status = 200;
@@ -772,7 +772,7 @@ int main() {
         Check(!md.executed && md.transport_ok &&
                   md.state == CloseState::DEAD && md.filled_qty == 0,
               "close-dead-reissues");
-        // Frozen lifecycle matrix (Alpaca order/status + trade-event
+        // fixed lifecycle matrix (Alpaca order/status + trade-event
         // vocabulary): held / pending_replace / pending_cancel /
         // suspended / restated / order_replace_rejected /
         // order_cancel_rejected -> PENDING (the order is alive:
@@ -798,9 +798,7 @@ int main() {
                   "close-alive-waits");
         }
         // done_for_day / calculated / replaced -> UNKNOWN, never
-        // DEAD (doc 06 locked quarantine: may resume, or an
-        // unknown replacement may be live — the caller waits and
-        // freezes, never mints a duplicate close).
+        // DEAD.
         const char* gone[3] = {"done_for_day", "calculated",
                                "replaced"};
         for (int gi = 0; gi < 3; ++gi) {

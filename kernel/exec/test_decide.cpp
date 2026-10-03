@@ -16,32 +16,31 @@ static int fails = 0, count = 0;
         }                              \
     } while (0)
 
-using namespace jev;
-using namespace jev::exec;
+using namespace kernel;
+using namespace kernel::exec;
 
 static const int64_t NOW = 1800000000000000000LL;
-static const char* K[12] = {"strategy_version", "symbol", "snapshot_ts_ns",
-    "proposed_side", "proposed_family", "entry_px", "stop_px", "tp_px",
-    "time_exit_ns", "exit_profile_version", "cost_model_version",
-    "feature_revision"};
+static const char* K[11] = {"strategy_id", "symbol", "snapshot_ts_ns", "side",
+    "entry_px", "stop_px", "tp_px", "time_exit_ns", "exit_rule",
+    "cost_model", "feature_revision"};
 
 static std::string Rec(const std::string& side = "BUY",
                        const std::string& sym = "VTI",
-                       const std::string& sleeve = "trend_etf_v1",
+                       const std::string& strategy = "etf_trend",
                        int64_t age_s = 60,
-                       const std::string& profile = "exit_trend_v1") {
-    std::string f[12] = {sleeve, sym, std::to_string(NOW - age_s * 1000000000LL),
-                         side, "trend", "250.50",
+                       const std::string& profile = "exit_trend") {
+    std::string f[11] = {strategy, sym, std::to_string(NOW - age_s * 1000000000LL),
+                         side, "250.50",
                          side == "SELL" ? "999.00" : "230.00",
                          side == "SELL" ? "100.00" : "999.00", "0",
-                         profile, "cost_v2", "f1"};
+                         profile, "costs", "1"};
     std::string joined, cand;
-    for (int i = 0; i < 12; i++) {
+    for (int i = 0; i < 11; i++) {
         if (i) joined += "|";
         joined += f[i];
         cand += std::string("\"") + K[i] + "\":\"" + f[i] + "\",";
     }
-    return "{\"schema\":\"c1\",\"created_ns\":\"5\",\"candidate\":{" + cand +
+    return "{\"schema\":\"candidate\",\"created_ns\":\"5\",\"candidate\":{" + cand +
            "\"cid\":\"" + Sha256Hex(joined) + "\"}}";
 }
 
@@ -64,7 +63,7 @@ static EntryDecision Go(const std::string& rec, const risk::RiskSnapshot& st,
     JVal v;
     std::string err;
     if (!ParseJson(rec, v, err)) return EntryDecision();
-    if (t.sleeves.empty()) t.sleeves.push_back({"trend_etf_v1", 3600});
+    if (t.strategies.empty()) t.strategies.push_back({"etf_trend", 3600});
     if (t.allowlist.empty()) t.allowlist = {"VTI", "VEU", "IEF"};
     DecideInput in;
     in.record = &v;
@@ -76,22 +75,19 @@ static EntryDecision Go(const std::string& rec, const risk::RiskSnapshot& st,
 }
 
 static void ProtectionChecks() {
-    using jev::broker::Protection;
+    using kernel::broker::Protection;
     risk::RiskSnapshot st = Clean();
     EntryDecision t = Go(Rec(), st);
-    CHECK("trend-profile-bracket", t.proceed &&
+    CHECK("trend-rule-bracket", t.proceed &&
               t.intent.protection == Protection::BRACKET && t.intent.gtc);
-    EntryDecision p = Go(Rec("BUY", "VTI", "trend_etf_v1", 60, "exit_profile_v1"), st);
-    CHECK("plain-profile-bracket", p.proceed &&
-              p.intent.protection == Protection::BRACKET && p.intent.gtc);
-    EntryDecision i = Go(Rec("BUY", "VTI", "trend_etf_v1", 60, "exit_intraday_v1"), st);
-    CHECK("intraday-profile-oto-day", i.proceed &&
-              i.intent.protection == Protection::OTO_STOP && !i.intent.gtc);
-    EntryDecision e = Go(Rec("BUY", "VTI", "trend_etf_v1", 60, "exit_event_v1"), st);
-    CHECK("event-profile-oto-gtc", e.proceed &&
+    EntryDecision l = Go(Rec("BUY", "VTI", "etf_trend", 60, "exit_link"), st);
+    CHECK("link-rule-oto-gtc", l.proceed &&
+              l.intent.protection == Protection::OTO_STOP && l.intent.gtc);
+    EntryDecision e = Go(Rec("BUY", "VTI", "etf_trend", 60, "exit_event"), st);
+    CHECK("event-rule-oto-gtc", e.proceed &&
               e.intent.protection == Protection::OTO_STOP && e.intent.gtc);
-    EntryDecision u = Go(Rec("BUY", "VTI", "trend_etf_v1", 60, "exit_mystery_v9"), st);
-    CHECK("unknown-profile-held", !u.proceed && u.reason == "cand-exit-profile");
+    EntryDecision u = Go(Rec("BUY", "VTI", "etf_trend", 60, "exit_mystery"), st);
+    CHECK("unknown-rule-held", !u.proceed && u.reason == "cand-exit-rule");
 }
 
 int main() {
@@ -109,12 +105,12 @@ int main() {
                                   d.cid == std::string(d.intent.intent_id));
     CHECK("idempotent", Go(Rec(), Clean()).cid == d.cid);
 
-    CHECK("unapproved-sleeve",
+    CHECK("unapproved-strategy",
           Go(Rec("BUY", "VTI", "rogue"), Clean()).reason ==
-              "cand-sleeve-unapproved");
+              "cand-strategy-unapproved");
     CHECK("not-allowlisted", Go(Rec("BUY", "TSLA"), Clean()).reason ==
                                  "cand-not-allowlisted");
-    CHECK("stale", Go(Rec("BUY", "VTI", "trend_etf_v1", 7200), Clean()).reason ==
+    CHECK("stale", Go(Rec("BUY", "VTI", "etf_trend", 7200), Clean()).reason ==
                        "cand-stale-or-future");
     ingest::CandidateTables held;
     held.held = {"VTI"};
@@ -154,7 +150,7 @@ int main() {
                                 h.intent.scale_den == 2);
 
     s = Clean();
-    s.stage = risk::Stage::G1_TINY;  // quarter risk
+    s.stage = risk::Stage::TINY;  // quarter risk
     EntryDecision g1 = Go(Rec(), s);
     CHECK("stage-scales-size", g1.proceed && g1.intent.qty_shares == 3 &&
                                    g1.intent.stage_den == 4);

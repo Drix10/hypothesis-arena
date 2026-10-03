@@ -3,10 +3,10 @@
 #include <cstdio>
 #include <cstdlib>
 
-#include "../jev_wire.hpp"
+#include "../wire.hpp"
 #include "calendar.hpp"
 
-namespace jev {
+namespace kernel {
 namespace runner {
 namespace {
 
@@ -64,7 +64,7 @@ bool ParseApproved(const std::string& json, ingest::CandidateTables* out) {
     JVal v;
     std::string err;
     if (!ParseJson(json, v, err) || v.t != JVal::T::OBJ) return false;
-    const JVal* sl = Get(v, "sleeves");
+    const JVal* sl = Get(v, "strategies");
     const JVal* al = Get(v, "allowlist");
     if (!sl || sl->t != JVal::T::ARR || !al || al->t != JVal::T::ARR)
         return false;
@@ -75,12 +75,12 @@ bool ParseApproved(const std::string& json, ingest::CandidateTables* out) {
         if (e.t != JVal::T::OBJ || !id || id->t != JVal::T::STR || !w ||
             w->t != JVal::T::NUM || w->num_double)
             return false;
-        ingest::ApprovedSleeve a;
+        ingest::ApprovedStrategy a;
         a.id = U32ToUtf8(id->s);
         a.window_s = std::strtoll(w->num.c_str(), nullptr, 10);
         if (a.id.empty() || a.window_s <= 0 || a.window_s > 7 * 86400)
             return false;
-        t.sleeves.push_back(a);
+        t.strategies.push_back(a);
     }
     for (const JVal& e : al->a) {
         if (e.t != JVal::T::STR) return false;
@@ -88,7 +88,7 @@ bool ParseApproved(const std::string& json, ingest::CandidateTables* out) {
         if (!SafeSymbol(s)) return false;
         t.allowlist.push_back(s);
     }
-    if (t.sleeves.empty() || t.allowlist.empty()) return false;
+    if (t.strategies.empty() || t.allowlist.empty()) return false;
     *out = t;
     return true;
 }
@@ -136,4 +136,4 @@ bool ParseEarlyCloses(const std::string& json, std::set<int64_t>* early) {
 }
 
 }  // namespace runner
-}  // namespace jev
+}  // namespace kernel

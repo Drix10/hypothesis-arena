@@ -5,13 +5,12 @@ prices at two decimals, so the kernel recomputes the same digest."""
 import hashlib
 import json
 
-SCHEMA = "c1"  # the kernel gate rejects any other schema
+SCHEMA = "candidate"  # the kernel gate rejects any other schema
 
 # Identity recipe: pipe-joined, in this exact order. The kernel recomputes it
 # field for field.
-ID_FIELDS = ("strategy_version", "symbol", "snapshot_ts_ns", "proposed_side",
-             "proposed_family", "entry_px", "stop_px", "tp_px",
-             "time_exit_ns", "exit_profile_version", "cost_model_version",
+ID_FIELDS = ("strategy_id", "symbol", "snapshot_ts_ns", "side", "entry_px",
+             "stop_px", "tp_px", "time_exit_ns", "exit_rule", "cost_model",
              "feature_revision")
 
 
@@ -31,9 +30,8 @@ def _px(x):
 
 
 def wire_record(strategy, symbol, snapshot_ts_ns, entry, stop, tp,
-                time_exit_ns=0, side="BUY", family="trend",
-                exit_profile="exit_trend_v1", cost_model="cost_v2",
-                feature_revision="f1", created_ns=None):
+                time_exit_ns=0, side="BUY", exit_rule="exit_trend",
+                cost_model="costs", feature_revision="1", created_ns=None):
     if side not in ("BUY", "SELL"):
         raise WireError("side")
     e, s, t = _px(entry), _px(stop), _px(tp)
@@ -44,12 +42,11 @@ def wire_record(strategy, symbol, snapshot_ts_ns, entry, stop, tp,
         raise WireError("SELL needs tp < entry < stop")
     if snapshot_ts_ns < 0 or time_exit_ns < 0:
         raise WireError("timestamps")
-    f = {"strategy_version": strategy, "symbol": symbol,
-         "snapshot_ts_ns": str(int(snapshot_ts_ns)), "proposed_side": side,
-         "proposed_family": family, "entry_px": e, "stop_px": s, "tp_px": t,
-         "time_exit_ns": str(int(time_exit_ns)),
-         "exit_profile_version": exit_profile,
-         "cost_model_version": cost_model, "feature_revision": feature_revision}
+    f = {"strategy_id": strategy, "symbol": symbol,
+         "snapshot_ts_ns": str(int(snapshot_ts_ns)), "side": side,
+         "entry_px": e, "stop_px": s, "tp_px": t,
+         "time_exit_ns": str(int(time_exit_ns)), "exit_rule": exit_rule,
+         "cost_model": cost_model, "feature_revision": feature_revision}
     if any("|" in v for v in f.values()):
         raise WireError("separator in field")
     cand = dict(f, cid=candidate_id(**{k: f[k] for k in ID_FIELDS}))

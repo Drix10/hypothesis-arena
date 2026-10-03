@@ -1,4 +1,4 @@
-// Slice F gate [correctness]: ring/gap/backoff/session. Usage: ./test_feed
+// Feed: ring, gap, backoff and session. Usage: ./test_feed
 #include <cstdio>
 #include <string>
 

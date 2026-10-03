@@ -12,13 +12,13 @@
       "path": "AGENTS.md",
       "references": [
         {
-          "path": "plan/00-INDEX.md",
+          "path": "plan/README.md",
           "type": "file",
           "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
-          "path": "plan/07-build-roadmap.md",
+          "path": "plan/roadmap.md",
           "type": "file",
           "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
@@ -144,7 +144,7 @@
           "exists": true
         },
         {
-          "path": "scripts/freeze-check.sh",
+          "path": "scripts/check-manifest.sh",
           "type": "file",
           "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
@@ -162,12 +162,6 @@
           "exists": true
         },
         {
-          "path": "research/strategy/requirements.txt",
-          "type": "file",
-          "last_verified": "2026-10-03T06:52:42.586Z",
-          "exists": true
-        },
-        {
           "path": "collector/config.py",
           "type": "file",
           "last_verified": "2026-10-03T06:52:42.586Z",
@@ -180,7 +174,7 @@
           "exists": true
         },
         {
-          "path": "research/tests/test_core_passive.py",
+          "path": "research/tests/test_passive_core.py",
           "type": "file",
           "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
@@ -241,19 +235,7 @@
           "exists": true
         },
         {
-          "path": "kernel/jev_vectors/",
-          "type": "directory",
-          "last_verified": "2026-10-03T06:52:42.586Z",
-          "exists": true
-        },
-        {
-          "path": "research/strategy/gen_jev_vectors.py",
-          "type": "file",
-          "last_verified": "2026-10-03T06:52:42.586Z",
-          "exists": true
-        },
-        {
-          "path": "scripts/freeze-check.sh",
+          "path": "scripts/check-manifest.sh",
           "type": "file",
           "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
@@ -323,12 +305,6 @@
           "exists": true
         },
         {
-          "path": "research/tests/test_candidate.py",
-          "type": "file",
-          "last_verified": "2026-10-03T06:52:42.586Z",
-          "exists": true
-        },
-        {
           "path": "research/",
           "type": "directory",
           "last_verified": "2026-10-03T06:52:42.586Z",
@@ -354,7 +330,7 @@
     ".github/workflows/**",
     ".gitleaks.toml",
     "scripts/pre-commit-secrets.sh",
-    "scripts/freeze-check.sh",
+    "scripts/check-manifest.sh",
     "plan/system-manifest.yaml",
     "plan/appendix/**",
     "kernel/exec/**",
@@ -366,17 +342,17 @@
   "gates": [
     {
       "name": "collector",
-      "command": "for t in test_ctx test_jev test_pipeline test_config test_collect test_env_loading; do python3 collector/tests/$t.py || exit 1; done",
+      "command": "for t in test_ctx test_pipeline test_config test_collect test_env_loading; do python3 collector/tests/$t.py || exit 1; done",
       "timeout_seconds": 900
     },
     {
       "name": "research",
-      "command": "for t in test_alert_relay test_baseline test_bea test_bls test_costs_v2 test_costs_v3 test_deploy_check test_edgar test_forward_register test_fred test_gates test_form4 test_isolation test_jev_filter test_ledger test_earnings_surprise test_portfolio test_prereg test_settlement test_sip_fetch test_forward_eval test_forward_ledgers test_source_seam test_stats test_tier_a test_treasury; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
+      "command": "for t in test_alert_relay test_bea test_bls test_candidate_wire test_costs test_deploy_check test_earnings_surprise test_edgar test_forward_eval test_forward_ledgers test_forward_register test_form4 test_fred test_gates test_isolation test_ledger test_portfolio test_prereg test_settlement test_sip_fetch test_source_seam test_stats test_tier_a test_treasury; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
       "timeout_seconds": 1800
     },
     {
       "name": "research-posix",
-      "command": "for t in test_core_passive test_sources; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
+      "command": "for t in test_passive_core test_sources; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
       "os": [
         "linux"
       ],
@@ -386,11 +362,6 @@
       "name": "engine",
       "command": "for t in test_engine test_hardening test_emit test_seam_graph test_event_direction; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
       "timeout_seconds": 1800
-    },
-    {
-      "name": "research-pytest",
-      "command": "python3 -m pytest -q research/tests/test_candidate.py",
-      "timeout_seconds": 300
     },
     {
       "name": "collector-soak",
@@ -403,8 +374,8 @@
       "timeout_seconds": 300
     },
     {
-      "name": "freeze-check",
-      "command": "bash scripts/freeze-check.sh"
+      "name": "check-manifest",
+      "command": "bash scripts/check-manifest.sh"
     },
     {
       "name": "kernel",

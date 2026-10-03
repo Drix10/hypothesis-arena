@@ -1,4 +1,4 @@
-// Candidate -> order intent: candidate gate, sizing (doc 03 3.3) and veto.
+// Candidate -> order intent: candidate gate, sizing and veto.
 // Pure: account, market and clock arrive as inputs.
 #pragma once
 #include <cstdint>
@@ -6,16 +6,16 @@
 #include <string>
 
 #include "../ingest/candidates.hpp"
-#include "../jev_wire.hpp"
+#include "../wire.hpp"
 #include "../risk/veto.hpp"
 #include "router.hpp"
 
-namespace jev {
+namespace kernel {
 namespace exec {
 
 struct DecideInput {
     const JVal* record = nullptr;        // parsed candidates.jsonl line
-    ingest::CandidateTables tables;      // approved sleeves, allowlist, held
+    ingest::CandidateTables tables;      // approved strategies, allowlist, held
     int64_t now_ns = 0;
     risk::RiskSnapshot state;            // account + halt/kill/stage state
     int64_t risk_bp = 25;                // base risk budget (R)
@@ -25,7 +25,7 @@ struct DecideInput {
 
 struct EntryDecision {
     bool proceed = false;
-    std::string reason = "bad-inputs";   // frozen reason code when HOLD
+    std::string reason = "bad-inputs";   // fixed reason code when HOLD
     std::string limiter;                 // which sizing term bound the size
     std::string cid;                     // candidate id (also the intent id)
     std::string symbol;                  // candidate symbol once validated
@@ -37,4 +37,4 @@ struct EntryDecision {
 EntryDecision Decide(const DecideInput& in);
 
 }  // namespace exec
-}  // namespace jev
+}  // namespace kernel

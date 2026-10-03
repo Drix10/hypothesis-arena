@@ -1,13 +1,13 @@
-// H1 gate [drill]: randomized ordering, crash/restart, outage rows,
-// D+H1 integration, journal-only summary, redaction/retention.
+// Router drills: randomized ordering, crash/restart, outage rows,
+// router and kill integration, journal-only summary, redaction/retention.
 // Deterministic (seeded LCG, no RNG): every seed must converge to the
 // same broker-consistent final state. Usage: ./test_drills
 #include <cstdio>
 
 #include "../broker/adapter.hpp"
 #include "../broker/alpaca_paper.hpp"
-#include "../jev_wire.hpp"  // Sha256Hex for the test sink only
-#include "../kill/switch.hpp"   // D+H1: real level evaluation consumed
+#include "../wire.hpp"  // Sha256Hex for the test sink only
+#include "../kill/switch.hpp"   // router and kill: real level evaluation consumed
 #include "../log/journal.hpp"
 #include "../risk/veto.hpp"
 #include "router.hpp"
@@ -23,18 +23,18 @@ static void Check(bool cond, const char* name) {
     }
 }
 
-using jev::broker::OrderSide;
-using jev::exec::OrderIntent;
-using jev::exec::RestoreMachine;
-using jev::exec::RouteAction;
-using jev::exec::RouteMachine;
-using jev::exec::RouteObs;
-using jev::exec::RouteState;
-using jev::exec::SnapshotMachine;
-using jev::exec::VenueCtx;
-using jev::journal::Row;
-using jev::risk::IntentKind;
-using jev::risk::KillLevel;
+using kernel::broker::OrderSide;
+using kernel::exec::OrderIntent;
+using kernel::exec::RestoreMachine;
+using kernel::exec::RouteAction;
+using kernel::exec::RouteMachine;
+using kernel::exec::RouteObs;
+using kernel::exec::RouteState;
+using kernel::exec::SnapshotMachine;
+using kernel::exec::VenueCtx;
+using kernel::journal::Row;
+using kernel::risk::IntentKind;
+using kernel::risk::KillLevel;
 
 // Seeded LCG (test-only determinism; the kernel never rolls dice).
 static unsigned g_rng = 0x12345678;
@@ -114,7 +114,7 @@ static void SetUuid(char (&d)[64]) {
     d[36] = '\0';
 }
 // Distinct broker event: 32-hex id derived from seq + the seq itself
-// (P1-9: arrival permutes, identity/sequence ride the event).
+// (arrival permutes, identity/sequence ride the event).
 static void SetEvent(RouteObs& o, unsigned seq) {
     for (int i = 0; i < 32; ++i) {
         unsigned v = (seq * 7u + (unsigned)i * 13u) % 16u;
@@ -137,9 +137,9 @@ static char g_exit_first_id[65] = {0};
 static int g_exit_mode = 0;
 static long long g_exit_last_qty = 0;
 static long long g_exit_qtys[8] = {0, 0, 0, 0, 0, 0, 0, 0};
-static jev::broker::HttpResult FakeExit(
-    const jev::broker::HttpRequest& req) {
-    jev::broker::HttpResult r;
+static kernel::broker::HttpResult FakeExit(
+    const kernel::broker::HttpRequest& req) {
+    kernel::broker::HttpResult r;
     r.status = 200;
     char cid[65] = {0};
     const char* needle = "\"client_order_id\":\"";
@@ -224,9 +224,9 @@ static bool Has(const char* body, const char* needle) {
     }
     return false;
 }
-static jev::broker::HttpResult FakeE2E(
-    const jev::broker::HttpRequest& req) {
-    jev::broker::HttpResult r;
+static kernel::broker::HttpResult FakeE2E(
+    const kernel::broker::HttpRequest& req) {
+    kernel::broker::HttpResult r;
     const char* m = req.method;
     bool is_post = m[0] == 'P' && m[1] == 'O';
     bool is_del = m[0] == 'D' && m[1] == 'E' && m[2] == 'L';
@@ -272,7 +272,7 @@ struct Sink {
     const char* hex =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     bool append(const char* kind, const char* intent, const char* body) {
-        if (n >= 64 || !jev::journal::RedactionOk(body)) return false;
+        if (n >= 64 || !kernel::journal::RedactionOk(body)) return false;
         // Chain link (no temporaries: genesis is 64 zeros inline).
         char prevbuf[65];
         if (n == 0) {
@@ -286,11 +286,11 @@ struct Sink {
         char pay[65];
         {
             // payload digest over the redacted body (bounded test sink).
-            std::string h = jev::Sha256Hex(body);
+            std::string h = kernel::Sha256Hex(body);
             for (int i = 0; i < 64; ++i) pay[i] = h[i];
             pay[64] = '\0';
         }
-        if (!jev::journal::FormatRow(seq, 1000 + seq * 100, kind,
+        if (!kernel::journal::FormatRow(seq, 1000 + seq * 100, kind,
                                      intent, pay, prevbuf, &rows[n]))
             return false;
         ++n;
@@ -298,7 +298,7 @@ struct Sink {
         return true;
     }
     bool verify() const {
-        return jev::journal::VerifyChain(rows, n);
+        return kernel::journal::VerifyChain(rows, n);
     }
 };
 
@@ -321,7 +321,7 @@ struct Drive {
         RouteObs tagged = o;
         if (m.state != RouteState::IDLE && m.client_id[0] != '\0')
             Tag(tagged, m);
-        auto r = jev::exec::RouteStep(m, c.in, c.venue, tagged);
+        auto r = kernel::exec::RouteStep(m, c.in, c.venue, tagged);
         if (r.action == RouteAction::WRITE_JOURNAL ||
             r.action == RouteAction::JOURNAL_FILL ||
             r.action == RouteAction::JOURNAL_PARTIAL ||
@@ -358,7 +358,7 @@ static bool SameTrace(const Drive& a, const Drive& b) {
 }
 
 int main() {
-    using jev::exec::RouteStep;
+    using kernel::exec::RouteStep;
     // 1. randomized duplicate/redundant delivery: one broker reality
     // expressed as full consistent observations, delivered in rotated
     // orders with duplicates. Every seed must converge to the same
@@ -444,7 +444,7 @@ int main() {
         confirmEv.cancel_filled_qty = 40;  // authoritative final qty
         confirmEv.repair_ok = true;  // filled qty re-protected after cancel
         RouteObs dupEv = queryEv;
-        // P1-9: each distinct event bears identity+sequence (arrival
+        // each distinct event bears identity+sequence (arrival
         // permutes below; identity/sequence never do). The duplicate
         // preserves the query event's exact identity.
         SetEvent(ackEv, 1);
@@ -606,7 +606,7 @@ int main() {
             Check(ok && intents == 1 && sink.verify(), name);
         }
     }
-    // 3. outage rows (§6.2a mapped to router inputs): new risk stops,
+    // 3. outage rows (mapped to router inputs): new risk stops,
     // old risk stays managed (exits alive in every row).
     {
         Ctx c = GoodCtx("intent-003", "AAPL");
@@ -625,14 +625,14 @@ int main() {
                   RouteAction::WRITE_JOURNAL,
               "outage-feed-exit-alive");
         // broker down (unwired adapter refuses; router journals cancel)
-        jev::broker::AlpacaPaperAdapter dead(nullptr);
-        jev::broker::ProtectedOrder po;
+        kernel::broker::AlpacaPaperAdapter dead(nullptr);
+        kernel::broker::ProtectedOrder po;
         po.symbol[0] = 'A';
         po.symbol[1] = 'A';
         po.symbol[2] = 'P';
         po.symbol[3] = 'L';
         po.symbol[4] = '\0';
-        po.side = jev::broker::OrderSide::BUY;
+        po.side = kernel::broker::OrderSide::BUY;
         po.qty_shares = 100;
         po.stop_cents = 22000;
         po.tp_cents = 24000;
@@ -654,23 +654,23 @@ int main() {
         auto e3b = RouteStep(e2.next, c.in, c.venue, o2b);
         Check(e3b.action == RouteAction::QUERY_ONCE,
               "outage-broker-ambiguity-reconciles");
-        // JEV down -> SOFT via the real Slice D evaluator (no D change:
-        // H1 consumes the level as a frozen input).
-        jev::kill::KillInputs ki;
-        ki.jev_streak_s5 = true;
-        auto lvl = jev::kill::EvaluateLevel(ki);
+        // HALT file -> SOFT via the real kill evaluator (the router
+        // consumes the level as an input).
+        kernel::kill::KillInputs ki;
+        ki.halt_file = true;
+        auto lvl = kernel::kill::EvaluateLevel(ki);
         Check(lvl.level == KillLevel::SOFT, "outage-d-level");
         RouteMachine m3;
         RouteObs o3 = OpenMarket();
         o3.kill = lvl.level;
         Check(RouteStep(m3, c.in, c.venue, o3).action ==
                   RouteAction::REJECT,
-              "outage-jev-blocks-entry");
+              "outage-soft-blocks-entry");
         RouteMachine me3;
         me3.kind = IntentKind::EXIT;
         Check(RouteStep(me3, ex, c.venue, o3).action ==
                   RouteAction::WRITE_JOURNAL,
-              "outage-jev-exit-alive");
+              "outage-soft-exit-alive");
         // journal chain break -> HARD blocks entries, exits alive.
         RouteMachine m4;
         RouteObs o4 = OpenMarket();
@@ -710,7 +710,7 @@ int main() {
         o.repair_ok = true;
         // capture the journal row the action demands, validate it
         Tag(o, d.m);  // direct call: attribute explicitly
-        auto r = jev::exec::RouteStep(d.m, c.in, c.venue, o);
+        auto r = kernel::exec::RouteStep(d.m, c.in, c.venue, o);
         Check(r.action == RouteAction::JOURNAL_REPAIR, "repair-action");
         bool kind_ok = true;
         {
@@ -733,10 +733,10 @@ int main() {
             prevbuf[64] = '\0';
         }
         Row row;
-        bool wok = jev::journal::FormatRow(7, 7000, r.journal_kind,
+        bool wok = kernel::journal::FormatRow(7, 7000, r.journal_kind,
                                            c.in.intent_id, sink.hex,
                                            prevbuf, &row);
-        Check(wok && jev::journal::VerifyRow(row), "repair-journal-ok");
+        Check(wok && kernel::journal::VerifyRow(row), "repair-journal-ok");
     }
     // 5. journal-only summary: counts derivable from rows alone; the
     // chain verifies over the whole drill sink.
@@ -767,7 +767,7 @@ int main() {
                      sink.rows[i].seq == (unsigned)i;
         Check(fields, "summary-fields");
     }
-    // 6. P0-3 end-to-end: accepted-but-unprotected POST carries the
+    // 6. end-to-end: accepted-but-unprotected POST carries the
     // broker UUID into the machine, across snapshot/restart, into
     // the exact DELETE path (no hidden lookup anywhere).
     {
@@ -780,13 +780,13 @@ int main() {
         Check(d.m.state == RouteState::SENT_UNACKED, "e2e-sent");
         // Real adapter over a fake transport: POST replies accepted
         // with a broker UUID but no legs proof.
-        jev::broker::AlpacaPaperAdapter ad(FakeE2E);
-        jev::broker::ProtectedOrder po;
+        kernel::broker::AlpacaPaperAdapter ad(FakeE2E);
+        kernel::broker::ProtectedOrder po;
         po.symbol[0] = 'S';
         po.symbol[1] = 'P';
         po.symbol[2] = 'Y';
         po.symbol[3] = '\0';
-        po.side = jev::broker::OrderSide::BUY;
+        po.side = kernel::broker::OrderSide::BUY;
         po.qty_shares = 10;
         po.stop_cents = 50000;
         po.tp_cents = 52000;
@@ -828,10 +828,10 @@ int main() {
                       "0193abcd-1234-5678-9abc-def012345678"),
               "e2e-delete-uses-uuid");
     }
-    // 7. P0-2 exit sub-identity E2E (fake transport): first close
+    // 7. exit sub-identity E2E (fake transport): first close
     // uses ID X; broker reports DEAD; NO second POST carries X;
     // recovery mints deterministic Y attributable to the intent.
-    // P1-2 cancel seam: cancel_confirmed comes only from a
+    // cancel seam: cancel_confirmed comes only from a
     // found+cancelled query mapped with its authoritative qty —
     // bare 204s never terminal (proven by repetition).
     {
@@ -844,7 +844,7 @@ int main() {
         d.step(c, o, &sink);  // WRITE
         d.step(c, o, &sink);  // EXECUTE_EXIT
         Check(d.m.state == RouteState::EXIT_SENT, "xid-armed");
-        jev::broker::AlpacaPaperAdapter ad(FakeExit);
+        kernel::broker::AlpacaPaperAdapter ad(FakeExit);
         char xid[65];
         for (int i = 0; i < 65; ++i) xid[i] = d.m.client_id[i];
         // First close POST carries X at the authorized qty.
@@ -852,14 +852,14 @@ int main() {
                                  OrderSide::SELL, xid);
         Check(d.last_exit_qty == 100, "xid-first-qty");
         Check(g_exit_posts == 1 && Has(g_exit_last_id, xid) &&
-                  c1.state == jev::broker::CloseState::PENDING,
+                  c1.state == kernel::broker::CloseState::PENDING,
               "xid-first-post");
         // Broker definitively reports DEAD -> new identity, attempt 1.
         RouteObs od = OpenMarket();
         od.exit_responded = true;
         od.exit_ack = c1;
         od.exit_ack.transport_ok = true;
-        od.exit_ack.state = jev::broker::CloseState::DEAD;
+        od.exit_ack.state = kernel::broker::CloseState::DEAD;
         d.step(c, od, &sink);
         Check(d.m.state == RouteState::EXIT_SENT &&
                   d.m.exit_attempt == 1,
@@ -877,7 +877,7 @@ int main() {
         Check(d.last_exit_qty == 100, "xid-second-qty");
         Check(g_exit_posts == 2 && Has(g_exit_last_id, yid) &&
                   !Has(g_exit_last_id, xid) &&
-                  c2.state == jev::broker::CloseState::FILLED,
+                  c2.state == kernel::broker::CloseState::FILLED,
               "xid-second-post-new-id");
         // No POST in the log ever reused X.
         Check(g_exit_x_posts == 1, "xid-never-reused");
@@ -887,7 +887,7 @@ int main() {
         of.exit_ack = c2;
         d.step(c, of, &sink);
         Check(d.m.state == RouteState::CLOSED, "xid-closed");
-        // P1-2: three bare-204 accepts in a row never terminal.
+        // three bare-204 accepts in a row never terminal.
         Ctx c2x = GoodCtx("intent-008", "SPY");
         Drive d2;
         RouteObs o2 = OpenMarket();
@@ -909,7 +909,7 @@ int main() {
             d2.step(c2x, oa2, &sink);
         }
         Check(d2.m.state == RouteState::CANCEL_SENT, "seam-no-bare-204");
-        // The seam: G0 maps a found+cancelled query (with its
+        // The seam: paper stage maps a found+cancelled query (with its
         // authoritative qty) to cancel_confirmed + cancel_filled_qty.
         // Status rides the same observation (DEAD here); the mapping
         // — never a bare 204 — is what terminals the machine.
@@ -921,7 +921,7 @@ int main() {
         Check(d2.m.state == RouteState::CANCELLED && sink.verify(),
               "seam-rests");
     }
-    // 8. P0-2 partial-DEAD E2E (adapter + router + restart): intent
+    // 8. partial-DEAD E2E (adapter + router + restart): intent
     // 100 -> X posts 100 -> X canceled after filling 40 -> Y mints
     // for exactly 60 -> Y fills 60 -> CLOSED at 100. No overshoot,
     // no X reuse, remaining + sub-ID survive every restart.
@@ -939,7 +939,7 @@ int main() {
         d.step(c, o, &sink);
         d.step(c, o, &sink);
         Check(d.m.state == RouteState::EXIT_SENT, "px-armed");
-        jev::broker::AlpacaPaperAdapter ad(FakeExit);
+        kernel::broker::AlpacaPaperAdapter ad(FakeExit);
         // X posts the router-authorized full 100 (first exit
         // carries intent qty).
         char xid[65];
@@ -948,7 +948,7 @@ int main() {
                                  OrderSide::SELL, xid);
         Check(d.last_exit_qty == 100, "px-first-qty-100");
         Check(g_exit_posts == 1 && g_exit_last_qty == 100 &&
-                  x0.state == jev::broker::CloseState::PENDING,
+                  x0.state == kernel::broker::CloseState::PENDING,
               "px-first-post-100");
         // PENDING reconciles; restart before the query lands.
         RouteObs op = OpenMarket();
@@ -969,7 +969,7 @@ int main() {
         oq.query.found = true;
         oq.query.cancelled = true;
         oq.query.filled_qty = 40;
-        oq.query.close_state = jev::broker::CloseState::DEAD;
+        oq.query.close_state = kernel::broker::CloseState::DEAD;
         SetUuid(oq.query.broker_order_id);
         d1.step(c, oq, &sink);
         Check(d1.m.state == RouteState::EXIT_SENT &&
@@ -1000,7 +1000,7 @@ int main() {
         auto y0 = ad.MarketClose("SPY", re_qty,
                                  OrderSide::SELL, yid);
         Check(g_exit_posts == 2 && g_exit_last_qty == 60 &&
-                  y0.state == jev::broker::CloseState::FILLED &&
+                  y0.state == kernel::broker::CloseState::FILLED &&
                   y0.filled_qty == 60,
               "px-second-post-60");
         Check(g_exit_x_posts == 1 && g_exit_qtys[0] == 100 &&
@@ -1043,13 +1043,13 @@ int main() {
         Check(d.m.state == RouteState::EXIT_EMERGENCY &&
                   d.m.emergency && d.last_exit_qty == 100,
               "pem-armed");
-        jev::broker::AlpacaPaperAdapter ad(FakeExit);
+        kernel::broker::AlpacaPaperAdapter ad(FakeExit);
         char xid[65];
         for (int i = 0; i < 65; ++i) xid[i] = d.m.client_id[i];
         auto x0 = ad.MarketClose("SPY", d.last_exit_qty,
                                  OrderSide::SELL, xid);
         Check(g_exit_posts == 1 && g_exit_last_qty == 100 &&
-                  x0.state == jev::broker::CloseState::PENDING,
+                  x0.state == kernel::broker::CloseState::PENDING,
               "pem-first-post-100");
         // PENDING reconciles; the query reports X canceled+40.
         RouteObs op = OpenMarket();
@@ -1063,7 +1063,7 @@ int main() {
         oq.query.found = true;
         oq.query.cancelled = true;
         oq.query.filled_qty = 40;
-        oq.query.close_state = jev::broker::CloseState::DEAD;
+        oq.query.close_state = kernel::broker::CloseState::DEAD;
         SetUuid(oq.query.broker_order_id);
         d.step(c, oq, &sink);
         Check(d.m.state == RouteState::EXIT_SENT &&
@@ -1086,7 +1086,7 @@ int main() {
         auto y0 =
             ad.MarketClose("SPY", re_qty, OrderSide::SELL, yid);
         Check(re_qty == 60 && g_exit_last_qty == 60 &&
-                  y0.state == jev::broker::CloseState::FILLED,
+                  y0.state == kernel::broker::CloseState::FILLED,
               "pem-second-post-60");
         RouteObs of = OpenMarket();
         of.exit_responded = true;

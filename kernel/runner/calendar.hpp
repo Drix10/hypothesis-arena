@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <set>
 
-namespace jev {
+namespace kernel {
 namespace runner {
 
 // UTC offset of America/New_York at `utc_s`, in seconds (-14400 or -18000).
@@ -28,4 +28,4 @@ int ExpectedBarsBetween(int64_t last_bar_start_utc_s, int64_t now_utc_s,
 int LastBarHour(int64_t day, const std::set<int64_t>* early);
 
 }  // namespace runner
-}  // namespace jev
+}  // namespace kernel

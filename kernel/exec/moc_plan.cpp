@@ -1,6 +1,6 @@
 #include "moc_plan.hpp"
 
-namespace jev {
+namespace kernel {
 namespace exec {
 
 MocAction PlanMoc(const MocInput& in) {
@@ -24,7 +24,7 @@ MocAction PlanMoc(const MocInput& in) {
         case MocState::NOT_SENT:
             // Check cutoff first: if missed, stay protected (don't try MOC).
             if (in.now_s >= in.moc_cutoff_s) return MocAction::KEEP_PROTECTED;
-            // Alpaca rejects MOC while stop is live (K5 live finding 2026-09-29).
+            // Alpaca rejects MOC while stop is live.
             // Cancel stop first, then try MOC in next cycle.
             if (in.stop == StopState::LIVE) return MocAction::CANCEL_STOP;
             return MocAction::SUBMIT_MOC;
@@ -47,4 +47,4 @@ const char* MocActionName(MocAction a) {
 }
 
 }  // namespace exec
-}  // namespace jev
+}  // namespace kernel

@@ -1,14 +1,11 @@
-// P3.5 Slice B — veto unit suite (cases derived from doc 05 rules +
-// doc 03 §3.2/§3.3 boundaries). Pure structs only; the two composed rows
-// use the frozen P3.3 table as a tool (modifies nothing) to prove
-// veto+table agreement end to end.
+// Veto unit suite. Pure structs only.
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 
-#include "../jev_filter.hpp"
-#include "../jev_wire.hpp"
 #include "veto.hpp"
 
 static int fails = 0;
@@ -26,10 +23,10 @@ static const int64_t NOW = 1800000000000000LL;
 static const int64_t HOUR = 3600LL * 1000000LL;
 static const int64_t DAY = 24LL * HOUR;
 
-using namespace jev;
-using namespace jev::risk;
+using namespace kernel;
+using namespace kernel::risk;
 
-// A clean G0 snapshot that must PROCEED ($100k equity, all gates open).
+// A clean paper-stage snapshot that must PROCEED ($100k equity, all gates open).
 static RiskSnapshot Clean() {
     RiskSnapshot s;
     s.equity_cents = 10000000LL;  // $100,000.00
@@ -64,38 +61,27 @@ static void AddPending(RiskSnapshot& s, const std::string& sym, Side side,
     p.notional_cents = cents;
     s.pending.push_back(p);
 }
-static std::string read_all(const char* path) {
-    std::string out;
-    char buf[4096];
-    FILE* f = fopen(path, "rb");
-    if (!f) return out;
-    size_t n;
-    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
-    fclose(f);
-    return out;
-}
-
-int main(int argc, char** argv) {
+int main() {
     // ---- Stage table + parsing ----
-    CHECK("g0-mult", ScaleFor(Stage::G0_PAPER).mult_num == 1 &&
-                         ScaleFor(Stage::G0_PAPER).mult_den == 1 &&
-                         ScaleFor(Stage::G0_PAPER).symbols == 5);
-    CHECK("g1-mult", ScaleFor(Stage::G1_TINY).mult_num == 1 &&
-                         ScaleFor(Stage::G1_TINY).mult_den == 4 &&
-                         ScaleFor(Stage::G1_TINY).symbols == 1);
-    CHECK("g2-mult", ScaleFor(Stage::G2_SCALED).mult_num == 1 &&
-                         ScaleFor(Stage::G2_SCALED).mult_den == 2 &&
-                         ScaleFor(Stage::G2_SCALED).symbols == 3);
-    CHECK("g3-mult", ScaleFor(Stage::G3_FULL).mult_num == 1 &&
-                         ScaleFor(Stage::G3_FULL).mult_den == 1);
-    CHECK("parse-stages", ParseStage("G0_PAPER") == Stage::G0_PAPER &&
-                              ParseStage("G1_TINY") == Stage::G1_TINY &&
-                              ParseStage("G2_SCALED") == Stage::G2_SCALED &&
-                              ParseStage("G3_FULL") == Stage::G3_FULL &&
+    CHECK("g0-mult", ScaleFor(Stage::PAPER).mult_num == 1 &&
+                         ScaleFor(Stage::PAPER).mult_den == 1 &&
+                         ScaleFor(Stage::PAPER).symbols == 5);
+    CHECK("g1-mult", ScaleFor(Stage::TINY).mult_num == 1 &&
+                         ScaleFor(Stage::TINY).mult_den == 4 &&
+                         ScaleFor(Stage::TINY).symbols == 1);
+    CHECK("g2-mult", ScaleFor(Stage::SCALED).mult_num == 1 &&
+                         ScaleFor(Stage::SCALED).mult_den == 2 &&
+                         ScaleFor(Stage::SCALED).symbols == 3);
+    CHECK("g3-mult", ScaleFor(Stage::FULL).mult_num == 1 &&
+                         ScaleFor(Stage::FULL).mult_den == 1);
+    CHECK("parse-stages", ParseStage("PAPER") == Stage::PAPER &&
+                              ParseStage("TINY") == Stage::TINY &&
+                              ParseStage("SCALED") == Stage::SCALED &&
+                              ParseStage("FULL") == Stage::FULL &&
                               ParseStage("G9") == Stage::UNKNOWN &&
                               ParseStage("") == Stage::UNKNOWN);
 
-    // ---- K6 formulas ----
+    // ---- snapshot formulas ----
     {
         RiskSnapshot s = Clean();
         AddPending(s, "EURUSD", Side::LONG, 2000000LL);   // $20k
@@ -114,49 +100,13 @@ int main(int argc, char** argv) {
                               BuyingPower(e) == 10000000LL);
     }
 
-    // ---- Filter policy: none never reads the JEV-derived inputs ----
+    // ---- Conflicting evidence holds ----
     {
         RiskSnapshot s = Clean();
         s.disagreement = true;
-        s.brier_delta = 0.05;
-        s.realized_outcomes = 50;
-        s.calib = CalibState::BREACH;
-        VetoVerdict f = EvaluateVeto(s);
-        CHECK("filter-v4-holds-on-jev-inputs",
-              !f.proceed && std::string(f.reason) == "disagreement");
-        s.filter = FilterPolicy::NONE;
-        VetoVerdict n = EvaluateVeto(s);
-        CHECK("filter-none-ignores-jev-inputs",
-              n.proceed && std::string(n.reason) == "proceed");
-        EngineInputs in = BuildEngineInputs(s, n);
-        CHECK("filter-none-engine-inputs",
-              !in.disagreement &&
-                  in.calibration_gate == CalibrationGate::PASS);
-        // Where the filter passes, both policies are bit-identical.
-        RiskSnapshot c = Clean();
-        VetoVerdict a = EvaluateVeto(c);
-        c.filter = FilterPolicy::NONE;
-        VetoVerdict b = EvaluateVeto(c);
-        CHECK("filter-policies-identical-when-filter-passes",
-              a.proceed == b.proceed &&
-                  std::strcmp(a.reason, b.reason) == 0 &&
-                  a.n_reasons == b.n_reasons && a.size_scale == b.size_scale &&
-                  a.stage_num == b.stage_num && a.stage_den == b.stage_den &&
-                  a.drift_idx == b.drift_idx && a.escalate == b.escalate);
-        RiskSnapshot c2 = Clean();
-        c2.calib = CalibState::PASS;  // the filter passes
-        EngineInputs e1 = BuildEngineInputs(c2, EvaluateVeto(c2));
-        c2.filter = FilterPolicy::NONE;
-        EngineInputs e2 = BuildEngineInputs(c2, EvaluateVeto(c2));
-        CHECK("filter-engine-inputs-identical-when-filter-passes",
-              e1.disagreement == e2.disagreement &&
-                  e1.event_blackout == e2.event_blackout &&
-                  e1.calibration_gate == e2.calibration_gate &&
-                  e1.r6_vol_trip == e2.r6_vol_trip &&
-                  e1.exposure_headroom_r2 == e2.exposure_headroom_r2 &&
-                  e1.pending_risk_breach == e2.pending_risk_breach &&
-                  e1.deterministic_veto == e2.deterministic_veto &&
-                  e1.veto_reason == e2.veto_reason);
+        VetoVerdict v = EvaluateVeto(s);
+        CHECK("disagreement-holds",
+              !v.proceed && std::string(v.reason) == "disagreement");
     }
 
     // ---- Clean proceeds ----
@@ -176,8 +126,6 @@ int main(int argc, char** argv) {
         VetoVerdict v = EvaluateVeto(s);
         CHECK("exit-bypass",
               v.proceed && std::string(v.reason) == "exit-bypass");
-        EngineInputs in = BuildEngineInputs(s, v);
-        CHECK("exit-no-veto", !in.deterministic_veto);
     }
     // ---- bad-inputs ----
     {
@@ -207,12 +155,8 @@ int main(int argc, char** argv) {
         s.equity_cents = 8999999LL;
         VetoVerdict v = EvaluateVeto(s);
         CHECK("r5-verdict", !v.proceed && std::string(v.reason) == "r5-loss-cap");
-        EngineInputs in = BuildEngineInputs(s, v);
-        CHECK("r5-enum",
-              in.deterministic_veto &&
-                  in.veto_reason == VetoReason::LOSS_CAP_R5);
     }
-    // ---- §5.2 stop + leverage ----
+    // ---- stop + leverage ----
     {
         RiskSnapshot s = Clean();
         s.intent.has_stop = false;
@@ -229,7 +173,7 @@ int main(int argc, char** argv) {
                   std::string(v.reason) == "r2-single");
         s.intent.notional_cents = 50000001LL;  // over 5x
         v = EvaluateVeto(s);
-        // leverage precedes r2 in the frozen order; both preserved
+        // leverage precedes r2 in the fixed order; both preserved
         CHECK("lev5x-over",
               !v.proceed && v.n_reasons >= 2 &&
                   std::string(v.reasons_all[0]) == "leverage-cap" &&
@@ -322,8 +266,6 @@ int main(int argc, char** argv) {
         s.session_open = false;
         VetoVerdict v = EvaluateVeto(s);
         CHECK("session", !v.proceed && std::string(v.reason) == "session-closed");
-        EngineInputs in = BuildEngineInputs(s, v);
-        CHECK("session-enum", in.veto_reason == VetoReason::SESSION_CLOSED);
         s = Clean();
         s.intent.asset = AssetClass::STOCK;
         s.intent.side = Side::SHORT;
@@ -363,14 +305,10 @@ int main(int argc, char** argv) {
         s.r6_available = false;
         VetoVerdict v = EvaluateVeto(s);
         CHECK("r6-unavail", !v.proceed && std::string(v.reason) == "r6-unavailable");
-        EngineInputs in = BuildEngineInputs(s, v);
-        CHECK("r6-enum", in.veto_reason == VetoReason::VOL_TRIP_R6);
         s = Clean();
         s.r6_trip = true;  // trip halves, never holds
         v = EvaluateVeto(s);
         CHECK("r6-trip-scale", v.proceed && v.size_scale == 0.5);
-        in = BuildEngineInputs(s, v);
-        CHECK("r6-trip-flag", in.r6_vol_trip && !in.deterministic_veto);
         s = Clean();
         s.r7_available = false;
         v = EvaluateVeto(s);
@@ -380,7 +318,7 @@ int main(int argc, char** argv) {
         v = EvaluateVeto(s);
         CHECK("r7-corr", !v.proceed && std::string(v.reason) == "r7-correlation");
     }
-    // ---- R1 counts (G0: cap 3; direction 2) ----
+    // ---- R1 counts (paper stage: cap 3; direction 2) ----
     {
         // 3rd position allowed (opens are SHORT so the direction cap —
         // 2 same-side — stays out of the way of the LONG intent).
@@ -418,14 +356,9 @@ int main(int argc, char** argv) {
         v = EvaluateVeto(s);
         CHECK("r1-pend-risk",
               !v.proceed && std::string(v.reason) == "pending-risk");
-        EngineInputs in = BuildEngineInputs(s, v);
-        CHECK("r1-pend-enum",
-              in.deterministic_veto &&
-                  in.veto_reason == VetoReason::PENDING_RISK &&
-                  in.pending_risk_breach);
-        // G1: exactly 1 slot (intent sized to the G1 6.25% single cap)
+        // tiny stage: exactly 1 slot (intent sized to the tiny stage 6.25% single cap)
         s = Clean();
-        s.stage = Stage::G1_TINY;
+        s.stage = Stage::TINY;
         s.intent.notional_cents = 625000LL;
         v = EvaluateVeto(s);
         CHECK("g1-first", v.proceed);
@@ -461,9 +394,9 @@ int main(int argc, char** argv) {
         v = EvaluateVeto(s);
         CHECK("r2-pend-risk",
               !v.proceed && std::string(v.reason) == "pending-risk");
-        // G1 scaled single: 100k * 1/16 = $6,250.00 exactly
+        // tiny stage scaled single: 100k * 1/16 = $6,250.00 exactly
         s = Clean();
-        s.stage = Stage::G1_TINY;
+        s.stage = Stage::TINY;
         s.intent.notional_cents = 625000LL;
         v = EvaluateVeto(s);
         CHECK("g1-r2-exact", v.proceed);
@@ -494,9 +427,9 @@ int main(int argc, char** argv) {
         s.hour_bucket = -5;
         v = EvaluateVeto(s);
         CHECK("r3-stale-reset", v.proceed);
-        // G1 day cap is 5 (intent sized to the G1 single cap)
+        // tiny stage day cap is 5 (intent sized to the tiny stage single cap)
         s = Clean();
-        s.stage = Stage::G1_TINY;
+        s.stage = Stage::TINY;
         s.intent.notional_cents = 625000LL;
         s.day_count = 4;
         v = EvaluateVeto(s);
@@ -529,7 +462,7 @@ int main(int argc, char** argv) {
         v = EvaluateVeto(s);
         CHECK("r4-symbol", v.proceed);
         // corrupt history (t2 < t1) is malformed input, not an
-        // expired lock: bad-inputs (structural validation, correction).
+        // expired lock: bad-inputs.
         s.flip_symbol = "EURUSD";
         s.flip_t1_us = NOW;
         s.flip_t2_us = NOW - 1000LL;
@@ -593,32 +526,12 @@ int main(int argc, char** argv) {
                   v.drift_idx == 0 &&
                   s5.drift[(size_t)v.drift_idx].symbol == "EEE");
     }
-    // ---- R14 / R13 / halt / kill + precedence ----
+    // ---- R14 / halt / kill + precedence ----
     {
         RiskSnapshot s = Clean();
         s.disagreement = true;
         VetoVerdict v = EvaluateVeto(s);
         CHECK("r14", !v.proceed && std::string(v.reason) == "disagreement");
-        EngineInputs in = BuildEngineInputs(s, v);
-        CHECK("r14-passthrough", in.disagreement);
-        // R13: exactly 0.02 over with 19 outcomes => free (both margins)
-        s = Clean();
-        s.brier_delta = 0.02;
-        s.realized_outcomes = 19;
-        CHECK("r13-free", EvaluateVeto(s).proceed);
-        CHECK("r13-floor-false", !R13FloorTrips(0.02, 19));
-        s.realized_outcomes = 20;
-        s.brier_delta = 0.0200001;
-        v = EvaluateVeto(s);
-        CHECK("r13-trip", !v.proceed && std::string(v.reason) == "r13-calibration");
-        in = BuildEngineInputs(s, v);
-        CHECK("r13-gatemap",
-              in.calibration_gate == CalibrationGate::BREACH);
-        s = Clean();
-        s.brier_delta = std::numeric_limits<double>::quiet_NaN();
-        s.realized_outcomes = 200;
-        v = EvaluateVeto(s);
-        CHECK("r13-nan", !v.proceed);
         // entry halt + kills
         s = Clean();
         s.entry_halt = true;
@@ -658,15 +571,13 @@ int main(int argc, char** argv) {
                   v.n_reasons >= 3 &&
                   std::strcmp(v.reasons_all[1], "r1-direction") == 0 &&
                   std::strcmp(v.reasons_all[2], "r2-single") == 0);
-        EngineInputs in2 = BuildEngineInputs(s, v);
-        CHECK("prec-enum", in2.veto_reason == VetoReason::OTHER_BREACH);
     }
-    // ---- stage-aware leverage (doc 10 stage table, correction) ----
+    // ---- stage-aware leverage ----
     {
-        // G1 forex: exactly 1x is clean, anything over arms (R2 also
+        // tiny stage forex: exactly 1x is clean, anything over arms (R2 also
         // armed at these scales; leverage must come FIRST in the order).
         RiskSnapshot s = Clean();
-        s.stage = Stage::G1_TINY;
+        s.stage = Stage::TINY;
         s.intent.notional_cents = 10000000LL;  // exactly 1x of $100k
         VetoVerdict v = EvaluateVeto(s);
         CHECK("g1-lev1x",
@@ -678,16 +589,16 @@ int main(int argc, char** argv) {
               !v.proceed && v.n_reasons >= 2 &&
                   std::string(v.reasons_all[0]) == "leverage-cap" &&
                   std::string(v.reasons_all[1]) == "r2-single");
-        // G1 non-forex never gets more: stock capped at 1x too.
+        // tiny stage non-forex never gets more: stock capped at 1x too.
         s.intent.asset = AssetClass::STOCK;
         s.intent.notional_cents = 10000001LL;
         v = EvaluateVeto(s);
         CHECK("g1-stock-lev",
               !v.proceed &&
                   std::string(v.reasons_all[0]) == "leverage-cap");
-        // G2 forex 2x exact is clean; over arms.
+        // scaled stage forex 2x exact is clean; over arms.
         s = Clean();
-        s.stage = Stage::G2_SCALED;
+        s.stage = Stage::SCALED;
         s.intent.notional_cents = 20000000LL;  // exactly 2x
         v = EvaluateVeto(s);
         CHECK("g2-lev2x",
@@ -698,23 +609,23 @@ int main(int argc, char** argv) {
         CHECK("g2-lev-over",
               !v.proceed &&
                   std::string(v.reasons_all[0]) == "leverage-cap");
-        // G2 stock 1x: over arms.
+        // scaled stage stock 1x: over arms.
         s.intent.asset = AssetClass::STOCK;
         s.intent.notional_cents = 10000001LL;
         v = EvaluateVeto(s);
         CHECK("g2-stock-lev",
               !v.proceed &&
                   std::string(v.reasons_all[0]) == "leverage-cap");
-        // G0/G3 keep §5.2 (forex 5x exact clean — proven in lev5x-exact).
+        // paper and full stages keep (forex 5x exact clean — proven in lev5x-exact).
         s = Clean();
-        s.stage = Stage::G3_FULL;
+        s.stage = Stage::FULL;
         s.intent.notional_cents = 50000000LL;
         v = EvaluateVeto(s);
         CHECK("g3-lev5x",
               !v.proceed && v.n_reasons == 1 &&
                   std::string(v.reason) == "r2-single");
     }
-    // ---- invalid enums fail closed (correction: no exit-bypass) ----
+    // ---- invalid enums fail closed ----
     {
         RiskSnapshot s = Clean();
         s.intent.kind = (IntentKind)99;  // corrupted kind is not an exit
@@ -742,10 +653,6 @@ int main(int argc, char** argv) {
         v = EvaluateVeto(s);
         CHECK("bad-phase", !v.proceed && std::string(v.reason) == "bad-inputs");
         s = Clean();
-        s.calib = (CalibState)99;
-        v = EvaluateVeto(s);
-        CHECK("bad-calib", !v.proceed && std::string(v.reason) == "bad-inputs");
-        s = Clean();
         s.kill = (KillLevel)99;  // corrupted kill is not kill-soft
         v = EvaluateVeto(s);
         CHECK("bad-kill", !v.proceed && std::string(v.reason) == "bad-inputs");
@@ -761,9 +668,9 @@ int main(int argc, char** argv) {
         CHECK("exit-still-bypass",
               v.proceed && std::string(v.reason) == "exit-bypass");
     }
-    // ---- structural validation before EXIT bypass (correction) ----
+    // ---- structural validation before EXIT bypass ----
     {
-        // A valid EXIT on a corrupt snapshot is not executable: H1 needs
+        // A valid EXIT on a corrupt snapshot is not executable: the router needs
         // intact symbol/side/asset to construct the order. All HOLD.
         RiskSnapshot s = Clean();
         s.intent.kind = IntentKind::EXIT;
@@ -806,7 +713,7 @@ int main(int argc, char** argv) {
         CHECK("exit-ignores-flip",
               v.proceed && std::string(v.reason) == "exit-bypass");
         // But exit INTENT structure still fails closed: identity and
-        // non-negative size are what H1 builds the order from.
+        // non-negative size are what the router builds the order from.
         s = Clean();
         s.intent.kind = IntentKind::EXIT;
         s.intent.symbol = "";
@@ -825,29 +732,7 @@ int main(int argc, char** argv) {
         v = EvaluateVeto(s);
         CHECK("bad-clock", !v.proceed && std::string(v.reason) == "bad-inputs");
     }
-    // ---- realized_outcomes sign (correction: the fail-open edge) ----
-    {
-        // Reviewer's exact edge: positive delta with -1 outcomes must not
-        // leave the gate at PASS for the max-gate to use.
-        RiskSnapshot s = Clean();
-        s.calib = CalibState::PASS;
-        s.brier_delta = 0.03;
-        s.realized_outcomes = -1;
-        VetoVerdict v = EvaluateVeto(s);
-        CHECK("r13-neg-outcomes",
-              !v.proceed && std::string(v.reason) == "bad-inputs");
-        // INT64_MAX outcomes: trip when delta says so, no overflow.
-        s = Clean();
-        s.brier_delta = 0.03;
-        s.realized_outcomes = std::numeric_limits<int64_t>::max();
-        v = EvaluateVeto(s);
-        CHECK("r13-max-trip",
-              !v.proceed && std::string(v.reason) == "r13-calibration");
-        s.brier_delta = 0.0;
-        v = EvaluateVeto(s);
-        CHECK("r13-max-free", v.proceed);
-    }
-    // ---- flip record validation (correction) ----
+    // ---- flip record validation ----
     {
         RiskSnapshot s = Clean();
         s.flip_armed = true;
@@ -877,7 +762,7 @@ int main(int argc, char** argv) {
         v = EvaluateVeto(s);
         CHECK("flip-exact-2h", v.proceed);
     }
-    // ---- Stage enum validation (correction) ----
+    // ---- Stage enum validation ----
     {
         RiskSnapshot s = Clean();
         s.stage = (Stage)99;  // unknown underlying, not UNKNOWN
@@ -885,7 +770,7 @@ int main(int argc, char** argv) {
         CHECK("bad-stage-enum",
               !v.proceed && std::string(v.reason) == "bad-inputs");
     }
-    // ---- ENTRY bookkeeping identity + margin account (correction) ----
+    // ---- ENTRY bookkeeping identity + margin account ----
     {
         // Empty identity silently bypasses symbol logic: reject.
         RiskSnapshot s = Clean();
@@ -910,10 +795,10 @@ int main(int argc, char** argv) {
         CHECK("margin-used-neg",
               !v.proceed && std::string(v.reason) == "bad-inputs");
     }
-    // ---- drift-candidate integrity (correction: no phantom removal) ----
+    // ---- drift-candidate integrity ----
     {
         // A claimed breach whose candidates name no open position is
-        // corrupt input — H1 must never "resolve" against thin air.
+        // corrupt input — the router must never "resolve" against thin air.
         RiskSnapshot s = Clean();
         DriftCandidate p{"ZZZ", 500000LL, 100000LL, 1000LL};
         s.drift.push_back(p);
@@ -930,7 +815,7 @@ int main(int argc, char** argv) {
         CHECK("drift-empty-candidate",
               !v.proceed && std::string(v.reason) == "bad-inputs");
     }
-    // ---- R3 overflow-free counters (correction) ----
+    // ---- R3 overflow-free counters ----
     {
         RiskSnapshot s = Clean();
         s.day_count = std::numeric_limits<int64_t>::max();
@@ -943,134 +828,6 @@ int main(int argc, char** argv) {
         CHECK("r3-hour-max",
               !v.proceed && std::string(v.reason) == "r3-hour");
     }
-    // ---- headroom + gate mapping on the clean path ----
-    {
-        EngineInputs in = BuildEngineInputs(Clean(), EvaluateVeto(Clean()));
-        CHECK("headroom", in.exposure_headroom_r2 && !in.pending_risk_breach &&
-                              !in.deterministic_veto &&
-                              in.veto_reason == VetoReason::NONE &&
-                              !in.event_blackout && !in.r6_vol_trip &&
-                              in.calibration_gate ==
-                                  CalibrationGate::INSUFFICIENT);
-        RiskSnapshot s = Clean();
-        s.calib = CalibState::PASS;
-        in = BuildEngineInputs(s, EvaluateVeto(s));
-        CHECK("gate-pass", in.calibration_gate == CalibrationGate::PASS);
-        s.calib = CalibState::BREACH;
-        in = BuildEngineInputs(s, EvaluateVeto(s));
-        // floor sees delta 0 (no trip) but the state gate is BREACH:
-        // the table still holds on the breach (defense in depth).
-        CHECK("gate-breach-hold",
-              in.calibration_gate == CalibrationGate::BREACH &&
-                  !in.deterministic_veto);
-    }
-
-    // ---- composed rows: veto -> engine inputs -> filter (argv: vectors dir) ----
-    if (argc == 2) {
-        std::string dir = argv[1];
-        struct Vec {
-            std::string artifact, cid, sym, fh;
-            uint8_t pub[32];
-            int64_t now = 0;
-            bool ok = false;
-        };
-        auto load = [&](const char* name) {
-            Vec v;
-            v.artifact = read_all((dir + "/" + name + ".artifact.json").c_str());
-            std::string raw = read_all((dir + "/" + name + ".expect.json").c_str());
-            JVal e;
-            std::string err;
-            if (!ParseJson(raw, e, err)) return v;
-            auto s = [&](const char* k) {
-                const JVal* p = ObjGet(e, k);
-                return p && p->t == JVal::T::STR ? U32ToUtf8(p->s)
-                                                 : std::string();
-            };
-            v.cid = s("expected_cid");
-            v.sym = s("expected_symbol");
-            v.fh = s("expected_fhash");
-            std::string ph = s("pubkey");
-            const JVal* n = ObjGet(e, "now_unix");
-            if (ph.size() != 64 || !n || n->t != JVal::T::NUM) return v;
-            for (size_t i = 0; i < 32; i++)
-                v.pub[i] = (uint8_t)strtoul(ph.substr(i * 2, 2).c_str(),
-                                            nullptr, 16);
-            v.now = strtoll(n->num.c_str(), nullptr, 10);
-            v.ok = !v.artifact.empty() && v.cid.size() == 64;
-            return v;
-        };
-        auto verdict = [&](const Vec& v, const EngineInputs& in) {
-            return jev_filter::Validate(v.artifact, v.cid, v.sym, v.fh, v.pub,
-                                        v.now, jev_filter::EngineFrom(in));
-        };
-        Vec base = load("valid_pass");
-        Vec maxe = load("max_elevated");
-        CHECK("c-loaded", base.ok && maxe.ok);
-        if (base.ok && maxe.ok) {
-            // strong-conviction answer + clean snapshot => PASS_BASE.
-            RiskSnapshot s = Clean();
-            s.calib = CalibState::PASS;
-            VetoVerdict v = EvaluateVeto(s);
-            CHECK("c-veto-proceed", v.proceed);
-            auto r = verdict(base, BuildEngineInputs(s, v));
-            CHECK("c-table-base", r.pass && r.action == "PASS_BASE");
-            // same answers, R1-count breach => the engine vetoes.
-            RiskSnapshot s2 = Clean();
-            s2.calib = CalibState::PASS;
-            AddOpen(s2, "A", Side::LONG, 100000LL);
-            AddOpen(s2, "B", Side::LONG, 100000LL);
-            AddOpen(s2, "C", Side::LONG, 100000LL);
-            VetoVerdict v2 = EvaluateVeto(s2);
-            CHECK("c-veto-hold", !v2.proceed);
-            auto r2 = verdict(base, BuildEngineInputs(s2, v2));
-            CHECK("c-table-veto",
-                  !r2.pass && r2.action == "HOLD" && r2.reason == "engine");
-            // MEDIUM impact + active phase HOLDs at the veto: the
-            // documented fail-closed over-approximation of "entries need
-            // strong" (the frozen table cannot express it).
-            RiskSnapshot s3 = Clean();
-            s3.calib = CalibState::PASS;
-            s3.impact = Impact::MEDIUM;
-            s3.phase = Phase::PRE;
-            VetoVerdict v3 = EvaluateVeto(s3);
-            CHECK("c-medium-hold",
-                  !v3.proceed && std::string(v3.reason) == "event-medium");
-            // Case 29 (doc 03 §3.7): joint JEV error, end to end.
-            // max_elevated is the adversarial optimistic answer (high enter,
-            // max conviction, low latent risk, calib pass). The independent
-            // RiskSnapshot supplies a real R2 pending-risk breach: intent
-            // 10% + pending 66% on another symbol = 76% > 75% cap, with no
-            // R1 trip, collision or leverage trip. The optimistic answer
-            // must not authorize around the independently detected breach.
-            RiskSnapshot s29 = Clean();
-            s29.calib = CalibState::PASS;
-            AddPending(s29, "GBPUSD", Side::SHORT, 6600000LL);
-            VetoVerdict v29 = EvaluateVeto(s29);
-            CHECK("c29-veto-hold",
-                  !v29.proceed && std::string(v29.reason) == "pending-risk");
-            CHECK("c29-only-pending-veto",
-                  v29.n_reasons == 1 &&
-                      std::string(v29.reasons_all[0]) == "pending-risk");
-            EngineInputs in29 = BuildEngineInputs(s29, v29);
-            CHECK("c29-inputs",
-                  in29.deterministic_veto &&
-                      in29.veto_reason == VetoReason::PENDING_RISK);
-            auto r29 = verdict(maxe, in29);
-            CHECK("c29-table-hold",
-                  !r29.pass && r29.action == "HOLD" && r29.reason == "engine");
-            // Sanity: the same artifact on a clean snapshot is eligible for
-            // the elevated tier, so the HOLD above is the veto's doing.
-            RiskSnapshot sc = Clean();
-            sc.calib = CalibState::PASS;
-            auto rc = verdict(maxe, BuildEngineInputs(sc, EvaluateVeto(sc)));
-            CHECK("c29-clean-eligible",
-                  rc.pass && rc.action == "PASS_ELEVATED_ELIGIBLE");
-        }
-    } else {
-        printf("FAIL need-argv\n");
-        return 1;
-    }
-
     printf("CHECKS: %d/%d PASS\n", count - fails, count);
     return fails ? 1 : 0;
 }

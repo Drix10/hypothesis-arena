@@ -1,4 +1,4 @@
-// Slice F/G resource proof: the TICK path (ring Push, gap Notes,
+// Resource proof: the TICK path (ring Push, gap Notes,
 // backoff, session marking) allocates zero heap. Context assembly +
 // hashing is CYCLE path (bounded output, asserted <= 4KiB in
 // test_context); it is not tick-hot and never claimed zero-alloc.

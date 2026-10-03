@@ -1,13 +1,13 @@
-// G0 paper runner (doc 06 6.1/6.2a/6.5, doc 10 10.1/10.3/10.5, doc 13 13.5).
+// Paper runner.
 //
 // RouteStep stays the pure decision core (no clock, no I/O, no allocation).
 // Everything else lives at this caller seam: durable journal, snapshots,
-// freeze set, broker transport, stream framing, S2 cadence, HALT/kill,
+// freeze set, broker transport, stream framing, reconcile cadence, HALT/kill,
 // alerts, retention/backup/summary, emergency buffer.
 //
 // Transport, stream, clock and kill status are injected. With a null
 // transport the adapter refuses every send. The startup gate requires a
-// human-created, chain-verified STAGE file naming G0_PAPER with capital 0;
+// human-created, chain-verified STAGE file naming PAPER with capital 0;
 // otherwise entries are refused, while exits of open machines still
 // reconcile. No sizing here: intents arrive authorized, exits size from
 // intent.qty - closed.
@@ -22,7 +22,7 @@
 #include "events.hpp"
 #include "store.hpp"
 
-namespace jev {
+namespace kernel {
 namespace runner {
 
 // Authoritative broker position (signed shares; +long/-short).
@@ -39,15 +39,15 @@ struct RunnerDeps {
     const char* stream_endpoint = nullptr;  // config label (evidence)
     long long (*now_ns)(void* ctx) = nullptr;  // required
     void* clock_ctx = nullptr;
-    // Monotonic clock for S2 cadence and timeouts. Null = follow now_ns.
+    // Monotonic clock for reconcile cadence and timeouts. Null = follow now_ns.
     long long (*mono_ns)(void* ctx) = nullptr;
     void* mono_ctx = nullptr;
     void (*kill_inputs)(void* ctx, kill::KillInputs* out) = nullptr;
     void* kill_ctx = nullptr;
-    bool restart_flag = false;  // operator restart-with-flag (sec. 6.4)
-    long long s2_seconds = 900;  // REST reconcile period (doc 01)
+    bool restart_flag = false;  // operator restart-with-flag
+    long long s2_seconds = 900;  // REST reconcile period
     // Fills out[cap], returns count (0 = flat), <0 = lookup failed. Null =
-    // seam absent: S2 reconciles known orders only, MEDIUM flattens local slots.
+    // seam absent: reconcile reconciles known orders only, MEDIUM flattens local slots.
     int (*list_positions)(void* ctx, Position* out, int cap) = nullptr;
     void* positions_ctx = nullptr;
     // Gate for the MEDIUM position sweep: market open and spread normal.
@@ -102,7 +102,7 @@ struct Slot {
     bool has_repair = false;
     bool repair_ok = false;
     bool executed_flag = false;
-    // Forced REST answer (S2 / bust / life-event): consumed when the machine
+    // Forced REST answer: consumed when the machine
     // reaches a state that reads it, else held (one deep). Failed lookups
     // refresh on the next due trigger.
     bool has_forced_q = false;
@@ -129,21 +129,21 @@ struct Slot {
     bool absent_cancel = false;  // client-ID lookup proved absent
     bool cancel_via_query = false;  // final-cancel via lookup
     bool flatten_armed = false;  // MEDIUM flatten already issued
-    char quar_[32]{};  // quarantine status already rowed (doc 06); runtime-only
+    char quar_[32]{};  // quarantine status already rowed; runtime-only
     long long last_s2_ns = 0;
 };
 
-class G0Runner {
+class PaperRunner {
    public:
-    G0Runner(const RunnerConfig& cfg, const RunnerDeps& deps);
+    PaperRunner(const RunnerConfig& cfg, const RunnerDeps& deps);
     // Non-copyable: two objects on one journal/ownership token would fork it
-    // (doc 06 6.1b).
-    G0Runner(const G0Runner&) = delete;
-    G0Runner& operator=(const G0Runner&) = delete;
-    G0Runner(G0Runner&&) = delete;
-    G0Runner& operator=(G0Runner&&) = delete;
+    //.
+    PaperRunner(const PaperRunner&) = delete;
+    PaperRunner& operator=(const PaperRunner&) = delete;
+    PaperRunner(PaperRunner&&) = delete;
+    PaperRunner& operator=(PaperRunner&&) = delete;
     // Releases this instance's directory lock (close + unregister).
-    ~G0Runner();
+    ~PaperRunner();
     // STAGE gate -> journal load+verify (break = HARD, alert, refuse) ->
     // snapshot+intent load per unterminated intent -> drain emergency buffer ->
     // reconcile-first (first cycle forces a broker lookup; sends pre-flight by
@@ -157,7 +157,7 @@ class G0Runner {
     // is refused. False = refused (reason static).
     bool SubmitIntent(const exec::OrderIntent& in, const char** reason);
     // One full cycle: stream drain -> slots (bounded iterations) ->
-    // S2 -> HALT/kill/stage re-check. Returns false on HARD stop.
+    // > HALT/kill/stage re-check. Returns false on HARD stop.
     bool Cycle(long long now_ns);
     // Summary from the journal alone.
     bool Summarize(Summary* out) const;
@@ -178,7 +178,7 @@ class G0Runner {
     std::string prev_hash_;
     // Take list of the last successful AttributeClosedQty, used only by the
     // UnattributeClosedQty rollback when the dependent chain note fails
-    // (doc 06 6.1b).
+    //.
     struct AttrTake {
         std::size_t slot;
         long long take;
@@ -201,7 +201,7 @@ class G0Runner {
     bool lock_took_ = false;
     std::string lock_path_;  // directory taken (empty if none)
     // Set only by a successful Recover; SubmitIntent and Cycle refuse without
-    // it (doc 06 6.1b).
+    // it.
     bool recovered_ = false;
     long long last_pos_ns_ = 0;   // account position check clock
     long long last_ops_day_ = 0;  // 6.3 rhythm clock (0 = run now)
@@ -234,7 +234,7 @@ class G0Runner {
     void MaybeForceQuery(Slot& s, long long now_ns);
     bool FlattenOnMedium(Slot& s, long long now_ns);
     bool EntriesAllowedNow() const;
-    // Ops journal row for HARD/MEDIUM/S2/ops events (not order flow).
+    // Ops journal row for HARD/MEDIUM/reconcile/ops events (not order flow).
     bool OpsRow(const char* kind, const char* intent_id,
                 const char* text, long long now_ns);
     void HardManageSlot(Slot& s, long long epoch, long long now_ns,
@@ -252,7 +252,7 @@ class G0Runner {
                        broker::OrderSide eside, const char* hid,
                        long long epoch, const char* scope_intent,
                        long long now_ns);
-    // Original hard-order chain (doc 06 6.1b): hard-chain.txt rows
+    // Original hard-order chain: hard-chain.txt rows
     // `<tag> <requested> <attributed>`, noted write-ahead before every POST.
     // The whole file is validated: requested per tag immutable, attributed
     // nondecreasing and within 0..requested, no malformed or conflicting rows
@@ -265,7 +265,7 @@ class G0Runner {
     bool HardChainOk();
     bool NoteHardChain(const char* tag, long long requested,
                        long long attributed);
-    // Incident epochs (doc 06 6.1b): MEDIUM mints once per medium-enter; HARD
+    // Incident epochs: MEDIUM mints once per medium-enter; HARD
     // mints unless the incident continues (HALT present at entry). Clearing
     // HALT ends the incident. 0 = no incident on file, and also the
     // write-failure return (no epoch file, no new identity).
@@ -273,7 +273,7 @@ class G0Runner {
     long long MintMediumEpoch(long long now_ns);
     long long HardEpochFor(long long now_ns, const char* reason,
                            bool halt_at_entry);
-    // Single close-owner invariant (doc 06 6.1b): a symbol is covered while an
+    // Single close-owner invariant: a symbol is covered while an
     // active EXIT/flatten works it or an ENTRY flatten is armed/landed; the
     // broker sweep then reconciles but does not send.
     bool LocalCloseCovers(const char* symbol) const;
@@ -286,7 +286,7 @@ class G0Runner {
     // is replaced under the incident hard id. Returns the qty still exposed.
     long long HardAdoptExit(Slot& s, long long epoch,
                             long long now_ns);
-    // Quarantine sighting (doc 06): the first per slot per status freezes the
+    // Quarantine sighting: the first per slot per status freezes the
     // symbol, journals and alerts; repeats stay silent.
     void NoteQuarantine(Slot& s, const broker::OrderQuery& q,
                         const char* scope, long long now_ns);
@@ -313,12 +313,11 @@ class G0Runner {
     // oldest first; leftover is dropped. Two-phase: takes are computed, then
     // each slot is mutated and persisted. On any persist failure the takes
     // roll back (and written slots are re-persisted best-effort) and false is
-    // returned; the caller must not advance dependent durable state (doc 06
-    // 6.1b).
+    // returned; the caller must not advance dependent durable state.
     bool AttributeClosedQty(const char* symbol, long long qty,
                             long long now_ns);
     // Inverse of the last successful AttributeClosedQty; call only right
-    // after it when the dependent chain note failed (doc 06 6.1b).
+    // after it when the dependent chain note failed.
     void UnattributeClosedQty(const char* symbol,
                               long long now_ns);
     // Incident-scoped remainder id hard-<epoch>-<SYM>-<qty>; pure, and
@@ -329,13 +328,13 @@ class G0Runner {
     // False when the incident is stranded id-less (double persist failure, or
     // ACTIVE with epoch 0); the caller fails the cycle.
     bool MediumPass(long long now_ns);
-    // Broker-confirmed flat (doc 06 6.1b): seam present, query ok, every
+    // Broker-confirmed flat: seam present, query ok, every
     // position zero. A missing or failing seam is unknown (false).
     // LocalFlat is the local-only half.
     bool BrokerConfirmedFlat();
     bool LocalFlat();
     // Live exposure for MEDIUM re-entry: a local ENTRY open or any broker
-    // position; an unavailable seam counts as exposure (doc 06 6.1b).
+    // position; an unavailable seam counts as exposure.
     bool MediumHasExposure();
     // Drops the FSM and epoch files; false = retry next cycle.
     bool ClearMediumFiles();
@@ -356,4 +355,4 @@ class G0Runner {
 // unit-tested seam). True for a live pid, false for dead/garbage.
 bool PidAlive(long long pid);
 }  // namespace runner
-}  // namespace jev
+}  // namespace kernel

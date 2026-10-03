@@ -1,4 +1,4 @@
-// Alpaca paper adapter (stocks-only G0 venue).
+// Alpaca paper adapter (stocks-only paper venue).
 #pragma once
 //
 // Units are whole shares; partial fills report exact filled qty; prices are
@@ -22,7 +22,7 @@
 // is "filled"; bare "fill" is a trade-event type.
 #include "adapter.hpp"
 
-namespace jev {
+namespace kernel {
 namespace broker {
 
 // Transport surface: GET for lookup, DELETE for cancel, POST for submits, so
@@ -64,4 +64,4 @@ class AlpacaPaperAdapter : public IAdapter {
 };
 
 }  // namespace broker
-}  // namespace jev
+}  // namespace kernel

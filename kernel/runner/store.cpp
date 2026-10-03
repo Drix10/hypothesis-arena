@@ -21,9 +21,9 @@
 #define DUR_COMMIT(f) fsync(fileno(f))
 #endif
 
-#include "../jev_wire.hpp"  // Sha256Hex
+#include "../wire.hpp"  // Sha256Hex
 
-namespace jev {
+namespace kernel {
 namespace runner {
 
 namespace {
@@ -387,7 +387,7 @@ bool JournalVerifyFile(const char* path) {
 
 std::string PayloadHash(const char* body) {
     if (!body) return std::string();
-    return jev::Sha256Hex(body);
+    return kernel::Sha256Hex(body);
 }
 
 bool SaveSnapshot(const char* path, const char* record) {
@@ -424,7 +424,7 @@ bool FreezeHas(const char* path, const char* symbol) {
     // A corrupt freeze node freezes everything (freeze = wait).
     if (StatPath(path) == PathKind::CORRUPT) return true;
     // ABSENT reads as the empty set; a present-but-unreadable file is frozen
-    // (doc 06 6.1b).
+    //.
     if (StatPath(path) == PathKind::ABSENT) return false;
     std::vector<std::string> lns;
     if (!ReadLines(path, &lns)) return true;
@@ -561,7 +561,7 @@ bool ReadStage(const char* path, Stage* out, const char** reason) {
         }
         std::string body = r.stage + "|" + r.by + "|" + r.at + "|" +
                            r.cap + "|" + prev;
-        if (jev::Sha256Hex(body) != r.attest) {
+        if (kernel::Sha256Hex(body) != r.attest) {
             if (reason) *reason = kChain;
             return false;
         }
@@ -592,7 +592,7 @@ bool StageGateG0(const char* path, const char** reason) {
     static const char kCap[] = "stage-capital-nonzero";
     Stage s;
     if (!ReadStage(path, &s, reason)) return false;
-    if (std::strcmp(s.stage, "G0_PAPER") != 0) {
+    if (std::strcmp(s.stage, "PAPER") != 0) {
         if (reason) *reason = kNotG0;
         return false;
     }
@@ -865,4 +865,4 @@ bool FormatSummary(const Summary& s, char* out, std::size_t n) {
 }
 
 }  // namespace runner
-}  // namespace jev
+}  // namespace kernel

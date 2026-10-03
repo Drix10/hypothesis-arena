@@ -14,7 +14,7 @@ static int fails = 0, count = 0;
         }                              \
     } while (0)
 
-using namespace jev::risk;
+using namespace kernel::risk;
 
 // Deterministic pseudo-noise in [-1, 1].
 static double Noise(int i) {

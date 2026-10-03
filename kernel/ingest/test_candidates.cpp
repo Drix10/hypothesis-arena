@@ -1,10 +1,10 @@
-// K6 — candidates.jsonl gate suite: c1 shape, CID recompute, sleeve,
+// candidates.jsonl gate suite: shape, CID recompute, strategy,
 // allowlist, freshness, side policy. Records are built with the same
-// pipe-join recipe research/strategy/candidate.py hashes.
+// pipe-join recipe research/strategy/candidate_wire.py hashes.
 #include <cstdio>
 #include <string>
 
-#include "../jev_wire.hpp"
+#include "../wire.hpp"
 #include "candidates.hpp"
 
 static int fails = 0, count = 0;
@@ -17,32 +17,30 @@ static int fails = 0, count = 0;
         }                              \
     } while (0)
 
-using namespace jev;
-using namespace jev::ingest;
+using namespace kernel;
+using namespace kernel::ingest;
 
 static const int64_t NOW = 1800000000000000000LL;
 static const char* PX[3] = {nullptr, nullptr, nullptr};
-static const char* BASE[12] = {"trend_etf_v1", "VTI", "", "BUY", "trend",
-                            "250.5", "230.0", "999.0", "0",
-                            "exit_trend_v1", "cost_v2", "f1"};
+static const char* BASE[11] = {"etf_trend", "VTI", "", "BUY", "250.5",
+                            "230.0", "999.0", "0", "exit_trend", "costs", "1"};
 
 static std::string Rec(std::string ts, std::string side = "BUY",
-                       std::string sleeve = "trend_etf_v1",
-                       std::string sym = "VTI", std::string schema = "c1",
+                       std::string strategy = "etf_trend",
+                       std::string sym = "VTI", std::string schema = "candidate",
                        bool badcid = false, std::string extra = "") {
-    std::string f[12];
-    for (int i = 0; i < 12; i++) f[i] = BASE[i];
-    f[0] = sleeve; f[1] = sym; f[2] = ts; f[3] = side;
-    if (side == "SELL") { f[6] = "999.0"; f[7] = "100.0"; }
+    std::string f[11];
+    for (int i = 0; i < 11; i++) f[i] = BASE[i];
+    f[0] = strategy; f[1] = sym; f[2] = ts; f[3] = side;
+    if (side == "SELL") { f[5] = "999.0"; f[6] = "100.0"; }
     for (int k = 0; k < 3; k++)
-        if (PX[k]) f[5 + k] = PX[k];
+        if (PX[k]) f[4 + k] = PX[k];
     std::string joined;
-    static const char* K[12] = {"strategy_version","symbol","snapshot_ts_ns",
-        "proposed_side","proposed_family","entry_px","stop_px","tp_px",
-        "time_exit_ns","exit_profile_version","cost_model_version",
+    static const char* K[11] = {"strategy_id","symbol","snapshot_ts_ns","side",
+        "entry_px","stop_px","tp_px","time_exit_ns","exit_rule","cost_model",
         "feature_revision"};
     std::string cand;
-    for (int i = 0; i < 12; i++) {
+    for (int i = 0; i < 11; i++) {
         if (i) joined += "|";
         joined += f[i];
         cand += std::string("\"") + K[i] + "\":\"" + f[i] + "\",";
@@ -67,7 +65,7 @@ static CandOutcome Run(const std::string& line, const CandidateTables& t,
 
 int main(int argc, char** argv) {
     CandidateTables t;
-    t.sleeves.push_back({"trend_etf_v1", 3600});
+    t.strategies.push_back({"etf_trend", 3600});
     t.allowlist = {"VTI", "VEU", "SPY"};
     t.held = {"VEU"};
     std::string fresh = std::to_string(NOW - 60LL * 1000000000LL);
@@ -78,13 +76,13 @@ int main(int argc, char** argv) {
                                Run(Rec(fresh), t).tp_cents == 99900);
     CHECK("valid-buy", o.accepted && o.side == "BUY" && o.symbol == "VTI" &&
                            o.cid.size() == 64);
-    CHECK("cid-mismatch", Run(Rec(fresh, "BUY", "trend_etf_v1", "VTI", "c1",
+    CHECK("cid-mismatch", Run(Rec(fresh, "BUY", "etf_trend", "VTI", "candidate",
                                   true), t).code == CandReject::CID);
-    CHECK("schema", Run(Rec(fresh, "BUY", "trend_etf_v1", "VTI", "c2"), t)
+    CHECK("schema", Run(Rec(fresh, "BUY", "etf_trend", "VTI", "other"), t)
                             .code == CandReject::SCHEMA);
-    CHECK("sleeve", Run(Rec(fresh, "BUY", "rogue_v9"), t).code ==
-                        CandReject::SLEEVE);
-    CHECK("allowlist", Run(Rec(fresh, "BUY", "trend_etf_v1", "TSLA"), t).code ==
+    CHECK("strategy", Run(Rec(fresh, "BUY", "rogue"), t).code ==
+                        CandReject::STRATEGY);
+    CHECK("allowlist", Run(Rec(fresh, "BUY", "etf_trend", "TSLA"), t).code ==
                            CandReject::ALLOWLIST);
     CHECK("stale", Run(Rec(std::to_string(NOW - 3601LL * 1000000000LL)), t)
                        .code == CandReject::FRESHNESS);
@@ -95,13 +93,13 @@ int main(int argc, char** argv) {
     CHECK("future", Run(Rec(std::to_string(NOW + 121LL * 1000000000LL)), t)
                             .code == CandReject::FRESHNESS);
     CHECK("sell-unheld", Run(Rec(fresh, "SELL"), t).code == CandReject::SIDE);
-    CHECK("sell-held", Run(Rec(fresh, "SELL", "trend_etf_v1", "VEU"), t)
+    CHECK("sell-held", Run(Rec(fresh, "SELL", "etf_trend", "VEU"), t)
                            .accepted);
     CHECK("side-other", Run(Rec(fresh, "SHORT"), t).code == CandReject::SIDE);
-    CHECK("extra-key", Run(Rec(fresh, "BUY", "trend_etf_v1", "VTI", "c1",
+    CHECK("extra-key", Run(Rec(fresh, "BUY", "etf_trend", "VTI", "candidate",
                                false, ",\"x\":\"1\""), t).code ==
                            CandReject::SHAPE);
-    CHECK("pipe-in-field", Run(Rec(fresh, "BUY", "trend|etf_v1"), t).code ==
+    CHECK("pipe-in-field", Run(Rec(fresh, "BUY", "etf|trend"), t).code ==
                                CandReject::SHAPE);
     const char* bad[][3] = {{"250.555", "230.0", "999.0"}, {"1e3", "230.0", "999.0"},
                             {".5", "0.4", "9.0"}, {"05.00", "1.0", "9.0"},
@@ -114,32 +112,32 @@ int main(int argc, char** argv) {
     }
     PX[0] = PX[1] = PX[2] = nullptr;
     PX[1] = "999.0"; PX[2] = "100.0";   // SELL ordering: tp < entry < stop
-    CHECK("sell-ordering-ok", Run(Rec(fresh, "SELL", "trend_etf_v1", "VEU"), t).accepted);
+    CHECK("sell-ordering-ok", Run(Rec(fresh, "SELL", "etf_trend", "VEU"), t).accepted);
     PX[1] = "230.0"; PX[2] = "999.0";
-    CHECK("sell-wrong-ordering", Run(Rec(fresh, "SELL", "trend_etf_v1", "VEU"), t).code == CandReject::SHAPE);
+    CHECK("sell-wrong-ordering", Run(Rec(fresh, "SELL", "etf_trend", "VEU"), t).code == CandReject::SHAPE);
     PX[0] = PX[1] = PX[2] = nullptr;
     CHECK("bad-ts", Run(Rec("-5"), t).code == CandReject::SHAPE);
     CHECK("ts-leading-zero", Run(Rec("0123"), t).code == CandReject::SHAPE);
     CHECK("not-object", Run("[1]", t).code == CandReject::SHAPE);
     CHECK("empty-tables", Run(Rec(fresh), CandidateTables{}).code ==
-                              CandReject::SLEEVE);
+                              CandReject::STRATEGY);
     CandidateTables z = t;
-    z.sleeves[0].window_s = 0;
-    CHECK("zero-window", Run(Rec(fresh), z).code == CandReject::SLEEVE);
+    z.strategies[0].window_s = 0;
+    CHECK("zero-window", Run(Rec(fresh), z).code == CandReject::STRATEGY);
     if (argc == 2) {
         // Lines written by research/strategy/candidate_wire.py must be
         // judged exactly as intended (cross-language CID and price grammar).
-        FILE* f = fopen((std::string(argv[1]) + "/c1_wire.jsonl").c_str(), "rb");
+        FILE* f = fopen((std::string(argv[1]) + "/candidate_wire.jsonl").c_str(), "rb");
         std::string all;
         char buf[4096];
         size_t n;
         while (f && (n = fread(buf, 1, sizeof buf, f)) > 0) all.append(buf, n);
         if (f) fclose(f);
         CandidateTables vt;
-        vt.sleeves.push_back({"trend_etf_v1", 3600});
+        vt.strategies.push_back({"etf_trend", 3600});
         vt.allowlist = {"VTI"};
         CandReject want[5] = {CandReject::OK, CandReject::CID,
-                              CandReject::FRESHNESS, CandReject::SLEEVE,
+                              CandReject::FRESHNESS, CandReject::STRATEGY,
                               CandReject::ALLOWLIST};
         size_t at = 0;
         int k = 0;

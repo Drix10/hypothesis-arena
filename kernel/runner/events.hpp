@@ -1,5 +1,4 @@
-// Venue event seam (doc 01: WS + 15-min REST reconcile; Alpaca trade-event
-// stream + Order-entity REST).
+// Venue event seam.
 //
 // Two authorities meet here:
 //   stream = SSE trade events (ULID publication order; fills apply
@@ -20,7 +19,7 @@
 #include "../broker/adapter.hpp"
 #include "../exec/router.hpp"
 
-namespace jev {
+namespace kernel {
 namespace runner {
 
 // ---- SSE framing (bounded, incremental) ----
@@ -94,4 +93,4 @@ ShapedFill ShapeStreamFill(exec::RouteState st, long long remaining,
                            long long qty);
 
 }  // namespace runner
-}  // namespace jev
+}  // namespace kernel

@@ -1,4 +1,4 @@
-// Slice G gate [correctness]: frozen Snapshot validation, canonical
+// Snapshot validation, canonical
 // determinism (10k identical -> 1 hash), mutation sensitivity, golden
 // canonical bytes. Usage: ./test_context
 #include <cstdio>
@@ -43,11 +43,9 @@ static ctx::Snapshot Full() {
     src.name = "edgar";
     src.state = "healthy";
     s.sources.push_back(src);
-    s.stage = "G0_PAPER";
+    s.stage = "PAPER";
     s.research_revision = 7;
-    s.calib = "pass";
-    s.brier_d6 = 210000LL;
-    s.present_mask = 0x7FFu;
+    s.present_mask = 0x3FFu;
     return s;
 }
 
@@ -147,7 +145,7 @@ int main(int argc, char** argv) {
         s.regime = "trend";
         Check(ValidateSnapshot(s) == "regime-ghost", "ghost-regime");
     }
-    // source vocabulary is the frozen JEV set; other spellings are rejected,
+    // the source-state vocabulary is fixed; other spellings are rejected,
     // never mapped.
     {
         Snapshot s = Full();
@@ -165,7 +163,7 @@ int main(int argc, char** argv) {
         Check(ValidateSnapshot(s) == "source-row", "source-no-invalid");
     }
     {
-        // every frozen JEV state validates
+        // every source state validates
         const char* states[] = {"healthy", "stale", "failed",
                                 "not_scheduled", "unavailable", "na"};
         bool ok = true;
@@ -205,7 +203,7 @@ int main(int argc, char** argv) {
     }
     {
         Snapshot s;
-        s.stage = "G0_PAPER";
+        s.stage = "PAPER";
         Check(ValidateSnapshot(s) == "stage-ghost", "ghost-stage");
     }
     {
@@ -214,19 +212,8 @@ int main(int argc, char** argv) {
         Check(ValidateSnapshot(s) == "research-ghost",
               "ghost-research");
     }
-    {
-        Snapshot s;
-        s.calib = "pass";
-        Check(ValidateSnapshot(s) == "calib-ghost", "ghost-calib");
-    }
-    {
-        Snapshot s;
-        s.brier_d6 = 7;
-        Check(ValidateSnapshot(s) == "calib-ghost",
-              "ghost-brier");
-    }
     // set-but-empty rejections for every section whose empty state is
-    // distinct from a valid zero (9 of 11; the 2 pure-integer sections
+    // distinct from a valid zero (8 of 10; the 2 pure-integer sections
     // below have no such distinction by design). Bare()+solo-bit
     // proves the failure is the target section, not a ghost elsewhere.
     {
@@ -277,12 +264,6 @@ int main(int argc, char** argv) {
         Check(ValidateSnapshot(s) == "research-incoherent",
               "set-empty-research");
     }
-    {
-        Snapshot s = Bare();
-        s.present_mask = kCalib;
-        Check(ValidateSnapshot(s) == "calib-incoherent",
-              "set-empty-calib");
-    }
     // The 2 pure-integer sections: all-zero is both the empty state
     // and a legitimate present value, so set+zero is VALID (solo-bit
     // masks prove no ghost trip either).
@@ -300,14 +281,12 @@ int main(int argc, char** argv) {
         s.equity_ud = 500;
         Check(ValidateSnapshot(s) == "", "set-nonzero-portfolio");
     }
-    // legitimate present zeros stay valid: flat book, zero flags,
-    // zero brier with verdict set.
+    // legitimate present zeros stay valid: flat book, zero flags.
     {
         Snapshot s = Full();
         s.exposure_ud = 0;
         s.pending_count = 0;
         s.var_corr_flags = 0;
-        s.brier_d6 = 0;
         Check(ValidateSnapshot(s) == "", "present-zeros-valid");
     }
     // 3c. duplicates rejected (no discriminator exists)
@@ -326,7 +305,7 @@ int main(int argc, char** argv) {
         s.sources.push_back(s.sources[0]);
         Check(ValidateSnapshot(s) == "source-duplicate", "dup-source");
     }
-    // 3d. uppercase feature hash rejected (Slice C contract)
+    // 3d. uppercase feature hash rejected (contract)
     {
         Snapshot s = Full();
         s.feature_bundle_hash = std::string(64, 'A');
@@ -359,23 +338,23 @@ int main(int argc, char** argv) {
     {
         std::string h0 = ContextHash(Full());
         Snapshot a = Full();
-        a.brier_d6 += 1;
+        a.pending_count += 1;
         Snapshot b = Full();
-        b.present_mask &= ~kCalib;
+        b.present_mask &= ~kResearch;
         Snapshot c = Full();
         c.sources[0].state = "stale";
-        Check(ContextHash(a) != h0, "mut-brier");
+        Check(ContextHash(a) != h0, "mut-pending");
         Check(ContextHash(b) != h0, "mut-mask");
         Check(ContextHash(c) != h0, "mut-source");
     }
-    // 6. golden canonical bytes (pins the frozen recipe)
+    // 6. golden canonical bytes (pins the fixed recipe)
     std::string canon0 = CanonicalSnapshot(Full());
     Check(canon0.size() <= 4096, "canonical-bounded");
     {
         std::string canon = CanonicalSnapshot(Full());
         Check(canon ==
-                  "{\"brier_d6\":210000,\"buying_power_ud\":400000000000,"
-                  "\"calib\":\"pass\",\"equity_ud\":100000000000,"
+                  "{\"buying_power_ud\":400000000000,"
+                  "\"equity_ud\":100000000000,"
                   "\"exposure_ud\":0,\"features\":{\"bundle_hash\":\"" +
                   std::string(64, 'a') +
                   "\",\"bundle_id\":42},\"indicators\":[{\"atr_d6\":"
@@ -383,59 +362,59 @@ int main(int argc, char** argv) {
                   "\"vwap_ud\":337000000,\"z_d6\":1200000}],\"marks\":[{"
                   "\"ask_ud\":337220000,\"bid_ud\":337120000,\"mark_ud\":"
                   "337220000,\"symbol\":\"AAPL\"}],\"pending_count\":0,"
-                  "\"present_mask\":2047,\"regime\":\"trend\","
+                  "\"present_mask\":1023,\"regime\":\"trend\","
                   "\"research_revision\":7,\"session\":\"open\",\"sources\":[{\"name\":"
-                  "\"edgar\",\"state\":\"healthy\"}],\"stage\":\"G0_PAPER\","
+                  "\"edgar\",\"state\":\"healthy\"}],\"stage\":\"PAPER\","
                   "\"var_corr_flags\":0}",
               "golden-canonical");
     }
-    // 7. Snapshot v2: settlement section.
+    // 7. settlement section.
     {
-        Snapshot v1 = Full();
+        Snapshot base = Full();
         Snapshot v2 = Full();
         v2.present_mask |= kSettlement;
         v2.settled_cash_ud = 25000000000LL;
         v2.unsettled_ud = 75000000000LL;
         v2.next_settle_day = 20726;
-        Check(ValidateSnapshot(v2) == "", "v2-valid");
-        Check(CanonicalSnapshot(v1) == canon0, "v1-bytes-unchanged");
-        Check(ContextHash(v1) != ContextHash(v2), "v2-differs-from-v1");
+        Check(ValidateSnapshot(v2) == "", "settlement-valid");
+        Check(CanonicalSnapshot(base) == canon0, "base-bytes-unchanged");
+        Check(ContextHash(base) != ContextHash(v2), "settlement-changes-hash");
         std::string h = ContextHash(v2);
         bool stable = true;
         for (int i = 0; i < 10000 && stable; ++i) stable = ContextHash(v2) == h;
-        Check(stable, "v2-hash-stable-10k");
+        Check(stable, "settlement-hash-stable-10k");
         Snapshot m = v2;
         m.settled_cash_ud += 1;
-        Check(ContextHash(m) != h, "v2-mut-settled");
+        Check(ContextHash(m) != h, "settlement-mut-settled");
         m = v2;
         m.unsettled_ud += 1;
-        Check(ContextHash(m) != h, "v2-mut-unsettled");
+        Check(ContextHash(m) != h, "settlement-mut-unsettled");
         m = v2;
         m.next_settle_day += 1;
-        Check(ContextHash(m) != h, "v2-mut-day");
-        Check(CanonicalSnapshot(v2).size() <= 4096, "v2-bounded");
-        m = v1;
+        Check(ContextHash(m) != h, "settlement-mut-day");
+        Check(CanonicalSnapshot(v2).size() <= 4096, "settlement-bounded");
+        m = base;
         m.settled_cash_ud = 5;
-        Check(ValidateSnapshot(m) == "settlement-ghost", "v2-ghost");
+        Check(ValidateSnapshot(m) == "settlement-ghost", "settlement-ghost-check");
         m = v2;
         m.settled_cash_ud = -1;
-        Check(ValidateSnapshot(m) == "settlement-negative", "v2-negative");
+        Check(ValidateSnapshot(m) == "settlement-negative", "settlement-negative-check");
         m = v2;
         m.next_settle_day = 0;
-        Check(ValidateSnapshot(m) == "settlement-incoherent", "v2-pending-needs-day");
+        Check(ValidateSnapshot(m) == "settlement-incoherent", "settlement-pending-needs-day");
         m = v2;
         m.unsettled_ud = 0;
-        Check(ValidateSnapshot(m) == "settlement-incoherent", "v2-day-needs-pending");
+        Check(ValidateSnapshot(m) == "settlement-incoherent", "settlement-day-needs-pending");
         m = v2;
         m.unsettled_ud = 0;
         m.next_settle_day = 0;
-        Check(ValidateSnapshot(m) == "", "v2-all-settled-ok");
+        Check(ValidateSnapshot(m) == "", "settlement-all-settled-ok");
         Check(CanonicalSnapshot(v2).find(",\"settlement\":{\"next_settle_day\":"
                                          "20726,\"settled_cash_ud\":25000000000,"
                                          "\"unsettled_ud\":75000000000},"
-                                         "\"snapshot_version\":2,\"sources\"") !=
+                                         "\"sources\"") !=
                   std::string::npos,
-              "v2-golden-fragment");
+              "settlement-golden-fragment");
         if (vec_dir) {
             auto slurp = [&](const char* name) {
                 std::string txt;
@@ -447,11 +426,11 @@ int main(int argc, char** argv) {
                 while (!txt.empty() && (txt.back() == '\n' || txt.back() == '\r')) txt.pop_back();
                 return txt;
             };
-            std::string hex = slurp("snapshot_v2_canonical.hex"), bytes;
+            std::string hex = slurp("snapshot_canonical.hex"), bytes;
             for (size_t i = 0; i + 1 < hex.size(); i += 2)
                 bytes.push_back((char)std::stoi(hex.substr(i, 2), nullptr, 16));
-            Check(!bytes.empty() && bytes == CanonicalSnapshot(v2), "v2-vector-canonical");
-            Check(slurp("snapshot_v2_context_hash.txt") == h, "v2-vector-hash");
+            Check(!bytes.empty() && bytes == CanonicalSnapshot(v2), "settlement-vector-canonical");
+            Check(slurp("snapshot_context_hash.txt") == h, "settlement-vector-hash");
         }
     }
     if (g_fail == 0) std::printf("CONTEXT SUITE: ALL PASS\n");

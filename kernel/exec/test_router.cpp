@@ -1,4 +1,4 @@
-// H1 gate [correctness]: router lifecycle matrix — journal-first,
+// Router lifecycle matrix: — journal-first,
 // protected-only entry, one-query reconcile, partials, unknown-freeze,
 // exit survival, emergency exception, stable identity, crash recovery.
 // Usage: ./test_router
@@ -17,17 +17,17 @@ static void Check(bool cond, const char* name) {
     }
 }
 
-using jev::broker::CloseState;
-using jev::broker::OrderSide;
-using jev::exec::OrderIntent;
-using jev::exec::RouteAction;
-using jev::exec::RouteMachine;
-using jev::exec::RouteObs;
-using jev::exec::RouteOut;
-using jev::exec::RouteState;
-using jev::exec::VenueCtx;
-using jev::risk::IntentKind;
-using jev::risk::KillLevel;
+using kernel::broker::CloseState;
+using kernel::broker::OrderSide;
+using kernel::exec::OrderIntent;
+using kernel::exec::RouteAction;
+using kernel::exec::RouteMachine;
+using kernel::exec::RouteObs;
+using kernel::exec::RouteOut;
+using kernel::exec::RouteState;
+using kernel::exec::VenueCtx;
+using kernel::risk::IntentKind;
+using kernel::risk::KillLevel;
 
 static void FillId(char (&d)[65], const char* s) {
     int i = 0;
@@ -147,11 +147,11 @@ static RouteOut Step(const RouteMachine& m, const OrderIntent& in,
                      const VenueCtx& v, RouteObs o) {
     if (m.state != RouteState::IDLE && m.client_id[0] != '\0')
         Tag(o, m);
-    return jev::exec::RouteStep(m, in, v, o);
+    return kernel::exec::RouteStep(m, in, v, o);
 }
 
 int main() {
-    using jev::exec::RouteStep;
+    using kernel::exec::RouteStep;
     OrderIntent in = GoodEntry();
     VenueCtx venue = GoodVenue();
     // intent_rowed: crash between the journaled intent row and the
@@ -205,7 +205,7 @@ int main() {
                   r2.next.state == RouteState::CANCELLED,
               "no-row-no-send");
     }
-    // 3. bad intents rejected (shape + frozen scalar vocabulary)
+    // 3. bad intents rejected (shape + fixed scalar vocabulary)
     {
         RouteMachine m;
         RouteObs o = OpenMarket();
@@ -397,7 +397,7 @@ int main() {
         Check(rrl.action == RouteAction::QUERY_ONCE &&
                   rrl.next.state == RouteState::QUERY_SENT,
               "rate-reconciles");
-        // Retry-once budget (P0-1): one initial + one retry, no third.
+        // Retry-once budget: one initial + one retry, no third.
         RouteObs oq = OpenMarket();
         oq.query.transport_ok = false;  // lookup failed, not absent
         auto q2 = Step(r3c.next, in, venue, oq);
@@ -437,7 +437,7 @@ int main() {
                   "restart-no-fresh-budget");
         }
     }
-    // 7b. identity gate (P1-5/P1-6): matching tags apply, foreign
+    // 7b. identity gate: matching tags apply, foreign
     // tags are ignored, untagged obs on an established machine are
     // ignored (fail closed — no unattributable event ever mutates).
     // Direct RouteStep calls: the Step() harness would attribute.
@@ -500,13 +500,13 @@ int main() {
         Check(r3.action == RouteAction::CANCEL_REMAINDER &&
                   r3.next.state == RouteState::CANCEL_SENT,
               "naked-cancels");
-        // P0-3: the POST UUID was persisted before the cancel path.
+        // the POST UUID was persisted before the cancel path.
         bool id_kept = true;
         for (int i = 0; i < 37; ++i)
             if (r3.next.broker_id[i] != o.ack.broker_order_id[i])
                 id_kept = false;
         Check(id_kept, "naked-uuid-persisted");
-        // P0-1 E2E: accepted/naked POST that already filled routes to
+        // E2E: accepted/naked POST that already filled routes to
         // protection repair (filled qty from the real ack), never to
         // the zero-fill cancel path.
         RouteObs of = o;
@@ -636,7 +636,7 @@ int main() {
             if (r1.next.client_id[i] != r1b.next.client_id[i]) same = false;
         Check(same && r1.next.client_id[0] != '\0', "id-stable");
         char fresh[65];
-        bool ok = jev::broker::MakeClientOrderId(
+        bool ok = kernel::broker::MakeClientOrderId(
             venue.broker, venue.account, venue.context_hash,
             in.symbol,
             in.side, in.intent_id, fresh);
@@ -803,7 +803,7 @@ int main() {
         auto rc3 = Step(mc, in, venue, oc2);
         Check(rc3.action == RouteAction::ESTABLISH_PROTECTION,
               "cancel-no-qty-repairs");
-        // P1-4: partial 40 -> cancel -> fills grow to authoritative
+        // partial 40 -> cancel -> fills grow to authoritative
         // total 100 -> repair for 100 (not stale 40); our cancel took the legs.
         RouteMachine mp;
         mp.state = RouteState::CANCEL_SENT;
@@ -863,7 +863,7 @@ int main() {
                 }
         Check(checked > 0, "prot-inv-covered");
     }
-    // 19. P1-3 edges: already-cancelled direct path; bad-state fails
+    // 19. edges: already-cancelled direct path; bad-state fails
     // closed; transport silence waits (not-found vs failure distinct).
     {
         RouteMachine m;
@@ -915,7 +915,7 @@ int main() {
         Check(rb.action == RouteAction::REJECT,
               "bad-state-fails-closed");
     }
-    // 19b. P0-4 intent binding: same intent applies; any drift in
+    // 19b. intent binding: same intent applies; any drift in
     // intent_id / symbol / side / kind is ignored (never terminal).
     // Direct RouteStep: the Step() harness would hide the mismatch.
     {
@@ -966,7 +966,7 @@ int main() {
         Check(RouteStep(qr, in, venue, ok).action ==
                   RouteAction::QUERY_ONCE,
               "bind-restart-applies");
-        // P0-3: every mismatch flavor returns the machine
+        // every mismatch flavor returns the machine
         // byte-identical (snapshot bytes equal before/after).
         {
             char before[320], after[320];
@@ -1011,8 +1011,8 @@ int main() {
             Check(u_ok, "ident-untagged");
         }
     }
-    // 19c. P0-2 authoritative 404 terminals directly (no CANCEL_SENT
-    // for a nonexistent order); P0-1 bracket-held protects without
+    // 19c. authoritative 404 terminals directly (no CANCEL_SENT
+    // for a nonexistent order); bracket-held protects without
     // legs; simple-class found-but-unprotected repairs (legitimate).
     {
         RouteMachine m;
@@ -1057,7 +1057,7 @@ int main() {
         Check(rs.action == RouteAction::ESTABLISH_PROTECTION,
               "simple-filled-repairs");
     }
-    // 19d. P0-5 exit reconciliation: definitive close terminals;
+    // 19d. exit reconciliation: definitive close terminals;
     // ambiguous close reconciles by ID (no blind second send);
     // 404 after close reconciles to re-issue; restart keeps the ID.
     {
@@ -1097,7 +1097,7 @@ int main() {
         Check(r4.action == RouteAction::EXECUTE_EXIT &&
                   r4.next.state == RouteState::EXIT_SENT,
               "exit-absent-reissues");
-        // P0-2 close lifecycle: PENDING/PARTIAL reconcile (never
+        // close lifecycle: PENDING/PARTIAL reconcile (never
         // CLOSED); DEAD re-issues; only FILLED terminals.
         RouteObs op = OpenMarket();
         op.exit_responded = true;
@@ -1122,7 +1122,7 @@ int main() {
         char bef[65];
         for (int i = 0; i < 65; ++i) bef[i] = r2.next.client_id[i];
         auto rd = Step(r2.next, ex, venue, od);
-        // P0-2: definitive death burns the ID — re-issue mints the
+        // definitive death burns the ID — re-issue mints the
         // next deterministic sub-identity (never the same POST
         // twice), attributable via the unchanged bound intent.
         bool neon = false;
@@ -1141,7 +1141,7 @@ int main() {
         Check(rd2.action == RouteAction::EXECUTE_EXIT &&
                   rd2.next.exit_attempt == 2 && neon2,
               "exit-dead-attempt-2");
-        // P0-2 partial DEAD: X filled 40 before cancel -> closed=40
+        // partial DEAD: X filled 40 before cancel -> closed=40
         // persists, Y targets exactly the remaining 60 (never 100).
         RouteObs odp = OpenMarket();
         odp.exit_responded = true;
@@ -1155,9 +1155,9 @@ int main() {
                   rdp.exit_qty == 60 &&
                   rdp.next.broker_id[0] == '\0',
               "exit-dead-partial-remainder");
-        // P1-4: the mint clears X's UUID (Y captures its own later).
+        // the mint clears X's UUID (Y captures its own later).
         Check(rd.next.broker_id[0] == '\0', "exit-mint-clears-uuid");
-        // P0/P1-3 stale REST snapshot vs ULID stream authority.
+        // P0/stale REST snapshot vs ULID stream authority.
         // Same client/order across both sources; restart-safe via
         // persisted last-event. REST never regresses stream state.
         {
@@ -1469,7 +1469,7 @@ int main() {
             if (qd.client_id[i] != rd.next.client_id[i]) sameid = false;
         Check(sameid, "exitd-id-survives");
         // Exit query partial (40 < 100): reconcile again, never
-        // CLOSED on a partial; exhaustion freezes for S2/human.
+        // CLOSED on a partial; exhaustion freezes for reconcile/human.
         RouteObs oq = OpenMarket();
         oq.adapter_responded = true;
         oq.query.transport_ok = true;
@@ -1483,7 +1483,7 @@ int main() {
         Check(rq3.action == RouteAction::JOURNAL_UNKNOWN &&
                   rq3.freeze_symbol,
               "exit-query-exhausted-freezes");
-        // P0-1: short "fill" (4 < 100) reconciles, never CLOSED.
+        // short "fill" (4 < 100) reconciles, never CLOSED.
         RouteObs osf = OpenMarket();
         osf.exit_responded = true;
         osf.exit_ack.transport_ok = true;
@@ -1493,7 +1493,7 @@ int main() {
         Check(rsf.action == RouteAction::QUERY_ONCE &&
                   rsf.next.state == RouteState::QUERY_SENT,
               "exit-short-fill-reconciles");
-        // Cancelled-unfilled query burns the ID too (same P0-2 rule).
+        // Cancelled-unfilled query burns the ID too (same rule).
         RouteObs ocx = OpenMarket();
         ocx.adapter_responded = true;
         ocx.query.transport_ok = true;
@@ -1540,7 +1540,7 @@ int main() {
                   rw.next.state == RouteState::QUERY_SENT,
               "exitx-restart-waits-query");
     }
-    // 19e. P1-8 cancel accepted-vs-final: 204/request-accepted
+    // 19e. cancel accepted-vs-final: 204/request-accepted
     // stays confirming; only explicit final-canceled terminals;
     // explicit 422 fails to UNKNOWN.
     {
@@ -1587,7 +1587,7 @@ int main() {
                   rx2.freeze_symbol,
               "cancel-refused-unknown");
     }
-    // 19g. P0-3/P0-4 ULID broker-time authority (real Alpaca-shaped
+    // 19g. ULID broker-time authority (real Alpaca-shaped
     // stream ids, verbatim preserved): older-ULID-after-newer is
     // stale even though it arrived later; duplicates collapse;
     // same-ms ties break by full-string order; the winner persists
@@ -1670,7 +1670,7 @@ int main() {
                 kept = false;
         Check(kept, "ulid-tiebreak-persists-winner");
     }
-    // 19f. P1-9 event-bearing ordering: distinct events carry
+    // 19f. event-bearing ordering: distinct events carry
     // id+seq; duplicates collapse; permuted arrival converges.
     {
         RouteMachine m;
@@ -1698,7 +1698,7 @@ int main() {
         Check(a3.action == RouteAction::QUERY_ONCE &&
                   a3.next.query_attempts == 2,
               "ev-distinct-applies");
-        // P0-4 adversarial order: stale fill arriving after the
+        // adversarial order: stale fill arriving after the
         // fresh fill is ignored (naive receipt-order would regress
         // filled 100 -> 40); early-or-late, the final is identical.
         {
@@ -1764,10 +1764,10 @@ int main() {
                   "adv-conflict-first-wins");
         }
     }
-    // 20. P1-1 seam: snapshot/restore round-trips + strict rejects.
+    // 20. seam: snapshot/restore round-trips + strict rejects.
     {
-        using jev::exec::RestoreMachine;
-        using jev::exec::SnapshotMachine;
+        using kernel::exec::RestoreMachine;
+        using kernel::exec::SnapshotMachine;
         for (int st = 0; st <= 12; ++st) {
             RouteMachine m;
             m.state = static_cast<RouteState>(st);
@@ -1844,86 +1844,86 @@ int main() {
         }
         RouteMachine q;
         Check(!RestoreMachine(nullptr, &q), "snap-null");
-        Check(!RestoreMachine("H1:0:0:0:0:0:0:::::0::0:0:0:0", nullptr),
+        Check(!RestoreMachine("RM:0:0:0:0:0:0:::::0::0:0:0:0", nullptr),
               "snap-null-out");
         Check(!RestoreMachine("X1:0:0:0:0:0:0:::::0::0:0:0:0", &q),
               "snap-tag");
-        Check(!RestoreMachine("H1:13:0:0:0:0:0:::intent-001:AAPL:0::0:0:0:0",
+        Check(!RestoreMachine("RM:13:0:0:0:0:0:::intent-001:AAPL:0::0:0:0:0",
                               &q),
               "snap-state");
-        Check(!RestoreMachine("H1:0:2:0:0:0:0:::::0::0:0:0:0", &q),
+        Check(!RestoreMachine("RM:0:2:0:0:0:0:::::0::0:0:0:0", &q),
               "snap-kind");
-        Check(!RestoreMachine("H1:0:0:0:0:0:0:ZZ::::0::0:0:0:0", &q),
+        Check(!RestoreMachine("RM:0:0:0:0:0:0:ZZ::::0::0:0:0:0", &q),
               "snap-hex");
-        Check(!RestoreMachine("H1:0:0:0:0:0:0:::::0::0extra:0:0:0", &q),
+        Check(!RestoreMachine("RM:0:0:0:0:0:0:::::0::0extra:0:0:0", &q),
               "snap-trailing");
-        Check(!RestoreMachine("H1:0:0:0:0:0:0:", &q), "snap-short");
+        Check(!RestoreMachine("RM:0:0:0:0:0:0:", &q), "snap-short");
         // UUID grammar: hyphens exact, lowercase hex, 36 chars.
-        Check(!RestoreMachine("H1:0:0:0:0:0:0::0193ABCD-1234-5678-9abc-"
+        Check(!RestoreMachine("RM:0:0:0:0:0:0::0193ABCD-1234-5678-9abc-"
                               "def012345678:::0::0:0:0:0",
                               &q),
               "snap-uuid-upper");
-        Check(!RestoreMachine("H1:0:0:0:0:0:0::0193abcd1234-5678-9abc-"
+        Check(!RestoreMachine("RM:0:0:0:0:0:0::0193abcd1234-5678-9abc-"
                               "def012345678:::0::0:0:0:0",
                               &q),
               "snap-uuid-hyphen");
-        Check(!RestoreMachine("H1:0:0:0:0:0:0::0193abcd:::0::0:0:0:0", &q),
+        Check(!RestoreMachine("RM:0:0:0:0:0:0::0193abcd:::0::0:0:0:0", &q),
               "snap-uuid-short");
-        Check(!RestoreMachine("H1:0:0:0:0:0:0::0193abcd-1234-5678-9abc-"
+        Check(!RestoreMachine("RM:0:0:0:0:0:0::0193abcd-1234-5678-9abc-"
                               "def01234567X:::0::0:0:0:0",
                               &q),
               "snap-uuid-char");
         // Empty broker id restores (no UUID observed yet), binding
         // intact.
-        Check(RestoreMachine("H1:2:0:0:0:0:0:::intent-001:AAPL:0::0:0:0:0",
+        Check(RestoreMachine("RM:2:0:0:0:0:0:::intent-001:AAPL:0::0:0:0:0",
                              &q) &&
                   q.broker_id[0] == '\0' && q.symbol[1] == 'A' &&
                   q.side == OrderSide::BUY,
               "snap-empty-bid");
         // Binding coherence: IDLE carries none; non-IDLE requires all.
-        Check(!RestoreMachine("H1:0:0:0:0:0:0:::intent-001:AAPL:0::0:0:0:0",
+        Check(!RestoreMachine("RM:0:0:0:0:0:0:::intent-001:AAPL:0::0:0:0:0",
                               &q),
               "snap-idle-with-binding");
-        Check(!RestoreMachine("H1:2:0:0:0:0:0:::::0::0:0:0:0", &q),
+        Check(!RestoreMachine("RM:2:0:0:0:0:0:::::0::0:0:0:0", &q),
               "snap-binding-required");
         Check(!RestoreMachine(
-                  "H1:2:0:0:0:0:0:::intent 001:AAPL:0::0:0:0:0", &q),
+                  "RM:2:0:0:0:0:0:::intent 001:AAPL:0::0:0:0:0", &q),
               "snap-bad-intent");
         Check(!RestoreMachine(
-                  "H1:2:0:0:0:0:0:::intent-001:aapl:0::0:0:0:0", &q),
+                  "RM:2:0:0:0:0:0:::intent-001:aapl:0::0:0:0:0", &q),
               "snap-bad-sym");
         Check(!RestoreMachine(
-                  "H1:2:0:0:0:0:0:::intent-001:AAPL:2::0:0:0:0", &q),
+                  "RM:2:0:0:0:0:0:::intent-001:AAPL:2::0:0:0:0", &q),
               "snap-bad-side");
         Check(!RestoreMachine(
-                  "H1:2:0:0:0:0:0:::intent-001:AAPL:0:Z!::0:0:0:0", &q),
+                  "RM:2:0:0:0:0:0:::intent-001:AAPL:0:Z!::0:0:0:0", &q),
               "snap-bad-evid");
         Check(!RestoreMachine(
-                  "H1:2:0:0:0:0:0:::intent-001:AAPL:0::x:0:0:0", &q),
+                  "RM:2:0:0:0:0:0:::intent-001:AAPL:0::x:0:0:0", &q),
               "snap-bad-evseq");
-        // P1-3: persisted budget is exactly 0..2 (frozen
+        // persisted budget is exactly 0..2 (frozen
         // kQueryMaxAttempts); 3 and 9 refuse both ways.
         Check(!RestoreMachine(
-                  "H1:2:0:0:0:0:3:::intent-001:AAPL:0::0:0:0:0", &q),
+                  "RM:2:0:0:0:0:3:::intent-001:AAPL:0::0:0:0:0", &q),
               "snap-att-3-refused");
         Check(!RestoreMachine(
-                  "H1:2:0:0:0:0:9:::intent-001:AAPL:0::0:0:0:0", &q),
+                  "RM:2:0:0:0:0:9:::intent-001:AAPL:0::0:0:0:0", &q),
               "snap-att-9-refused");
         // Exit sub-identity counter: exactly one digit 0..9.
         Check(!RestoreMachine(
-                  "H1:9:1:0:0:0:0:aa::intent-001:AAPL:0::0:X:0:0", &q),
+                  "RM:9:1:0:0:0:0:aa::intent-001:AAPL:0::0:X:0:0", &q),
               "snap-xatt-bad");
         Check(RestoreMachine(
-                  "H1:9:1:0:0:0:0:aa::intent-001:AAPL:0::0:3:40:30",
+                  "RM:9:1:0:0:0:0:aa::intent-001:AAPL:0::0:3:40:30",
                   &q) &&
                   q.exit_attempt == 3 && q.exit_closed_qty == 40 &&
                   q.exit_counted_qty == 30,
               "snap-xatt-roundtrip");
         Check(!RestoreMachine(
-                  "H1:9:1:0:0:0:0:aa::intent-001:AAPL:0::0:3:40", &q),
+                  "RM:9:1:0:0:0:0:aa::intent-001:AAPL:0::0:3:40", &q),
               "snap-ecount-short");
         Check(!RestoreMachine(
-                  "H1:9:1:0:0:0:0:aa::intent-001:AAPL:0::0:3:40:30x",
+                  "RM:9:1:0:0:0:0:aa::intent-001:AAPL:0::0:3:40:30x",
                   &q),
               "snap-ecount-trailing");
         {
@@ -1951,7 +1951,7 @@ int main() {
         // Writer refuses un-restorable machines (garbage must never
         // be persisted: an unrecoverable snapshot is a crash-path lie).
         {
-            using jev::exec::SnapshotMachine;
+            using kernel::exec::SnapshotMachine;
             RouteMachine mw;
             mw.state = RouteState::QUERY_SENT;
             for (int i = 0; i < 64; ++i) mw.client_id[i] = 'a';

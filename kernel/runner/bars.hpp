@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace jev {
+namespace kernel {
 namespace runner {
 
 struct Bar {
@@ -41,4 +41,4 @@ void AlignCloses(const std::vector<Bar>& bars,
                  const std::vector<int64_t>& starts, double* out);
 
 }  // namespace runner
-}  // namespace jev
+}  // namespace kernel

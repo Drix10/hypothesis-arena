@@ -2256,7 +2256,7 @@ class ManifestBoundTest(unittest.TestCase):
                                           "cursor": "g"}}})
         # Newer generation: hash-valid + envelope-valid, but the
         # fixed reader THROWS on it (simulated downstream defect).
-        env = {"schema_version": "f2", "research_epoch": 2,
+        env = {"schema_version": "1", "research_epoch": 2,
                "bundle_id": "rp-2-" + "b" * 64, "commit": True,
                "watermarks": {}, "features": []}
         raw = _json.dumps(env, sort_keys=True,

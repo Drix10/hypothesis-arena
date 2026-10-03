@@ -1,16 +1,16 @@
-// Snapshot + context_hash (Slice G, doc 04 4.2.3). Pure data + canonical
-// serialization. Provider sections (marks/session from F, portfolio from H1,
-// indicators/regime from future providers) fill it through checked setters.
+// Snapshot + context_hash. Pure data + canonical serialization. Provider
+// sections (marks and session from the feed, portfolio from the router,
+// indicators and regime from future providers) fill it through checked setters.
 // Unset sections are explicit via present_mask, never defaulted into
 // authority. context_hash is SHA-256 over the canonical bytes of all of it,
 // presence bits included, so a partial snapshot never collides with a
-// complete one. context_hash != state_hash (doc 03 3.5a).
+// complete one. context_hash != state_hash.
 //
-// Resource boundary (doc 04 4.3): assembly, canonical serialization and
+// Resource boundary: assembly, canonical serialization and
 // hashing are cycle path (once per decision cycle, output <= 4KiB asserted in
 // test), not tick-hot and not zero-alloc. The zero-alloc tick path (feed
 // TickRing::Push, gap Notes, session marking) is proven by
-// feed/test_noalloc_feed. H1 must not put ContextHash on the tick path
+// feed/test_noalloc_feed. the router must not put ContextHash on the tick path
 // without its own proof.
 #pragma once
 #include <cstddef>
@@ -20,26 +20,20 @@
 
 namespace ctx {
 
-// Vocabularies (doc 09 9.3).
+// Vocabularies.
 inline bool IsRegime(const std::string& s) {
     return s == "trend" || s == "range" || s == "volatile";
 }
-inline bool IsCalib(const std::string& s) {
-    return s == "pass" || s == "insufficient" || s == "breach";
-}
 inline bool IsSourceState(const std::string& s) {
-    // JEV vocabulary (doc 03 3.5); no G-local second ontology, no lossy
-    // mapping at H1.
+    // One vocabulary for source states; no second mapping.
     return s == "healthy" || s == "stale" || s == "failed" ||
            s == "not_scheduled" || s == "unavailable" || s == "na";
 }
 
-// Presence bits: which provider sections are filled. v1: 11 sections; v2
-// adds the settlement section. With kSettlement clear the canonical bytes
-// are exactly v1's, so v1 vectors keep verifying.
+// Presence bits: which provider sections are filled. With kSettlement clear
+// the canonical bytes omit the settlement section.
 // Deferred (no bit, no field, no placeholder): `change` (no frozen
-// representation) and sentiment/signal buckets (doc 03 forbids numeric
-// sentiment; the discrete schema is not frozen). Absence is not zero.
+// representation) and sentiment/signal buckets. Absence is not zero.
 enum Present : uint32_t {
     kMarks = 1u << 0,
     kSession = 1u << 1,
@@ -51,8 +45,7 @@ enum Present : uint32_t {
     kSources = 1u << 7,
     kStage = 1u << 8,
     kResearch = 1u << 9,
-    kCalib = 1u << 10,
-    kSettlement = 1u << 11,  // Snapshot v2: settled-cash section (R18)
+    kSettlement = 1u << 10,  // settled-cash section (account rule)
 };
 
 struct Mark {
@@ -88,11 +81,9 @@ struct Snapshot {
     uint64_t feature_bundle_id = 0;   // kFeatures (last complete bundle)
     std::string feature_bundle_hash;  // 64 hex
     std::vector<SourceStatus> sources;  // <= 8, kSources
-    std::string stage;                // Slice E vocabulary, kStage
+    std::string stage;                // vocabulary, kStage
     uint64_t research_revision = 0;   // kResearch (0 IS absent)
-    std::string calib;                // IsCalib, kCalib
-    int64_t brier_d6 = 0;             // trailing-200 Brier, D6
-    int64_t settled_cash_ud = 0;      // kSettlement (v2): buyable cash
+    int64_t settled_cash_ud = 0;      // kSettlement: buyable cash
     int64_t unsettled_ud = 0;         // sale proceeds not yet settled
     int64_t next_settle_day = 0;      // days since 1970-01-01, 0 if none due
     uint32_t present_mask = 0;
@@ -106,7 +97,7 @@ inline bool IsSession(const std::string& s) {
 
 // Structural validation: vocabulary, bounds, charset, mask coherence (a set
 // section bit with empty content is malformed). Returns "" on valid, else a
-// frozen reason code. Never throws.
+// fixed reason code. Never throws.
 std::string ValidateSnapshot(const Snapshot& s);
 
 // Canonical bytes: JSON object, top-level keys sorted ASCII-betically,

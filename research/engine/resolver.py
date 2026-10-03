@@ -18,7 +18,7 @@ Inputs:
   map_version, map_sha: pinned map identity for the bundle watermarks.
 
 Output: (ok, feature_dict_or_reject_reason). Reject reasons mirror the
-f2 vocabulary for shape defects; resolver-native rejects use the
+feature vocabulary for shape defects; resolver-native rejects use the
 "unverifiable-*" / "contradiction" codes (counted, never emitted).
 
 Rules:
@@ -126,7 +126,7 @@ def resolve(candidate, canonical, entity_map, origin="llm",
             return False, "entity-unmapped:%s" % ref["cik"]
         if actual not in bound:
             return False, "contradiction"
-    # Value: exact type discipline mirrored from the f2 reader.
+    # Value: exact type discipline mirrored from the feature reader.
     value = candidate.get("value")
     if not isinstance(value, dict):
         return False, "schema-value"

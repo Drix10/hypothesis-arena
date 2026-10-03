@@ -1,4 +1,4 @@
-// P3.5 Slice C — runtime proof of the zero-malloc contract.
+// Runtime proof of the zero-malloc contract.
 //
 // The grep gate in build.sh is policy only: it cannot see allocations
 // hidden behind helpers defined elsewhere (the U8() incident). This
@@ -13,7 +13,7 @@
 #include <cstdio>
 #include <cstring>
 
-#include "../jev_wire.hpp"
+#include "../wire.hpp"
 #include "features.hpp"
 
 extern "C" {
@@ -38,8 +38,8 @@ void* __wrap_realloc(void* p, size_t n) {
 }
 }
 
-using namespace jev;
-using namespace jev::ingest;
+using namespace kernel;
+using namespace kernel::ingest;
 
 static const int64_t SNAP = 1800000000000000000LL;
 static const int64_t OBS = SNAP - 100LL * 1000000000LL;
@@ -59,7 +59,7 @@ int main() {
     int fails = 0;
     char acc[2048];
     snprintf(acc, sizeof(acc),
-             "{\"schema_version\":\"f2\",\"kind\":\"filing_event\","
+             "{\"schema_version\":\"1\",\"kind\":\"filing_event\","
              "\"symbols\":[\"AAPL\"],"
              "\"observed_at_ns\":%lld,\"ingested_at_ns\":%lld,"
              "\"ttl_s\":3600,"
@@ -72,7 +72,7 @@ int main() {
              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     std::string acc_s(acc);
     // corrupt the kind (keeps the two-key value shape intact):
-    // bogus_event is not a frozen kind -> schema-enum.
+    // bogus_event is not a fixed kind -> schema-enum.
     std::string bad_s = acc_s;
     size_t at = bad_s.find("\"filing_event\"");
     if (at == std::string::npos) {

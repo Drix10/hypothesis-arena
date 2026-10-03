@@ -7,7 +7,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace jev {
+namespace kernel {
 namespace runner {
 
 int64_t NextSessionDay(int64_t day, const std::set<int64_t>& holidays);
@@ -30,4 +30,4 @@ class SettleBook {
 };
 
 }  // namespace runner
-}  // namespace jev
+}  // namespace kernel

@@ -170,7 +170,7 @@ def panel_candidates(d, out):
         except (KeyError, ValueError, ZeroDivisionError):
             rp = ""
         out.append("  %s %-5s %s entry %s stop %s tp %s  %s %s" % (
-            ts(c.get("snapshot_ts_ns")), c.get("symbol"), c.get("proposed_side"),
+            ts(c.get("snapshot_ts_ns")), c.get("symbol"), c.get("side"),
             c.get("entry_px"), c.get("stop_px"), c.get("tp_px"),
             col(short(c.get("cid", ""), 8), DIM), rp))
 

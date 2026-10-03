@@ -1,10 +1,10 @@
-// G0 runner tests (doc 06 6.1/6.2a/6.5, doc 10, doc 13 13.5): fake
-// transport/stream/clock/kill, real files in a temp dir.
+// Paper runner tests: fake transport, stream, clock and kill, real files in a
+// temp dir.
 //
 // The runner answers every dispatch immediately, so a live machine never
-// parks mid-cycle in-process. Cross-cycle parking (what stream/S2/crash logic
+// parks mid-cycle in-process. Cross-cycle parking (what stream/reconcile/crash logic
 // serves) is built as production creates it: hand-written crash images
-// (journal row + intent file + H1 snapshot). Recovery from those files is
+// (journal row + intent file + the router snapshot). Recovery from those files is
 // the crash test; no timing tricks.
 #include <cstdio>
 #include <cstring>
@@ -16,7 +16,7 @@
 #include <vector>
 
 #include "../broker/alpaca_paper.hpp"
-#include "../jev_wire.hpp"
+#include "../wire.hpp"
 #include "../runner/events.hpp"
 #include "../runner/runner.hpp"
 #include "../runner/store.hpp"
@@ -44,8 +44,8 @@ struct Req {
     std::string method, path, body;
 };
 static std::vector<Req> g_log;
-static jev::broker::HttpResult FakeCall(
-    const jev::broker::HttpRequest& rq) {
+static kernel::broker::HttpResult FakeCall(
+    const kernel::broker::HttpRequest& rq) {
     g_log.push_back(Req{rq.method ? rq.method : "", rq.path ? rq.path : "",
                         rq.body ? rq.body : ""});
     for (std::size_t i = 0; i < g_rules.size(); ++i) {
@@ -53,7 +53,7 @@ static jev::broker::HttpResult FakeCall(
                 std::string::npos &&
             g_log.back().path.find(g_rules[i].path_sub) !=
                 std::string::npos) {
-            jev::broker::HttpResult r;
+            kernel::broker::HttpResult r;
             r.status = g_rules[i].status;
             std::strncpy(r.body, g_rules[i].body.c_str(),
                          sizeof(r.body) - 1);
@@ -61,7 +61,7 @@ static jev::broker::HttpResult FakeCall(
             return r;
         }
     }
-    jev::broker::HttpResult r;  // unscripted: transport failure
+    kernel::broker::HttpResult r;  // unscripted: transport failure
     r.status = 500;
     return r;
 }
@@ -96,7 +96,7 @@ static int FakeStream(void*, char* buf, int n) {
     g_stream_off += (std::size_t)take;
     return take;
 }
-static std::vector<jev::runner::Position> g_positions;
+static std::vector<kernel::runner::Position> g_positions;
 static int g_pos_fail = 0;
 static int g_posn_lie = 0;  // >0: adapter violates the seam
                             // contract by REPORTING this count
@@ -107,13 +107,13 @@ static int g_posn_bad = 0;  // >0: adapter returns a corrupt row
                             // (writes at most cap — the runner must
                             // treat it as unavailable, never index
                             // past the fixed buffer)
-static int FakePositions(void*, jev::runner::Position* out, int cap) {
+static int FakePositions(void*, kernel::runner::Position* out, int cap) {
     if (g_pos_fail) return -1;
     if (g_posn_bad > 0 && cap > 0) {
         // Corrupt row at a VALID count: the runner must reject the
         // whole snapshot, never interpret the row.
         if (g_posn_bad == 2 && cap > 1) {
-            jev::runner::Position a;
+            kernel::runner::Position a;
             for (int b = 0; b < 16; ++b) a.symbol[b] = '\0';
             a.symbol[0] = 'A';
             a.qty = 10;
@@ -121,7 +121,7 @@ static int FakePositions(void*, jev::runner::Position* out, int cap) {
             out[1] = a;
             return 2;
         }
-        jev::runner::Position p;
+        kernel::runner::Position p;
         for (int b = 0; b < 16; ++b) p.symbol[b] = '\0';
         p.qty = 10;
         if (g_posn_bad == 1) {
@@ -150,8 +150,8 @@ static int FakePositions(void*, jev::runner::Position* out, int cap) {
     for (int i = 0; i < n; ++i) out[i] = g_positions[i];
     return n;
 }
-static jev::runner::Position MkPos(const char* sym, long long qty) {
-    jev::runner::Position p;
+static kernel::runner::Position MkPos(const char* sym, long long qty) {
+    kernel::runner::Position p;
     std::strncpy(p.symbol, sym, 15);
     p.qty = qty;
     return p;
@@ -164,8 +164,8 @@ static bool FakeVenue(void*, bool* open, bool* spread) {
     return true;
 }
 
-static jev::kill::KillInputs g_kill;
-static void FakeKill(void*, jev::kill::KillInputs* out) { *out = g_kill; }
+static kernel::kill::KillInputs g_kill;
+static void FakeKill(void*, kernel::kill::KillInputs* out) { *out = g_kill; }
 
 static int g_tmpn = 0;
 #ifdef _WIN32
@@ -281,24 +281,24 @@ static std::string ReadWhole(const std::string& p) {
 }
 static void WriteStageG0(const std::string& dir) {
     std::string body =
-        "G0_PAPER|human|2026-09-25T00:00:00Z|0|GENESIS";
-    std::string h = jev::Sha256Hex(body);
+        "PAPER|human|2026-09-25T00:00:00Z|0|GENESIS";
+    std::string h = kernel::Sha256Hex(body);
     WriteFile(dir + "/STAGE",
-              "stage: G0_PAPER\napproved_by: human\napproved_at: "
+              "stage: PAPER\napproved_by: human\napproved_at: "
               "2026-09-25T00:00:00Z\ncapital_usd: 0\nattest_hash: " +
                   h + "\n");
 }
-static jev::exec::OrderIntent GoodIntent(const char* id, const char* sym,
+static kernel::exec::OrderIntent GoodIntent(const char* id, const char* sym,
                                          bool is_exit, long long qty) {
-    jev::exec::OrderIntent in;
+    kernel::exec::OrderIntent in;
     std::strncpy(in.intent_id, id, 64);
     std::strncpy(in.symbol, sym, 15);
-    in.side = jev::broker::OrderSide::BUY;
+    in.side = kernel::broker::OrderSide::BUY;
     in.qty_shares = qty;
     in.stop_cents = 22000;
     in.tp_cents = 24000;
-    in.kind = is_exit ? jev::risk::IntentKind::EXIT
-                      : jev::risk::IntentKind::ENTRY;
+    in.kind = is_exit ? kernel::risk::IntentKind::EXIT
+                      : kernel::risk::IntentKind::ENTRY;
     return in;
 }
 // Real 26-char ULIDs (Crockford base32, ms + randomness) — the
@@ -323,8 +323,8 @@ static std::string MkUlid(std::uint64_t ms, unsigned rand) {
 }
 struct Rig {
     std::string dir;
-    jev::runner::RunnerConfig cfg;
-    jev::runner::RunnerDeps deps;
+    kernel::runner::RunnerConfig cfg;
+    kernel::runner::RunnerDeps deps;
     ~Rig() { RemoveSandbox(dir); }
     Rig() {
         dir = TmpDir();
@@ -346,7 +346,7 @@ struct Rig {
         g_stream_off = 0;
         g_stream_fault = 0;
         g_mono = 1800000000000000000LL;
-        g_kill = jev::kill::KillInputs();
+        g_kill = kernel::kill::KillInputs();
         g_now = 1800000000000000000LL;
         g_positions.clear();
         g_pos_fail = 0;
@@ -407,21 +407,21 @@ static std::string DeadReply(const char* fq) {
 static bool AppendRow(const std::string& dir, const char* kind,
                       const char* iid) {
     std::string jp = dir + "/journal.jsonl";
-    std::vector<jev::journal::Row> jr;
-    if (!jev::runner::JournalLoad(jp.c_str(), &jr) &&
+    std::vector<kernel::journal::Row> jr;
+    if (!kernel::runner::JournalLoad(jp.c_str(), &jr) &&
         Exists(jp.c_str()))
         return false;
     unsigned long long seq = 0;
-    std::string prev = jev::journal::GenesisPrev();
+    std::string prev = kernel::journal::GenesisPrev();
     if (!jr.empty()) {
         seq = jr.back().seq + 1;
         prev = jr.back().row_hash;
     }
-    jev::journal::Row r;
+    kernel::journal::Row r;
     std::string body = std::string(kind) + " sym=AAPL";
-    if (!jev::journal::FormatRow(
+    if (!kernel::journal::FormatRow(
             seq, 1800000000000000000LL, kind, iid,
-            jev::Sha256Hex(body).c_str(), prev.c_str(), &r))
+            kernel::Sha256Hex(body).c_str(), prev.c_str(), &r))
         return false;
     char ln[1024];
     std::snprintf(ln, sizeof(ln), "%llu|%lld|%s|%s|%s|%s|%s",
@@ -436,7 +436,7 @@ static bool AppendRow(const std::string& dir, const char* kind,
     std::fclose(jf);
     return w == line.size();
 }
-// Hand-written crash image: journal intent row + intent file + H1
+// Hand-written crash image: journal intent row + intent file + the router
 // snapshot — exactly what a dead process leaves behind. st: 2 =
 // SENT_UNACKED, 3 = QUERY_SENT, 9 = EXIT_SENT.
 // Durable book files without a journal row: the orphan-image
@@ -449,11 +449,11 @@ static std::string WriteBookFiles(const std::string& dir,
                                   long long filled,
                                   const char* bid, int pok) {
     char cid[65];
-    if (!jev::broker::MakeClientOrderId(
+    if (!kernel::broker::MakeClientOrderId(
             "alpaca-paper", "test", std::string(64, 'a').c_str(),
             sym,
-            side01 == 1 ? jev::broker::OrderSide::SELL
-                        : jev::broker::OrderSide::BUY,
+            side01 == 1 ? kernel::broker::OrderSide::SELL
+                        : kernel::broker::OrderSide::BUY,
             iid, cid))
         return "";
     char iln[128];
@@ -462,7 +462,7 @@ static std::string WriteBookFiles(const std::string& dir,
     WriteFile(dir + "/intent-" + std::string(iid) + ".txt", iln);
     char snap[320];
     std::snprintf(snap, sizeof(snap),
-                  "H1:%d:%d:%lld:0:%d:0:%s:%s:%s:%s:%d::0:0:0:0", st,
+                  "RM:%d:%d:%lld:0:%d:0:%s:%s:%s:%s:%d::0:0:0:0", st,
                   kind01, filled, pok, cid, bid ? bid : "", iid, sym,
                   side01);
     WriteFile(dir + "/snap-" + std::string(iid) + ".txt", snap);
@@ -477,21 +477,21 @@ static std::string CrashImage(const std::string& dir, const char* iid,
     // overwrite would silently leave only the last slot alive
     // and multi-slot regressions would prove nothing).
     std::string jp = dir + "/journal.jsonl";
-    std::vector<jev::journal::Row> jr;
-    if (!jev::runner::JournalLoad(jp.c_str(), &jr) &&
+    std::vector<kernel::journal::Row> jr;
+    if (!kernel::runner::JournalLoad(jp.c_str(), &jr) &&
         Exists(jp.c_str()))
         return "";
     unsigned long long seq = 0;
-    std::string prev = jev::journal::GenesisPrev();
+    std::string prev = kernel::journal::GenesisPrev();
     if (!jr.empty()) {
         seq = jr.back().seq + 1;
         prev = jr.back().row_hash;
     }
-    jev::journal::Row r;
+    kernel::journal::Row r;
     std::string body = std::string("intent sym=") + sym;
-    if (!jev::journal::FormatRow(
+    if (!kernel::journal::FormatRow(
             seq, 1800000000000000000LL, "intent", iid,
-            jev::Sha256Hex(body).c_str(), prev.c_str(), &r))
+            kernel::Sha256Hex(body).c_str(), prev.c_str(), &r))
         return "";
     char ln[1024];
     std::snprintf(ln, sizeof(ln), "%llu|%lld|%s|%s|%s|%s|%s",
@@ -517,21 +517,21 @@ static std::string CrashImage(const std::string& dir, const char* iid,
 // entry image (seq 0) must already exist.
 static bool CrashFlatten(const std::string& dir, const char* fid,
                          const char* sym, long long qty) {
-    std::vector<jev::journal::Row> jr;
-    if (!jev::runner::JournalLoad((dir + "/journal.jsonl").c_str(),
+    std::vector<kernel::journal::Row> jr;
+    if (!kernel::runner::JournalLoad((dir + "/journal.jsonl").c_str(),
                                   &jr) ||
         jr.empty())
         return false;
     char fcid[65];
-    if (!jev::broker::MakeClientOrderId(
+    if (!kernel::broker::MakeClientOrderId(
             "alpaca-paper", "test", std::string(64, 'a').c_str(),
-            sym, jev::broker::OrderSide::BUY, fid, fcid))
+            sym, kernel::broker::OrderSide::BUY, fid, fcid))
         return false;
     std::string body = std::string("intent sym=") + sym;
-    jev::journal::Row r;
-    if (!jev::journal::FormatRow(1, 1800000000000000000LL, "intent",
+    kernel::journal::Row r;
+    if (!kernel::journal::FormatRow(1, 1800000000000000000LL, "intent",
                                  fid,
-                                 jev::Sha256Hex(body).c_str(),
+                                 kernel::Sha256Hex(body).c_str(),
                                  jr.back().row_hash.c_str(), &r))
         return false;
     char ln[1024];
@@ -553,13 +553,13 @@ static bool CrashFlatten(const std::string& dir, const char* fid,
     WriteFile(dir + "/intent-" + std::string(fid) + ".txt", iln);
     char snap[320];
     std::snprintf(snap, sizeof(snap),
-                  "H1:%d:%d:%lld:0:0:0:%s::%s:%s:%d::0:0:0:0", 9, 1,
+                  "RM:%d:%d:%lld:0:0:0:%s::%s:%s:%d::0:0:0:0", 9, 1,
                   0LL, fcid, fid, sym, 0);
     WriteFile(dir + "/snap-" + std::string(fid) + ".txt", snap);
     return true;
 }
 // Patch a crash image's cumulative exit ledgers through the
-// frozen snapshot codec (restore, set, reserialize — no format
+// fixed snapshot codec (restore, set, reserialize — no format
 // duplication): models "the router already counted this fill
 // before the crash" for cumulative-accounting regressions.
 static bool PatchClosedCounted(const std::string& dir,
@@ -572,12 +572,12 @@ static bool PatchClosedCounted(const std::string& dir,
     std::size_t n = std::fread(rec, 1, sizeof(rec) - 1, f);
     std::fclose(f);
     if (n == 0) return false;
-    jev::exec::RouteMachine m;
-    if (!jev::exec::RestoreMachine(rec, &m)) return false;
+    kernel::exec::RouteMachine m;
+    if (!kernel::exec::RestoreMachine(rec, &m)) return false;
     m.exit_closed_qty = closed;
     m.exit_counted_qty = counted;
     char out[320];
-    if (!jev::exec::SnapshotMachine(m, out, sizeof(out)))
+    if (!kernel::exec::SnapshotMachine(m, out, sizeof(out)))
         return false;
     WriteFile(p, out);
     return true;
@@ -587,42 +587,42 @@ static bool PatchClosedCounted(const std::string& dir,
 static std::string EmgRow(std::uint64_t seq, long long ts,
                           const char* kind, const char* iid,
                           const char* body, const char* prev) {
-    jev::journal::Row r;
-    if (!jev::journal::FormatRow(seq, ts, kind, iid,
-                                 jev::Sha256Hex(body).c_str(), prev,
+    kernel::journal::Row r;
+    if (!kernel::journal::FormatRow(seq, ts, kind, iid,
+                                 kernel::Sha256Hex(body).c_str(), prev,
                                  &r))
         return "";
     char ln[1024];
-    if (!jev::runner::RowLine(r, ln, sizeof(ln))) return "";
+    if (!kernel::runner::RowLine(r, ln, sizeof(ln))) return "";
     return ln;
 }
 
 int main() {
-    using jev::runner::G0Runner;
-    // K8: the live journal is size-bounded and fails closed past the cap.
+    using kernel::runner::PaperRunner;
+    // the live journal is size-bounded and fails closed past the cap.
     {
         const char* path = "jcap_tmp.jsonl";
         std::remove(path);
-        std::string prev = jev::journal::GenesisPrev();
+        std::string prev = kernel::journal::GenesisPrev();
         for (int i = 0; i < 20; ++i) {
-            jev::journal::Row r;
+            kernel::journal::Row r;
             std::string pay(64, 'a');
-            Check(jev::journal::FormatRow(i, 1000 + i, "intent", "x1",
+            Check(kernel::journal::FormatRow(i, 1000 + i, "intent", "x1",
                                           pay.c_str(), prev.c_str(), &r),
                   "jcap-format");
-            Check(jev::runner::JournalAppend(path, r), "jcap-append");
+            Check(kernel::runner::JournalAppend(path, r), "jcap-append");
             prev = r.row_hash;
         }
-        std::vector<jev::journal::Row> rows;
-        Check(jev::runner::JournalLoad(path, &rows) && rows.size() == 20,
+        std::vector<kernel::journal::Row> rows;
+        Check(kernel::runner::JournalLoad(path, &rows) && rows.size() == 20,
               "jcap-loads-under-cap");
-        std::size_t was = jev::runner::JournalCap();
-        jev::runner::SetJournalCap(1024);
-        Check(!jev::runner::JournalLoad(path, &rows) && rows.empty(),
+        std::size_t was = kernel::runner::JournalCap();
+        kernel::runner::SetJournalCap(1024);
+        Check(!kernel::runner::JournalLoad(path, &rows) && rows.empty(),
               "jcap-refuses-over-cap");
-        jev::runner::SetJournalCap(was);
-        Check(jev::runner::FileSizeBytes(path) > 1024 &&
-                  jev::runner::FileSizeBytes("no_such_file") < 0,
+        kernel::runner::SetJournalCap(was);
+        Check(kernel::runner::FileSizeBytes(path) > 1024 &&
+                  kernel::runner::FileSizeBytes("no_such_file") < 0,
               "jcap-size");
         std::remove(path);
     }
@@ -631,98 +631,98 @@ int main() {
         const char* path = "torn_tail_tmp.jsonl";
         std::remove(path);
         std::remove("torn_tail_tmp.jsonl.torn");
-        std::string prev = jev::journal::GenesisPrev();
+        std::string prev = kernel::journal::GenesisPrev();
         for (int i = 0; i < 3; ++i) {
-            jev::journal::Row r;
+            kernel::journal::Row r;
             std::string pay(64, 'b');
-            Check(jev::journal::FormatRow(i, 2000 + i, "intent", "t1",
+            Check(kernel::journal::FormatRow(i, 2000 + i, "intent", "t1",
                                           pay.c_str(), prev.c_str(), &r),
                   "torn-format");
-            Check(jev::runner::JournalAppend(path, r), "torn-append");
+            Check(kernel::runner::JournalAppend(path, r), "torn-append");
             prev = r.row_hash;
         }
-        Check(jev::runner::JournalTrimTornTail(path) == 0,
+        Check(kernel::runner::JournalTrimTornTail(path) == 0,
               "torn-clean-is-noop");
-        Check(jev::runner::JournalTrimTornTail("torn_no_such_file") == 0,
+        Check(kernel::runner::JournalTrimTornTail("torn_no_such_file") == 0,
               "torn-absent-is-noop");
         {
             std::FILE* f = std::fopen(path, "ab");
             std::fputs("3|2003|intent|t1|abc", f);  // cut mid-row, no newline
             std::fclose(f);
         }
-        std::vector<jev::journal::Row> rows;
-        Check(!jev::runner::JournalLoad(path, &rows), "torn-load-refuses");
-        Check(jev::runner::JournalTrimTornTail(path) == 1, "torn-trimmed");
-        Check(jev::runner::JournalLoad(path, &rows) && rows.size() == 3 &&
-                  jev::runner::JournalVerifyFile(path),
+        std::vector<kernel::journal::Row> rows;
+        Check(!kernel::runner::JournalLoad(path, &rows), "torn-load-refuses");
+        Check(kernel::runner::JournalTrimTornTail(path) == 1, "torn-trimmed");
+        Check(kernel::runner::JournalLoad(path, &rows) && rows.size() == 3 &&
+                  kernel::runner::JournalVerifyFile(path),
               "torn-chain-intact-after-trim");
-        Check(jev::runner::FileSizeBytes("torn_tail_tmp.jsonl.torn") > 0,
+        Check(kernel::runner::FileSizeBytes("torn_tail_tmp.jsonl.torn") > 0,
               "torn-bytes-preserved");
-        Check(jev::runner::JournalTrimTornTail(path) == 0,
+        Check(kernel::runner::JournalTrimTornTail(path) == 0,
               "torn-second-trim-noop");
         {   // A complete but corrupt row is NOT trimmed.
             std::FILE* f = std::fopen(path, "ab");
             std::fputs("garbage|row\n", f);
             std::fclose(f);
         }
-        Check(jev::runner::JournalTrimTornTail(path) == 0 &&
-                  !jev::runner::JournalLoad(path, &rows),
+        Check(kernel::runner::JournalTrimTornTail(path) == 0 &&
+                  !kernel::runner::JournalLoad(path, &rows),
               "torn-complete-bad-row-still-refused");
         std::remove(path);
         std::remove("torn_tail_tmp.jsonl.torn");
     }
     // 0. Event seam units: SSE framing + classification + shaping.
     {
-        jev::runner::SseParser p;
+        kernel::runner::SseParser p;
         const char* raw =
             ": comment\nid: 01J000000000000000000000001\n"
             "event: partial_fill\ndata: {\"a\":1}\n\n"
             "event: trade_bust\ndata: {\"b\":2}\n\n";
         p.Feed(raw, std::strlen(raw));
-        jev::runner::SseEvent e1;
+        kernel::runner::SseEvent e1;
         Check(p.Next(&e1) && e1.id == "01J000000000000000000000001" &&
                   e1.type == "partial_fill" && e1.data == "{\"a\":1}",
               "sse-first");
-        jev::runner::SseEvent e2;
+        kernel::runner::SseEvent e2;
         Check(p.Next(&e2) && e2.id.empty() && e2.type == "trade_bust",
               "sse-second");
         Check(!p.Next(nullptr) && p.errors() == 0, "sse-clean");
         // Split feeds + overlong resync.
-        jev::runner::SseParser q;
+        kernel::runner::SseParser q;
         q.Feed("event: fill\nda", 14);
         const char* tail = "ta: {\"c\":3}\n\n";
         q.Feed(tail, std::strlen(tail));
-        jev::runner::SseEvent e3;
+        kernel::runner::SseEvent e3;
         Check(q.Next(&e3) && e3.type == "fill" &&
                   e3.data == "{\"c\":3}",
               "sse-split");
-        jev::runner::SseParser w;
+        kernel::runner::SseParser w;
         std::string big(5000, 'x');
         w.Feed(("data: " + big + "\n\n").c_str(), big.size() + 9);
-        jev::runner::SseEvent e4;
+        kernel::runner::SseEvent e4;
         Check(!w.Next(&e4) && w.errors() == 1, "sse-overlong");
         // Event-level envelope: individually-legal data: lines
         // accumulating past 8 KiB reject + resync (never
         // materialize unbounded memory before the blank line).
-        jev::runner::SseParser vo;
+        kernel::runner::SseParser vo;
         std::string vline(4000, 'y');
         std::string vchunk = "data: " + vline + "\n";
         for (int i = 0; i < 4; ++i)
             vo.Feed(vchunk.c_str(), vchunk.size());
         vo.Feed("\n", 1);
-        jev::runner::SseEvent e5;
+        kernel::runner::SseEvent e5;
         Check(!vo.Next(&e5) && vo.errors() >= 1,
               "sse-envelope");
         // Just under the envelope still dispatches (the 2048
         // application cap is MapTradeEvent's job, not the
         // parser's).
-        jev::runner::SseParser vu;
+        kernel::runner::SseParser vu;
         std::string vline2(4000, 'z');
         std::string vok =
             "event: fill\ndata: " + vline2 + "\ndata: " +
             vline2 + "\n\n";
         vu.Feed(vok.c_str(), vok.size());
-        jev::runner::SseEvent e6;
+        kernel::runner::SseEvent e6;
         Check(vu.Next(&e6) && e6.type == "fill" &&
                   e6.data.size() == 8001,
               "sse-envelope-ok");
@@ -730,15 +730,15 @@ int main() {
         // Payloads use the real trade-event shape: per-event qty
         // beside the nested order object carrying the CUMULATIVE
         // filled_qty (the only quantity the seam may use).
-        jev::runner::SseEvent f;
+        kernel::runner::SseEvent f;
         f.id = "01J000000000000000000000009";
         f.type = "partial_fill";
         f.data =
             "{\"event\":\"partial_fill\",\"order\":{\"client_"
             "order_id\":\"abc123\",\"filled_qty\":\"40\"},"
             "\"qty\":\"40\"}";
-        auto mf = jev::runner::MapTradeEvent(f);
-        Check(mf.kind == jev::runner::StreamKind::FILL &&
+        auto mf = kernel::runner::MapTradeEvent(f);
+        Check(mf.kind == kernel::runner::StreamKind::FILL &&
                   mf.filled_qty == 40 &&
                   std::string(mf.client_id) == "abc123" &&
                   std::string(mf.event_id) ==
@@ -751,8 +751,8 @@ int main() {
             "{\"event\":\"partial_fill\",\"order\":{\"client_"
             "order_id\":\"abc123\",\"filled_qty\":\"70\"},"
             "\"qty\":\"30\"}";
-        auto mc = jev::runner::MapTradeEvent(f);
-        Check(mc.kind == jev::runner::StreamKind::FILL &&
+        auto mc = kernel::runner::MapTradeEvent(f);
+        Check(mc.kind == kernel::runner::StreamKind::FILL &&
                   mc.filled_qty == 70,
               "map-cumulative-not-event-qty");
         // No cumulative inside the order object -> NONE: reconcile
@@ -760,8 +760,8 @@ int main() {
         f.data =
             "{\"event\":\"partial_fill\",\"order\":{\"client_"
             "order_id\":\"abc123\"},\"qty\":\"30\"}";
-        Check(jev::runner::MapTradeEvent(f).kind ==
-                  jev::runner::StreamKind::NONE,
+        Check(kernel::runner::MapTradeEvent(f).kind ==
+                  kernel::runner::StreamKind::NONE,
               "map-no-cumulative");
         // Overflow seam: 19 nines exceed LLONG_MAX — a naive
         // accumulate-then-bound overflows before the cap test
@@ -771,110 +771,110 @@ int main() {
             "{\"event\":\"partial_fill\",\"order\":{\"client_"
             "order_id\":\"abc123\",\"filled_qty\":\"9999999"
             "9999999999\"},\"qty\":\"1\"}";
-        Check(jev::runner::MapTradeEvent(f).kind ==
-                  jev::runner::StreamKind::NONE,
+        Check(kernel::runner::MapTradeEvent(f).kind ==
+                  kernel::runner::StreamKind::NONE,
               "map-fill-overflow-refused");
         // Just over the share cap (10 digits): refuse.
         f.data =
             "{\"event\":\"partial_fill\",\"order\":{\"client_"
             "order_id\":\"abc123\",\"filled_qty\":\"1000000"
             "000\"},\"qty\":\"1\"}";
-        Check(jev::runner::MapTradeEvent(f).kind ==
-                  jev::runner::StreamKind::NONE,
+        Check(kernel::runner::MapTradeEvent(f).kind ==
+                  kernel::runner::StreamKind::NONE,
               "map-fill-over-cap-refused");
         // Exactly at the cap: accept (boundary).
         f.data =
             "{\"event\":\"partial_fill\",\"order\":{\"client_"
             "order_id\":\"abc123\",\"filled_qty\":\"9999999"
             "99\"},\"qty\":\"1\"}";
-        auto mb2 = jev::runner::MapTradeEvent(f);
-        Check(mb2.kind == jev::runner::StreamKind::FILL &&
+        auto mb2 = kernel::runner::MapTradeEvent(f);
+        Check(mb2.kind == kernel::runner::StreamKind::FILL &&
                   mb2.filled_qty == 999999999,
               "map-fill-max-cap");
         f.type = "canceled";
-        auto ml = jev::runner::MapTradeEvent(f);
-        Check(ml.kind == jev::runner::StreamKind::LIFE &&
+        auto ml = kernel::runner::MapTradeEvent(f);
+        Check(ml.kind == kernel::runner::StreamKind::LIFE &&
                   ml.filled_qty == 0,
               "map-life-no-verdict");
         f.type = "trade_correct";
-        auto mb = jev::runner::MapTradeEvent(f);
-        Check(mb.kind == jev::runner::StreamKind::BUST, "map-bust");
+        auto mb = kernel::runner::MapTradeEvent(f);
+        Check(mb.kind == kernel::runner::StreamKind::BUST, "map-bust");
         f.type = "weird";
-        Check(jev::runner::MapTradeEvent(f).kind ==
-                  jev::runner::StreamKind::NONE,
+        Check(kernel::runner::MapTradeEvent(f).kind ==
+                  kernel::runner::StreamKind::NONE,
               "map-unknown");
         f.type = "fill";
         f.data = "{\"qty\":\"40\"}";
-        Check(jev::runner::MapTradeEvent(f).kind ==
-                  jev::runner::StreamKind::NONE,
+        Check(kernel::runner::MapTradeEvent(f).kind ==
+                  kernel::runner::StreamKind::NONE,
               "map-untagged");
         f.data =
             "{\"event\":\"partial_fill\",\"order\":{\"client_"
             "order_id\":\"abc123\",\"filled_qty\":\"x\"},"
             "\"qty\":\"40\"}";
-        Check(jev::runner::MapTradeEvent(f).kind ==
-                  jev::runner::StreamKind::NONE,
+        Check(kernel::runner::MapTradeEvent(f).kind ==
+                  kernel::runner::StreamKind::NONE,
               "map-badqty");
         // Shaping: query/exit-flat/exit-partial/hold/invalid.
-        auto sq = jev::runner::ShapeStreamFill(
-            jev::exec::RouteState::QUERY_SENT, 100, 40);
+        auto sq = kernel::runner::ShapeStreamFill(
+            kernel::exec::RouteState::QUERY_SENT, 100, 40);
         Check(sq.feed_query && !sq.feed_close &&
                   sq.q.found && sq.q.filled_qty == 40,
               "shape-query");
-        auto sf = jev::runner::ShapeStreamFill(
-            jev::exec::RouteState::EXIT_SENT, 100, 100);
+        auto sf = kernel::runner::ShapeStreamFill(
+            kernel::exec::RouteState::EXIT_SENT, 100, 100);
         Check(sf.feed_close &&
-                  sf.c.state == jev::broker::CloseState::FILLED,
+                  sf.c.state == kernel::broker::CloseState::FILLED,
               "shape-flat");
-        auto sp = jev::runner::ShapeStreamFill(
-            jev::exec::RouteState::EXIT_EMERGENCY, 100, 40);
+        auto sp = kernel::runner::ShapeStreamFill(
+            kernel::exec::RouteState::EXIT_EMERGENCY, 100, 40);
         Check(sp.feed_close &&
-                  sp.c.state == jev::broker::CloseState::PARTIAL,
+                  sp.c.state == kernel::broker::CloseState::PARTIAL,
               "shape-partial");
-        auto sh = jev::runner::ShapeStreamFill(
-            jev::exec::RouteState::SENT_UNACKED, 100, 40);
+        auto sh = kernel::runner::ShapeStreamFill(
+            kernel::exec::RouteState::SENT_UNACKED, 100, 40);
         Check(!sh.feed_query && !sh.feed_close, "shape-hold");
-        auto si = jev::runner::ShapeStreamFill(
-            jev::exec::RouteState::QUERY_SENT, 100, 0);
+        auto si = kernel::runner::ShapeStreamFill(
+            kernel::exec::RouteState::QUERY_SENT, 100, 0);
         Check(!si.feed_query, "shape-invalid");
         // QueryToClose funnel.
-        jev::broker::OrderQuery qq;
+        kernel::broker::OrderQuery qq;
         qq.transport_ok = true;
         qq.found = true;
         qq.filled_qty = 60;
-        qq.close_state = jev::broker::CloseState::FILLED;
-        auto qc = jev::runner::QueryToClose(qq);
+        qq.close_state = kernel::broker::CloseState::FILLED;
+        auto qc = kernel::runner::QueryToClose(qq);
         Check(qc.transport_ok && qc.filled_qty == 60 &&
-                  qc.state == jev::broker::CloseState::FILLED &&
+                  qc.state == kernel::broker::CloseState::FILLED &&
                   qc.executed,
               "q2c-fill");
         qq.cancelled = true;
-        Check(jev::runner::QueryToClose(qq).state ==
-                  jev::broker::CloseState::DEAD,
+        Check(kernel::runner::QueryToClose(qq).state ==
+                  kernel::broker::CloseState::DEAD,
               "q2c-dead");
-        jev::broker::OrderQuery q404;
+        kernel::broker::OrderQuery q404;
         q404.transport_ok = true;
-        auto qn = jev::runner::QueryToClose(q404);
+        auto qn = kernel::runner::QueryToClose(q404);
         Check(qn.transport_ok &&
-                  qn.state == jev::broker::CloseState::UNKNOWN &&
+                  qn.state == kernel::broker::CloseState::UNKNOWN &&
                   !qn.executed,
               "q2c-absent");
     }
-    // 1. STAGE gate: missing / corrupt / non-G0 refuse; valid runs.
+    // 1. STAGE gate: missing / corrupt / non-paper refuse; valid runs.
     {
         Rig r;
         std::remove((r.dir + "/STAGE").c_str());
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(!g.Recover(nullptr), "stage-missing-refuses");
-        WriteFile(r.dir + "/STAGE", "stage: G0_PAPER\n");
+        WriteFile(r.dir + "/STAGE", "stage: PAPER\n");
         Check(!g.Recover(nullptr), "stage-corrupt-refuses");
         std::string body =
-            "G1_TINY|human|2026-09-25T00:00:00Z|150|GENESIS";
+            "TINY|human|2026-09-25T00:00:00Z|150|GENESIS";
         WriteFile(r.dir + "/STAGE",
-                  "stage: G1_TINY\napproved_by: human\napproved_at: "
+                  "stage: TINY\napproved_by: human\napproved_at: "
                   "2026-09-25T00:00:00Z\ncapital_usd: 150\n"
                   "attest_hash: " +
-                      jev::Sha256Hex(body) + "\n");
+                      kernel::Sha256Hex(body) + "\n");
         Check(!g.Recover(nullptr), "stage-nong0-refuses");
         WriteStageG0(r.dir);
         Check(g.Recover(nullptr), "stage-g0-accepts");
@@ -883,7 +883,7 @@ int main() {
     // query -> fill -> PROTECTED; chain verifies; exactly one POST.
     {
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "e2e-recover");
         Check(g.SubmitIntent(GoodIntent("intent-001", "AAPL", false,
                                         100),
@@ -897,7 +897,7 @@ int main() {
         Check(g.Cycle(g_now), "e2e-cycle");
         const auto* s = g.Find("intent-001");
         Check(s && s->done &&
-                  s->m.state == jev::exec::RouteState::PROTECTED,
+                  s->m.state == kernel::exec::RouteState::PROTECTED,
               "e2e-protected");
         Check(CountMethod("POST", "/v2/orders") == 1, "e2e-one-post");
         Check(CountMethod("GET", "by_client_order_id") == 2,
@@ -912,14 +912,14 @@ int main() {
                 shape = true;
         }
         Check(shape, "e2e-bracket-shape");
-        Check(jev::runner::JournalVerifyFile(
+        Check(kernel::runner::JournalVerifyFile(
                   (r.dir + "/journal.jsonl").c_str()),
               "e2e-chain");
         Check(Exists(r.dir + "/snap-intent-001.txt"),
               "e2e-snapshot");
         Check(Exists(r.dir + "/intent-intent-001.txt"),
               "e2e-intent-file");
-        jev::runner::Summary sm;
+        kernel::runner::Summary sm;
         Check(g.Summarize(&sm) && sm.rows == 2 && sm.intent == 1 &&
                   sm.fill == 1 && sm.chain_ok,
               "e2e-summary");
@@ -933,17 +933,17 @@ int main() {
                           0, &cid)
                    .empty(),
               "cr-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "cr-recover");
         PushRule("GET", "by_client_order_id", 200,
                  HeldReply("filled", "100").c_str());
         Check(g.Cycle(g_now), "cr-cycle");
         const auto* s = g.Find("intent-010");
         Check(s && s->done &&
-                  s->m.state == jev::exec::RouteState::PROTECTED,
+                  s->m.state == kernel::exec::RouteState::PROTECTED,
               "cr-protected");
         Check(CountMethod("POST", "/v2/orders") == 0, "cr-no-post");
-        Check(jev::runner::JournalVerifyFile(
+        Check(kernel::runner::JournalVerifyFile(
                   (r.dir + "/journal.jsonl").c_str()),
               "cr-chain");
     }
@@ -957,7 +957,7 @@ int main() {
                           0, &cid)
                    .empty(),
               "st-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "st-recover");
         g_stream =
             "event: partial_fill\ndata: {\"event\":\"partial_"
@@ -972,7 +972,7 @@ int main() {
         Check(g.Cycle(g_now), "st-cycle");
         const auto* s = g.Find("intent-020");
         Check(s && s->done &&
-                  s->m.state == jev::exec::RouteState::CLOSED &&
+                  s->m.state == kernel::exec::RouteState::CLOSED &&
                   s->m.exit_closed_qty == 100,
               "st-closed-100");
         Check(CountMethod("POST", "/v2/orders") == 1, "st-one-post");
@@ -987,14 +987,14 @@ int main() {
             }
         }
         Check(qty == "60", "st-post-60");
-        Check(jev::runner::JournalVerifyFile(
+        Check(kernel::runner::JournalVerifyFile(
                   (r.dir + "/journal.jsonl").c_str()),
               "st-chain");
     }
     // 4b. ULID stream fill + dead REST: the ULID stamps (crash
     // image carries it) but the unconfirmed terminal reconciles
     // and freezes on exhaustion — never a blind mint, never a
-    // resend. Fail closed, S2/human owns the remainder.
+    // resend. Fail closed, reconcile/human owns the remainder.
     {
         Rig r;
         std::string cid;
@@ -1003,7 +1003,7 @@ int main() {
                    .empty(),
               "stb-image");
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "stb-recover");
         g_stream =
             "id: 01J000000000000000000000003\nevent: partial_fill\n"
@@ -1015,7 +1015,7 @@ int main() {
         const auto* s = g.Find("intent-021");
         Check(s && s->done &&
                   s->m.state ==
-                      jev::exec::RouteState::UNKNOWN_FROZEN,
+                      kernel::exec::RouteState::UNKNOWN_FROZEN,
               "stb-freezes");
         Check(CountMethod("POST", "/v2/orders") == 0,
               "stb-no-post");
@@ -1044,7 +1044,7 @@ int main() {
         Check(cur == "01J000000000000000000000003",
               "st-cursor-durable");
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr) &&
                   g2.cursor() ==
                       "01J000000000000000000000003",
@@ -1064,7 +1064,7 @@ int main() {
                           100, 9, 0, &cid)
                    .empty(),
               "cc-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "cc-recover");
         std::string ua = MkUlid(100, 7);   // older publication
         std::string ub = MkUlid(200, 9);   // newer publication
@@ -1086,12 +1086,12 @@ int main() {
         const auto* s = g.Find("intent-022");
         Check(s && s->done &&
                   s->m.state ==
-                      jev::exec::RouteState::UNKNOWN_FROZEN &&
+                      kernel::exec::RouteState::UNKNOWN_FROZEN &&
                   std::string(s->m.last_event_id) == ub &&
                   s->sev_n_ == 0,
               ord == 0 ? "cc-ordered-converges"
                        : "cc-reversed-converges");
-        // S2 + the reconcile-exhaust retries (all 500): identical
+        // reconcile + the reconcile-exhaust retries (all 500): identical
         // count in both orders proves identical convergence.
         Check(CountMethod("GET", "by_client_order_id") == 3,
               ord == 0 ? "cc-same-lookups" : "cc-same-lookups-rev");
@@ -1106,7 +1106,7 @@ int main() {
                           100, 9, 0, &cid)
                    .empty(),
               "du-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "du-recover");
         std::string ud = MkUlid(300, 11);
         std::string one =
@@ -1122,16 +1122,16 @@ int main() {
         // same reconcile-exhaust terminal as a single delivery.
         Check(s && s->done &&
                   s->m.state ==
-                      jev::exec::RouteState::UNKNOWN_FROZEN &&
+                      kernel::exec::RouteState::UNKNOWN_FROZEN &&
                   std::string(s->m.last_event_id) == ud &&
                   s->sev_n_ == 0,
               "du-stamps-once");
     }
     // 4e. Queue overflow (9 events, cap 8): position is never
     // silently lost — alert + a real lookup on the NEXT cycle
-    // (S2 already fired this cycle, so the nudge must cause one
+    // (reconcile already fired this cycle, so the nudge must cause one
     // more). LIFE events (no shaping, just stamp + forced REST)
-    // keep the slot parked so the lookup count is exact: S2#1 +
+    // keep the slot parked so the lookup count is exact: reconcile#1 +
     // nudge#2 + one refresh per stamped head (8). No POST ever.
     {
         Rig r;
@@ -1140,10 +1140,10 @@ int main() {
                           100, 9, 0, &cid)
                    .empty(),
               "ov-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "ov-recover");
         PushRule("GET", "by_client_order_id", 500, "{}");
-        Check(g.Cycle(g_now), "ov-cycle1");  // S2 GET#1
+        Check(g.Cycle(g_now), "ov-cycle1");  // reconcile GET#1
         Check(CountMethod("GET", "by_client_order_id") == 1,
               "ov-s2-first");
         g_stream.clear();
@@ -1170,7 +1170,7 @@ int main() {
               "ov-forces-rest");
         const auto* os = g.Find("intent-024");
         Check(os && !os->done &&
-                  os->m.state == jev::exec::RouteState::EXIT_SENT &&
+                  os->m.state == kernel::exec::RouteState::EXIT_SENT &&
                   os->sev_n_ == 0,
               "ov-parked-drained");
         Check(CountMethod("POST", "/v2/orders") == 0,
@@ -1185,10 +1185,10 @@ int main() {
                           100, 9, 0, &cid)
                    .empty(),
               "pe-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "pe-recover");
         PushRule("GET", "by_client_order_id", 500, "{}");
-        Check(g.Cycle(g_now), "pe-cycle1");  // S2 GET#1
+        Check(g.Cycle(g_now), "pe-cycle1");  // reconcile GET#1
         g_stream = std::string(5000, 'x') + "\n\n";
         PushRule("GET", "by_client_order_id", 500, "{}");
         Check(g.Cycle(g_now), "pe-cycle2");
@@ -1202,8 +1202,8 @@ int main() {
                   std::string(abuf).find("sse-error") !=
                       std::string::npos,
               "pe-alerts");
-        std::vector<jev::journal::Row> rows;
-        Check(jev::runner::JournalLoad(
+        std::vector<kernel::journal::Row> rows;
+        Check(kernel::runner::JournalLoad(
                       (r.dir + "/journal.jsonl").c_str(), &rows) &&
                   !rows.empty() &&
                   rows.back().kind == "reconcile",
@@ -1215,7 +1215,7 @@ int main() {
     // exactly 60 -> CLOSED at 100.
     {
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "ex-recover");
         Check(g.SubmitIntent(GoodIntent("intent-030", "SPY", true,
                                         100),
@@ -1230,7 +1230,7 @@ int main() {
         Check(g.Cycle(g_now), "ex-cycle");
         const auto* s = g.Find("intent-030");
         Check(s && s->done &&
-                  s->m.state == jev::exec::RouteState::CLOSED &&
+                  s->m.state == kernel::exec::RouteState::CLOSED &&
                   s->m.exit_closed_qty == 100,
               "ex-closed-100");
         std::vector<std::string> qtys;
@@ -1249,7 +1249,7 @@ int main() {
     // 6. HALT mid-position: entries stop, outstanding exit completes.
     {
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "h-recover");
         Check(g.SubmitIntent(GoodIntent("intent-040", "SPY", true,
                                         100),
@@ -1267,14 +1267,14 @@ int main() {
         Check(g.Cycle(g_now), "h-cycle");
         const auto* s = g.Find("intent-040");
         Check(s && s->done &&
-                  s->m.state == jev::exec::RouteState::CLOSED,
+                  s->m.state == kernel::exec::RouteState::CLOSED,
               "h-exit-alive");
     }
     // 7. UNKNOWN freezes the symbol: naked accept -> cancel -> DELETE
     // refused (422) -> UNKNOWN + freeze file -> new intents refused.
     {
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "f-recover");
         Check(g.SubmitIntent(GoodIntent("intent-050", "AAPL", false,
                                         100),
@@ -1289,9 +1289,9 @@ int main() {
         const auto* s = g.Find("intent-050");
         Check(s && s->done &&
                   s->m.state ==
-                      jev::exec::RouteState::UNKNOWN_FROZEN,
+                      kernel::exec::RouteState::UNKNOWN_FROZEN,
               "f-unknown");
-        Check(jev::runner::FreezeHas((r.dir + "/freeze.txt").c_str(),
+        Check(kernel::runner::FreezeHas((r.dir + "/freeze.txt").c_str(),
                                      "AAPL"),
               "f-frozen");
         const char* rs = nullptr;
@@ -1300,7 +1300,7 @@ int main() {
                               &rs),
               "f-new-refused");
     }
-    // 8. S2 cadence on a parked exit (transport down): one forced
+    // 8. reconcile cadence on a parked exit (transport down): one forced
     // lookup per due window, machine untouched, zero POSTs; transport
     // up completes it with no resend.
     {
@@ -1310,7 +1310,7 @@ int main() {
                           0, &cid)
                    .empty(),
               "s2-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "s2-recover");
         Check(g.Cycle(g_now), "s2-cycle1");  // forced GET#1 (500)
         Check(CountMethod("GET", "by_client_order_id") == 1,
@@ -1325,16 +1325,16 @@ int main() {
               "s2-fires");
         const auto* s = g.Find("intent-060");
         Check(s && !s->done &&
-                  s->m.state == jev::exec::RouteState::EXIT_SENT,
+                  s->m.state == kernel::exec::RouteState::EXIT_SENT,
               "s2-parked");
         Check(CountMethod("POST", "/v2/orders") == 0, "s2-no-post");
-        g_now += 901LL * 1000000000LL;  // S2 due again: refresh
+        g_now += 901LL * 1000000000LL;  // reconcile due again: refresh
         PushRule("GET", "by_client_order_id", 200,
                  HeldReply("filled", "100").c_str());
         Check(g.Cycle(g_now), "s2-cycle4");
         const auto* s2 = g.Find("intent-060");
         Check(s2 && s2->done &&
-                  s2->m.state == jev::exec::RouteState::CLOSED,
+                  s2->m.state == kernel::exec::RouteState::CLOSED,
               "s2-closed");
         Check(CountMethod("POST", "/v2/orders") == 0, "s2-no-resend");
     }
@@ -1347,9 +1347,9 @@ int main() {
                           0, &cid)
                    .empty(),
               "b-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "b-recover");
-        Check(g.Cycle(g_now), "b-cycle1");  // S2 forced GET#1 (500)
+        Check(g.Cycle(g_now), "b-cycle1");  // reconcile forced GET#1 (500)
         g_stream =
             "id: 01J000000000000000000000002\nevent: trade_bust\n"
             "data: {\"event\":\"trade_bust\",\"order\":{\""
@@ -1361,9 +1361,9 @@ int main() {
               "b-forces-rest");
         const auto* s = g.Find("intent-070");
         Check(s && !s->done &&
-                  s->m.state == jev::exec::RouteState::EXIT_SENT,
+                  s->m.state == kernel::exec::RouteState::EXIT_SENT,
               "b-no-terminal-on-bust");
-        // Transport up + S2 due: the forced lookup refreshes and
+        // Transport up + reconcile due: the forced lookup refreshes and
         // the close completes with no resend.
         g_now += 901LL * 1000000000LL;
         PushRule("GET", "by_client_order_id", 200,
@@ -1371,7 +1371,7 @@ int main() {
         Check(g.Cycle(g_now), "b-cycle3");
         const auto* s3 = g.Find("intent-070");
         Check(s3 && s3->done &&
-                  s3->m.state == jev::exec::RouteState::CLOSED,
+                  s3->m.state == kernel::exec::RouteState::CLOSED,
               "b-closed");
         Check(CountMethod("POST", "/v2/orders") == 0, "b-no-post");
     }
@@ -1383,7 +1383,7 @@ int main() {
     {
         Rig r;
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "eb-recover");
         Check(g.SubmitIntent(GoodIntent("intent-080", "SPY", true,
                                         100),
@@ -1400,15 +1400,15 @@ int main() {
         Check(g.Cycle(g_now), "eb-cycle");
         const auto* s = g.Find("intent-080");
         Check(s && s->done &&
-                  s->m.state == jev::exec::RouteState::CLOSED,
+                  s->m.state == kernel::exec::RouteState::CLOSED,
               "eb-closed");
         Check(Exists(r.dir + "/emergency.jsonl"),
               "eb-buffered");
         MakeWritable(r.dir + "/journal.jsonl");
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "eb-recover2");
-        Check(jev::runner::JournalVerifyFile(
+        Check(kernel::runner::JournalVerifyFile(
                   (r.dir + "/journal.jsonl").c_str()),
               "eb-chain");
         Check(FileSize(r.dir + "/emergency.jsonl") == 0,
@@ -1416,9 +1416,9 @@ int main() {
     }
     // 11. Redaction gate: secret-shaped bodies never journal.
     {
-        Check(!jev::journal::RedactionOk("qty=10 secret=abc"),
+        Check(!kernel::journal::RedactionOk("qty=10 secret=abc"),
               "rd-gate");
-        Check(jev::journal::RedactionOk("qty=10 note=fill"),
+        Check(kernel::journal::RedactionOk("qty=10 note=fill"),
               "rd-clean");
     }
     // 12. Retention + backup: 120-day file pruned, 10-day kept,
@@ -1428,10 +1428,10 @@ int main() {
         WriteFile(r.dir + "/journal-20200101.jsonl", "a\n");
         WriteFile(r.dir + "/journal-20260920.jsonl", "b\n");
         WriteFile(r.dir + "/notes.txt", "keep\n");
-        long long today = jev::runner::UnixDay(2026, 9, 25);
+        long long today = kernel::runner::UnixDay(2026, 9, 25);
         int kept = 0;
         int pruned = 0;
-        Check(jev::runner::RetainJournals(r.dir.c_str(), today, &kept,
+        Check(kernel::runner::RetainJournals(r.dir.c_str(), today, &kept,
                                           &pruned),
               "rt-runs");
         Check(pruned == 1 && kept == 1, "rt-counts");
@@ -1439,37 +1439,37 @@ int main() {
               "rt-pruned");
         Check(Exists(r.dir + "/notes.txt"),
               "rt-keeps-other");
-        Check(jev::runner::BackupFile(
+        Check(kernel::runner::BackupFile(
                   (r.dir + "/journal-20260920.jsonl").c_str(),
                   (r.dir + "/journal-20260920.bak").c_str()),
               "bk-ok");
         Check(Exists(r.dir + "/journal-20260920.bak"),
               "bk-exists");
     }
-    // 13. Paper fill model exactness (frozen doc 06): BUY mid+spread
+    // 13. Paper fill model exactness: BUY mid+spread
     // (min 1bp), SELL mirror.
     {
-        jev::broker::Quote q;
+        kernel::broker::Quote q;
         q.mid_cents = 10000;
         q.spread_cents = 20;
-        Check(jev::broker::PaperFillPrice(jev::broker::OrderSide::BUY,
+        Check(kernel::broker::PaperFillPrice(kernel::broker::OrderSide::BUY,
                                           q) == 10020,
               "pf-buy-spread");
-        Check(jev::broker::PaperFillPrice(jev::broker::OrderSide::SELL,
+        Check(kernel::broker::PaperFillPrice(kernel::broker::OrderSide::SELL,
                                           q) == 9980,
               "pf-sell-spread");
         q.spread_cents = 0;
-        Check(jev::broker::PaperFillPrice(jev::broker::OrderSide::BUY,
+        Check(kernel::broker::PaperFillPrice(kernel::broker::OrderSide::BUY,
                                           q) == 10001,
               "pf-buy-min");
-        Check(jev::broker::PaperFillPrice(jev::broker::OrderSide::SELL,
+        Check(kernel::broker::PaperFillPrice(kernel::broker::OrderSide::SELL,
                                           q) == 9999,
               "pf-sell-min");
     }
     // 14. MEDIUM kill flattens open risk: crafted open filled entry
     // (PARTIAL_AWAIT crash image) + spend tier 3 -> flatten EXIT
     // issued for exactly the filled qty -> closes; the entry slot
-    // itself stays open (S2/human owns it).
+    // itself stays open.
     {
         Rig r;
         std::string cid;
@@ -1477,7 +1477,7 @@ int main() {
                           40, &cid)
                    .empty(),
               "m-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "m-recover");
         g_kill.spend_tier = 3;  // MEDIUM
         // Flatten's sweep-ownership check (both side-tags absent)
@@ -1491,7 +1491,7 @@ int main() {
         Check(g.Cycle(g_now), "m-cycle");
         const auto* f = g.Find("intent-090-flatten");
         Check(f && f->done &&
-                  f->m.state == jev::exec::RouteState::CLOSED &&
+                  f->m.state == kernel::exec::RouteState::CLOSED &&
                   f->m.exit_closed_qty == 40,
               "m-flattened");
         const auto* e = g.Find("intent-090");
@@ -1517,7 +1517,7 @@ int main() {
         Check(!CrashImage(r.dir, longid.c_str(), "AAPL", 0, 0, 100, 5, 40, &cid)
                    .empty(),
               "ml-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "ml-recover");
         g_kill.spend_tier = 3;  // MEDIUM
         for (int i = 0; i < 4; ++i)
@@ -1528,7 +1528,7 @@ int main() {
         const std::string fid = std::string(55, 'a') + "-flatten";
         const auto* f = g.Find(fid.c_str());
         Check(f && f->done &&
-                  f->m.state == jev::exec::RouteState::CLOSED &&
+                  f->m.state == kernel::exec::RouteState::CLOSED &&
                   f->m.exit_closed_qty == 40,
               "ml-flattened-long-id");
         Check(!Exists(r.dir + "/freeze.txt"), "ml-no-freeze");
@@ -1538,12 +1538,12 @@ int main() {
         Rig r;
         WriteFile(r.dir + "/journal.jsonl",
                   "0|1|intent|x|00|00|ff\n");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(!g.Recover(nullptr), "jb-refuses");
         Check(Exists(r.dir + "/alerts.jsonl"),
               "jb-alerts");
     }
-    // 16. HARD manages old risk before terminating (sec. 10.3):
+    // 16. HARD manages old risk before terminating:
     // crafted open ENTRY (filled 100, no protection) + HARD kill
     // -> reprotect POST + flatten POST, hard journal rows, HALT
     // file, cycle returns false (supervisor must not restart).
@@ -1555,7 +1555,7 @@ int main() {
                    .empty(),
               "hd-image");
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hd-recover");
         g_kill.drift_unresolvable = true;  // HARD
         PushRule("GET", "by_client_order_id", 200,
@@ -1591,9 +1591,9 @@ int main() {
                   repair_coid.find(cid) == std::string::npos,
               "hd-repair-own-id");
         Check(Exists(r.dir + "/HALT"), "hd-halt-survives");
-        std::vector<jev::journal::Row> rows;
+        std::vector<kernel::journal::Row> rows;
         int hard_rows = 0;
-        if (jev::runner::JournalLoad(
+        if (kernel::runner::JournalLoad(
                 (r.dir + "/journal.jsonl").c_str(), &rows)) {
             for (std::size_t i = 0; i < rows.size(); ++i) {
                 if (rows[i].kind == "drift-directive") ++hard_rows;
@@ -1601,9 +1601,9 @@ int main() {
         }
         Check(hard_rows >= 2, "hd-journaled");
         // Restart: HALT blocks entries, exits stay submittable.
-        g_kill = jev::kill::KillInputs();
+        g_kill = kernel::kill::KillInputs();
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "hd-restart");
         Check(!g2.SubmitIntent(GoodIntent("intent-101", "AAPL",
                                           false, 10),
@@ -1626,7 +1626,7 @@ int main() {
                           "0193abcd-1234-5678-9abc-def012345678")
                    .empty(),
               "hx-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hx-recover");
         g_kill.broker_auth_fail = true;  // HARD
         PushRule("GET", "by_client_order_id", 200,
@@ -1637,9 +1637,9 @@ int main() {
         Check(CountMethod("POST", "/v2/orders") == 0,
               "hx-no-second-close");
         Check(Exists(r.dir + "/HALT"), "hx-halt-survives");
-        std::vector<jev::journal::Row> rows;
+        std::vector<kernel::journal::Row> rows;
         int hard_rows = 0;
-        if (jev::runner::JournalLoad(
+        if (kernel::runner::JournalLoad(
                 (r.dir + "/journal.jsonl").c_str(), &rows)) {
             for (std::size_t i = 0; i < rows.size(); ++i) {
                 if (rows[i].kind == "drift-directive")
@@ -1659,7 +1659,7 @@ int main() {
                    .empty(),
               "hu-image");
         // SENT_UNACKED, filled 0: POST may have landed, ack lost.
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hu-recover");
         g_kill.determinism_fail = true;  // HARD
         if (hcase == 0) {
@@ -1680,9 +1680,9 @@ int main() {
     // stage; ids are safe-grammar, permanent, and non-reusable.
     {
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "xg-recover");
-        Check(jev::runner::FreezeAdd((r.dir + "/freeze.txt").c_str(),
+        Check(kernel::runner::FreezeAdd((r.dir + "/freeze.txt").c_str(),
                                      "AAPL"),
               "xg-freeze");
         Check(!g.SubmitIntent(GoodIntent("intent-130", "AAPL",
@@ -1718,7 +1718,7 @@ int main() {
     {
         Rig r;
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "xp-recover");
         Check(g.SubmitIntent(GoodIntent("intent-140", "AAPL",
                                         false, 100),
@@ -1733,7 +1733,7 @@ int main() {
         // an idempotent crash-retry (no duplicate registration).
         }
         {
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "xp-recover2");
         Check(g2.SubmitIntent(GoodIntent("intent-140", "AAPL",
                                          false, 100),
@@ -1744,7 +1744,7 @@ int main() {
         // resubmit is refused (live dup today; already-registered
         // once done slots reclaim in the lifecycle pass).
         }
-        G0Runner g3(r.cfg, r.deps);
+        PaperRunner g3(r.cfg, r.deps);
         Check(g3.Recover(nullptr), "xp-recover3");
         Check(!g3.SubmitIntent(GoodIntent("intent-140", "AAPL",
                                           false, 100),
@@ -1757,7 +1757,7 @@ int main() {
         Rig r;
         r.deps.list_positions = FakePositions;
         g_positions.push_back(MkPos("AAPL", 40));  // orphan
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "pd-recover");
         Check(g.Cycle(g_now), "pd-cycle");
         FILE* af =
@@ -1770,9 +1770,9 @@ int main() {
                   std::string(abuf).find("position-drift") !=
                       std::string::npos,
               "pd-orphan-alerts");
-        std::vector<jev::journal::Row> rows;
+        std::vector<kernel::journal::Row> rows;
         bool drift_row = false;
-        if (jev::runner::JournalLoad(
+        if (kernel::runner::JournalLoad(
                 (r.dir + "/journal.jsonl").c_str(), &rows)) {
             for (std::size_t i = 0; i < rows.size(); ++i) {
                 if (rows[i].kind == "drift-directive")
@@ -1791,14 +1791,14 @@ int main() {
                    .empty(),
               "pa-image");
         g_positions.push_back(MkPos("AAPL", 40));
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "pa-recover");
         PushRule("GET", "by_client_order_id", 500, "{}");
         Check(g.Cycle(g_now), "pa-cycle");
         Check(!Exists(r.dir + "/alerts.jsonl"), "pa-quiet");
-        std::vector<jev::journal::Row> rows;
+        std::vector<kernel::journal::Row> rows;
         bool drift_row = false;
-        if (jev::runner::JournalLoad(
+        if (kernel::runner::JournalLoad(
                 (r.dir + "/journal.jsonl").c_str(), &rows)) {
             for (std::size_t i = 0; i < rows.size(); ++i) {
                 if (rows[i].kind == "drift-directive")
@@ -1817,17 +1817,17 @@ int main() {
                    .empty(),
               "pm-image");
         g_positions.push_back(MkPos("AAPL", 100));  // vs local 40
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "pm-recover");
         PushRule("GET", "by_client_order_id", 500, "{}");
-        Check(g.Cycle(g_now), "pm-cycle1");  // S2 GET#1
+        Check(g.Cycle(g_now), "pm-cycle1");  // reconcile GET#1
         g_now += 901LL * 1000000000LL;
         PushRule("GET", "by_client_order_id", 500, "{}");
         Check(g.Cycle(g_now), "pm-cycle2");  // drift GET#2
         Check(CountMethod("GET", "by_client_order_id") == 2,
               "pm-forces-reloukup");
     }
-    // 24. MEDIUM single close (doc 06 sec. 6.1b): one 100-share
+    // 24. MEDIUM single close: one 100-share
     // position with local ENTRY coverage gets exactly one close —
     // the local flatten EXIT. The broker sweep reconciles (pre-
     // flights) but never sends for the covered symbol; the
@@ -1844,7 +1844,7 @@ int main() {
                    .empty(),
               "ms-image");
         g_positions.push_back(MkPos("AAPL", 100));
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "ms-recover");
         g_kill.spend_tier = 3;  // MEDIUM
         // Flatten's sweep-ownership check (both side-tags, absent)
@@ -1904,7 +1904,7 @@ int main() {
                    .empty(),
               "mc-image");
         g_positions.push_back(MkPos("AAPL", 100));
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "mc-recover");
         g_kill.spend_tier = 3;  // MEDIUM
         // Flatten's sweep-ownership check first (both side-tags
@@ -1918,9 +1918,9 @@ int main() {
         PushRule("GET", "by_client_order_id", 200,
                  HeldReply("filled", "100").c_str());
         Check(g.Cycle(g_now), "mc-cycle");
-        std::vector<jev::journal::Row> rows;
+        std::vector<kernel::journal::Row> rows;
         bool sweep_row = false;
-        if (jev::runner::JournalLoad(
+        if (kernel::runner::JournalLoad(
                 (r.dir + "/journal.jsonl").c_str(), &rows)) {
             for (std::size_t i = 0; i < rows.size(); ++i) {
                 if (rows[i].kind == "drift-directive")
@@ -1946,7 +1946,7 @@ int main() {
         r.deps.venue_gate = FakeVenue;
         g_venue_open = 1;
         g_venue_spread = 1;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "mf-recover");
         g_kill.spend_tier = 3;  // MEDIUM
         Check(g.Cycle(g_now), "mf-cycle");
@@ -1973,7 +1973,7 @@ int main() {
                    .empty(),
               "mr-image");
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "mr-recover");
         g_kill.spend_tier = 3;  // MEDIUM
         // Flatten's sweep-ownership check (both side-tags absent)
@@ -1987,12 +1987,12 @@ int main() {
         Check(g.Cycle(g_now), "mr-cycle1");
         const auto* mf1 = g.Find("intent-172-flatten");
         Check(mf1 && mf1->done &&
-                  mf1->m.state == jev::exec::RouteState::CLOSED,
+                  mf1->m.state == kernel::exec::RouteState::CLOSED,
               "mr-flatten-closed");
         // Completed flatten is never re-ordered: restart sees the
         // terminal exit row, submits nothing, freezes nothing.
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "mr-recover2");
         Check(g2.Cycle(g_now), "mr-cycle2");
         Check(g2.Find("intent-172-flatten") == nullptr,
@@ -2023,7 +2023,7 @@ int main() {
         Check(CrashFlatten(r.dir, "intent-174-flatten", "AAPL",
                            100),
               "mi-flatten-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "mi-recover");
         Check(g.slots() == 2, "mi-both-reload");
         g_kill.spend_tier = 3;  // MEDIUM
@@ -2035,9 +2035,9 @@ int main() {
         Check(g.slots() == 2, "mi-no-second-flatten");
         Check(CountMethod("POST", "/v2/orders") == 0,
               "mi-no-resend");
-        std::vector<jev::journal::Row> rows;
+        std::vector<kernel::journal::Row> rows;
         int fid_intents = 0;
-        if (jev::runner::JournalLoad(
+        if (kernel::runner::JournalLoad(
                 (r.dir + "/journal.jsonl").c_str(), &rows)) {
             for (std::size_t i = 0; i < rows.size(); ++i) {
                 if (rows[i].kind == "intent" &&
@@ -2055,14 +2055,14 @@ int main() {
                           5, 100, &cid)
                    .empty(),
               "mp-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "mp-recover");
         g_kill.spend_tier = 3;  // MEDIUM
         PushRule("GET", "by_client_order_id", 404, "{}");
         PushRule("POST", "/v2/orders", 200,
                  HeldReply("filled", "40").c_str());
         Check(g.Cycle(g_now), "mp-cycle1");
-        g_kill = jev::kill::KillInputs();  // MEDIUM clears
+        g_kill = kernel::kill::KillInputs();  // MEDIUM clears
         PushRule("GET", "by_client_order_id", 500, "{}");
         Check(g.Cycle(g_now), "mp-cycle2");
         FILE* mf =
@@ -2085,16 +2085,16 @@ int main() {
                           2, 0, &cid)
                    .empty(),
               "dr-image");
-        std::vector<jev::journal::Row> jr0;
-        Check(jev::runner::JournalLoad(
+        std::vector<kernel::journal::Row> jr0;
+        Check(kernel::runner::JournalLoad(
                       (r.dir + "/journal.jsonl").c_str(), &jr0) &&
                   jr0.size() == 1,
               "dr-row0");
         std::string e1 = EmgRow(
             1, g_now, "partial", "intent-180", "p1",
             jr0[0].row_hash.c_str());
-        jev::journal::Row pr1;
-        Check(jev::runner::ParseRowLine(e1.c_str(), &pr1),
+        kernel::journal::Row pr1;
+        Check(kernel::runner::ParseRowLine(e1.c_str(), &pr1),
               "dr-parse1");
         std::string e2 = EmgRow(2, g_now, "partial", "intent-180",
                                "p2", pr1.row_hash.c_str());
@@ -2107,10 +2107,10 @@ int main() {
         if (applied >= 2) journal += e2 + "\n";
         WriteFile(r.dir + "/journal.jsonl", journal.c_str());
         WriteFile(r.dir + "/emergency.jsonl", emg.c_str());
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "dr-recover");
-        std::vector<jev::journal::Row> rows;
-        Check(jev::runner::JournalLoad(
+        std::vector<kernel::journal::Row> rows;
+        Check(kernel::runner::JournalLoad(
                       (r.dir + "/journal.jsonl").c_str(), &rows) &&
                   rows.size() == 3 && rows[0].seq == 0 &&
                   rows[1].seq == 1 && rows[2].seq == 2 &&
@@ -2119,7 +2119,7 @@ int main() {
               applied == 0 ? "dr-converge-0"
               : applied == 1 ? "dr-converge-1"
                              : "dr-converge-2");
-        Check(jev::runner::JournalVerifyFile(
+        Check(kernel::runner::JournalVerifyFile(
                   (r.dir + "/journal.jsonl").c_str()),
               applied == 0 ? "dr-chain-0"
               : applied == 1 ? "dr-chain-1"
@@ -2144,7 +2144,7 @@ int main() {
               "dx-image");
         WriteFile(r.dir + "/emergency.jsonl",
                   "1|2|partial|intent-181|00|GARBAGE|ff\n");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(!g.Recover(nullptr), "dx-refuses");
     }
     // 31. Crash between the journaled intent row and the first
@@ -2155,7 +2155,7 @@ int main() {
     {
         Rig r;
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "rw-recover");
         Check(g.SubmitIntent(GoodIntent("intent-190", "AAPL",
                                         false, 100),
@@ -2163,11 +2163,11 @@ int main() {
               "rw-submit");
         std::string row0 = EmgRow(
             0, g_now, "intent", "intent-190", "submit",
-            jev::journal::GenesisPrev().c_str());
+            kernel::journal::GenesisPrev().c_str());
         Check(!row0.empty(), "rw-row0");
         WriteFile(r.dir + "/journal.jsonl", row0 + "\n");
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "rw-recover2");
         PushRule("GET", "by_client_order_id", 404, "{}");
         PushRule("POST", "/v2/orders", 200,
@@ -2177,11 +2177,11 @@ int main() {
         Check(g2.Cycle(g_now), "rw-cycle2");
         const auto* s = g2.Find("intent-190");
         Check(s && s->done &&
-                  s->m.state == jev::exec::RouteState::PROTECTED,
+                  s->m.state == kernel::exec::RouteState::PROTECTED,
               "rw-protected");
-        std::vector<jev::journal::Row> rows;
+        std::vector<kernel::journal::Row> rows;
         int intent_rows = 0;
-        if (jev::runner::JournalLoad(
+        if (kernel::runner::JournalLoad(
                 (r.dir + "/journal.jsonl").c_str(), &rows)) {
             for (std::size_t i = 0; i < rows.size(); ++i) {
                 if (rows[i].kind == "intent" &&
@@ -2194,12 +2194,12 @@ int main() {
               "rw-one-post");
     }
     // 32. Half registrations refuse: a journaled row with NEITHER
-    // crash image nor intent file is S2/human territory; with the
+    // crash image nor intent file is reconcile/human territory; with the
     // file present the rowed path recovers.
     {
         Rig r;
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hr-recover");
         Check(g.SubmitIntent(GoodIntent("intent-191", "AAPL",
                                         false, 100),
@@ -2207,7 +2207,7 @@ int main() {
               "hr-submit");
         std::string row0 = EmgRow(
             0, g_now, "intent", "intent-191", "submit",
-            jev::journal::GenesisPrev().c_str());
+            kernel::journal::GenesisPrev().c_str());
         Check(!row0.empty(), "hr-row0");
         WriteFile(r.dir + "/journal.jsonl", row0 + "\n");
         Check(std::remove((r.dir + "/intent-intent-191.txt").c_str()) ==
@@ -2215,12 +2215,12 @@ int main() {
               "hr-tear-file");
         }
         {
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(!g2.Recover(nullptr), "hr-refuses-no-file");
         WriteFile(r.dir + "/intent-intent-191.txt",
                   "AAPL|0|0|100|22000|24000\n");
         }
-        G0Runner g3(r.cfg, r.deps);
+        PaperRunner g3(r.cfg, r.deps);
         Check(g3.Recover(nullptr), "hr-rowed-recovers");
     }
     // 33. Duplicate intent rows: first wins, one slot, alerted —
@@ -2228,7 +2228,7 @@ int main() {
     {
         Rig r;
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "dd-recover");
         Check(g.SubmitIntent(GoodIntent("intent-192", "AAPL",
                                         false, 100),
@@ -2236,9 +2236,9 @@ int main() {
               "dd-submit");
         std::string row0 = EmgRow(
             0, g_now, "intent", "intent-192", "submit",
-            jev::journal::GenesisPrev().c_str());
-        jev::journal::Row pr0;
-        Check(jev::runner::ParseRowLine(row0.c_str(), &pr0),
+            kernel::journal::GenesisPrev().c_str());
+        kernel::journal::Row pr0;
+        Check(kernel::runner::ParseRowLine(row0.c_str(), &pr0),
               "dd-parse");
         std::string row1 = EmgRow(1, g_now, "intent", "intent-192",
                                  "submit", pr0.row_hash.c_str());
@@ -2246,7 +2246,7 @@ int main() {
         WriteFile(r.dir + "/journal.jsonl",
                   (row0 + "\n" + row1 + "\n").c_str());
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "dd-recover2");
         Check(g2.slots() == 1 &&
                   g2.Find("intent-192") != nullptr,
@@ -2271,7 +2271,7 @@ int main() {
     {
         Rig r;
         r.cfg.max_slots = 4;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "lc-recover");
         bool all_ok = true;
         // Four opens fill the entry cap (one shared cycle drives
@@ -2298,7 +2298,7 @@ int main() {
             std::snprintf(iid, sizeof(iid), "intent-2%02d", k);
             const auto* s = g.Find(iid);
             if (!s || !s->done ||
-                s->m.state != jev::exec::RouteState::PROTECTED)
+                s->m.state != kernel::exec::RouteState::PROTECTED)
                 all_ok = false;
         }
         Check(all_ok, "lc-four-open");
@@ -2325,7 +2325,7 @@ int main() {
             if (!g.Cycle(g_now)) break;
             const auto* x = g.Find(xid);
             if (!x || !x->done ||
-                x->m.state != jev::exec::RouteState::CLOSED)
+                x->m.state != kernel::exec::RouteState::CLOSED)
                 break;
             const auto* p = g.Find(iid);
             if (!p || p->m.filled_qty - p->m.exit_closed_qty != 0)
@@ -2357,13 +2357,13 @@ int main() {
             if (!g.Cycle(g_now)) break;
             const auto* x = g.Find(xid);
             if (!x || !x->done ||
-                x->m.state != jev::exec::RouteState::CLOSED)
+                x->m.state != kernel::exec::RouteState::CLOSED)
                 break;
             ++closed;
         }
         Check(closed == 20, "lc-twenty-closes");
         Check(g.slots() <= 4, "lc-bounded");
-        Check(jev::runner::JournalVerifyFile(
+        Check(kernel::runner::JournalVerifyFile(
                   (r.dir + "/journal.jsonl").c_str()),
               "lc-chain");
     }
@@ -2371,7 +2371,7 @@ int main() {
     // exactly one POST, journal intact, zero further transport.
     {
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "pz-recover");
         Check(g.SubmitIntent(GoodIntent("intent-200", "AAPL",
                                         false, 100),
@@ -2391,7 +2391,7 @@ int main() {
         Check(s && s->frozen, "pz-frozen");
         Check(CountMethod("POST", "/v2/orders") == 1,
               "pz-one-post");
-        Check(jev::runner::JournalVerifyFile(
+        Check(kernel::runner::JournalVerifyFile(
                   (r.dir + "/journal.jsonl").c_str()),
               "pz-chain");
         int gets = CountMethod("GET", "by_client_order_id");
@@ -2401,12 +2401,12 @@ int main() {
                   CountMethod("POST", "/v2/orders") == posts,
               "pz-no-further-transport");
     }
-    // 36. §6.1 pre-send durability: a failed intent registration
+    // 36. pre-send durability: a failed intent registration
     // refuses the submit with zero transport (nothing unsent can
     // exist without its durable identity).
     {
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "ps-recover");
 #ifdef _WIN32
         _mkdir((r.dir + "/intent-intent-201.txt").c_str());
@@ -2419,26 +2419,26 @@ int main() {
               "ps-refused");
         Check(g_log.empty(), "ps-zero-transport");
     }
-    // 37. §6.3 rhythm on day roll: verify + dated copy + backup +
+    // 37. rhythm on day roll: verify + dated copy + backup +
     // summary; ancient dated copies prune; a mid-run break refuses.
     {
         int cy = 0;
         unsigned cm = 0, cd = 0;
-        jev::runner::CivilFromDays(0, &cy, &cm, &cd);
+        kernel::runner::CivilFromDays(0, &cy, &cm, &cd);
         Check(cy == 1970 && cm == 1 && cd == 1, "ops-epoch");
-        jev::runner::CivilFromDays(19358, &cy, &cm, &cd);
+        kernel::runner::CivilFromDays(19358, &cy, &cm, &cd);
         Check(cy == 2023 && cm == 1 && cd == 1, "ops-known-date");
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "ops-recover");
         std::string orow = EmgRow(
             0, g_now, "intent", "intent-ops", "submit",
-            jev::journal::GenesisPrev().c_str());
+            kernel::journal::GenesisPrev().c_str());
         Check(!orow.empty(), "ops-row");
         WriteFile(r.dir + "/journal.jsonl", orow + "\n");
         Check(g.Cycle(g_now), "ops-cycle1");
         long long day = g_now / 86400000000000LL;
-        jev::runner::CivilFromDays(day, &cy, &cm, &cd);
+        kernel::runner::CivilFromDays(day, &cy, &cm, &cd);
         char stamp[16];
         std::snprintf(stamp, sizeof(stamp), "%04d%02u%02u", cy, cm,
                       cd);
@@ -2469,7 +2469,7 @@ int main() {
     {
         Rig r;
         r.deps.list_positions = FakePositions;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hp-recover");
         Check(g.SubmitIntent(GoodIntent("intent-300", "AAPL",
                                         false, 100),
@@ -2483,7 +2483,7 @@ int main() {
         Check(g.Cycle(g_now), "hp-cycle1");
         const auto* hp = g.Find("intent-300");
         Check(hp && hp->done &&
-                  hp->m.state == jev::exec::RouteState::PROTECTED,
+                  hp->m.state == kernel::exec::RouteState::PROTECTED,
               "hp-protected");
         Check(g.Cycle(g_now), "hp-cycle2");
         // The position record survives: still findable, still open.
@@ -2510,17 +2510,17 @@ int main() {
         std::snprintf(htag, sizeof(htag), "hard-%lld-AAPL",
                         g_now);
         char hcoid[65] = {0};
-        Check(jev::broker::MakeClientOrderId(
+        Check(kernel::broker::MakeClientOrderId(
                   "alpaca-paper", "test",
                   std::string(64, 'a').c_str(), "AAPL",
-                  jev::broker::OrderSide::SELL, htag,
+                  kernel::broker::OrderSide::SELL, htag,
                   hcoid),
               "hp-coid");
         char hpos[65] = {0};
-        Check(jev::broker::MakeClientOrderId(
+        Check(kernel::broker::MakeClientOrderId(
                   "alpaca-paper", "test",
                   std::string(64, 'a').c_str(), "AAPL",
-                  jev::broker::OrderSide::SELL, "hard-pos-AAPL",
+                  kernel::broker::OrderSide::SELL, "hard-pos-AAPL",
                   hpos),
               "hp-poscoid");
         bool saw_hard_get = false, saw_pos_get = false;
@@ -2540,7 +2540,7 @@ int main() {
     {
         Rig r;
         r.deps.list_positions = FakePositions;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hs-recover");
         g_kill.broker_auth_fail = true;  // HARD
         g_positions.push_back(MkPos("SPY", 50));
@@ -2571,7 +2571,7 @@ int main() {
         WriteFile(r.dir + "/hard-chain.txt",
                   std::string(htag0) + " 100 0\n");
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hr-recover");
         g_kill.drift_unresolvable = true;  // HARD
         PushRule("GET", "by_client_order_id", 200,
@@ -2588,10 +2588,10 @@ int main() {
         std::snprintf(htag, sizeof(htag), "hard-%lld-AAPL",
                         g_now);
         char hcoid[65] = {0};
-        Check(jev::broker::MakeClientOrderId(
+        Check(kernel::broker::MakeClientOrderId(
                   "alpaca-paper", "test",
                   std::string(64, 'a').c_str(), "AAPL",
-                  jev::broker::OrderSide::SELL, htag,
+                  kernel::broker::OrderSide::SELL, htag,
                   hcoid),
               "hr-coid");
         int hard_gets = 0;
@@ -2607,7 +2607,7 @@ int main() {
         // exact books) is now zero-open: no repair repost, just
         // the designed cancel attempt on the stray unfilled.
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "hr-recover2");
         PushRule("GET", "by_client_order_id", 200,
                  PlainReply("accepted", "100").c_str());
@@ -2634,13 +2634,13 @@ int main() {
                    .empty(),
               "rp-image");
         char rcoid[65] = {0};
-        Check(jev::broker::MakeClientOrderId(
+        Check(kernel::broker::MakeClientOrderId(
                   "alpaca-paper", "test",
                   std::string(64, 'a').c_str(), "AAPL",
-                  jev::broker::OrderSide::SELL,
+                  kernel::broker::OrderSide::SELL,
                   "intent-310-repair", rcoid),
               "rp-coid");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "rp-recover");
         PushRule("GET", "by_client_order_id", 200,
                  PlainReply("filled", "100").c_str());
@@ -2650,7 +2650,7 @@ int main() {
         Check(g.Cycle(g_now), "rp-cycle");
         const auto* rs = g.Find("intent-310");
         Check(rs && rs->done &&
-                  rs->m.state == jev::exec::RouteState::PROTECTED,
+                  rs->m.state == kernel::exec::RouteState::PROTECTED,
               "rp-repaired");
         Check(CountMethod("POST", "/v2/orders") == 1,
               "rp-one-post");
@@ -2674,20 +2674,20 @@ int main() {
                    .empty(),
               "rr-image");
         char rcoid[65] = {0};
-        Check(jev::broker::MakeClientOrderId(
+        Check(kernel::broker::MakeClientOrderId(
                   "alpaca-paper", "test",
                   std::string(64, 'a').c_str(), "AAPL",
-                  jev::broker::OrderSide::SELL,
+                  kernel::broker::OrderSide::SELL,
                   "intent-311-repair", rcoid),
               "rr-coid");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "rr-recover");
         PushRule("GET", "by_client_order_id", 200,
                  BracketReply("filled", "100").c_str());
         Check(g.Cycle(g_now), "rr-cycle");
         const auto* rs = g.Find("intent-311");
         Check(rs && rs->done &&
-                  rs->m.state == jev::exec::RouteState::PROTECTED,
+                  rs->m.state == kernel::exec::RouteState::PROTECTED,
               "rr-adopted");
         Check(CountMethod("POST", "/v2/orders") == 0,
               "rr-no-resend");
@@ -2708,7 +2708,7 @@ int main() {
                           12, 100, &cid)
                    .empty(),
               "rd-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "rd-recover");
         PushRule("GET", "by_client_order_id", 404, "{}");
         PushRule("POST", "/v2/orders", 200,
@@ -2716,7 +2716,7 @@ int main() {
         Check(g.Cycle(g_now), "rd-cycle");
         const auto* rs = g.Find("intent-312");
         Check(rs && rs->done &&
-                  rs->m.state == jev::exec::RouteState::PROTECTED,
+                  rs->m.state == kernel::exec::RouteState::PROTECTED,
               "rd-reprotected");
         Check(CountMethod("POST", "/v2/orders") == 1, "rd-one-post");
     }
@@ -2729,7 +2729,7 @@ int main() {
                           3, 100, &cid)
                    .empty(),
               "rt-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "rt-recover");
         PushRule("GET", "by_client_order_id", 200,
                  PlainReply("filled", "100").c_str());
@@ -2741,7 +2741,7 @@ int main() {
         Check(g.Cycle(g_now), "rt-cycle");
         const auto* rs = g.Find("intent-313");
         Check(rs && rs->done &&
-                  rs->m.state == jev::exec::RouteState::PROTECTED,
+                  rs->m.state == kernel::exec::RouteState::PROTECTED,
               "rt-retried-protected");
         Check(CountMethod("POST", "/v2/orders") == 2, "rt-two-posts");
     }
@@ -2757,7 +2757,7 @@ int main() {
         static int naps = 0;
         naps = 0;
         r.deps.sleep_ms = [](void*, int) { ++naps; };
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "rp-recover");
         PushRule("GET", "by_client_order_id", 200,
                  PlainReply("filled", "100").c_str());
@@ -2771,7 +2771,7 @@ int main() {
         Check(g.Cycle(g_now), "rp-cycle");
         const auto* rs = g.Find("intent-314");
         Check(rs && rs->done &&
-                  rs->m.state == jev::exec::RouteState::PROTECTED,
+                  rs->m.state == kernel::exec::RouteState::PROTECTED,
               "rp-protected-after-pauses");
         Check(naps == 2, "rp-two-pauses");
     }
@@ -2785,7 +2785,7 @@ int main() {
                           3, 100, &cid)
                    .empty(),
               "ro-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "ro-recover");
         PushRule("GET", "by_client_order_id", 200,
                  PlainReply("filled", "100").c_str());
@@ -2798,17 +2798,17 @@ int main() {
         Check(g.Cycle(g_now), "ro-cycle");
         const auto* rs = g.Find("intent-315");
         Check(rs && rs->done &&
-                  rs->m.state == jev::exec::RouteState::PROTECTED,
+                  rs->m.state == kernel::exec::RouteState::PROTECTED,
               "ro-adopted-protected");
         Check(CountMethod("POST", "/v2/orders") == 0, "ro-no-post");
     }
-    // 41. P1 S2 union semantics: (a) PROTECTED +100 vs broker
+    // 41. P1 reconcile union semantics: (a) PROTECTED +100 vs broker
     // +100 = quiet; (b) local-only = drift; (c) broker-only =
     // drift; (d) short agreement = quiet.
     {
         Rig r;
         r.deps.list_positions = FakePositions;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "s2-recover");
         Check(g.SubmitIntent(GoodIntent("intent-320", "AAPL",
                                         false, 100),
@@ -2822,7 +2822,7 @@ int main() {
         Check(g.Cycle(g_now), "s2-cycle1");
         const auto* sp = g.Find("intent-320");
         Check(sp &&
-                  sp->m.state == jev::exec::RouteState::PROTECTED,
+                  sp->m.state == kernel::exec::RouteState::PROTECTED,
               "s2-protected");
         g_positions.push_back(MkPos("AAPL", 100));
         g_now += 901LL * 1000000000LL;
@@ -2840,7 +2840,7 @@ int main() {
                           2, 100, &cid)
                    .empty(),
               "s2b-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "s2b-recover");
         Check(g.Cycle(g_now), "s2b-cycle");
         std::string al = ReadWhole(r.dir + "/alerts.jsonl");
@@ -2851,7 +2851,7 @@ int main() {
         // (c) broker position, no local expectation.
         Rig r;
         r.deps.list_positions = FakePositions;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "s2c-recover");
         g_positions.push_back(MkPos("SPY", 50));
         Check(g.Cycle(g_now), "s2c-cycle");
@@ -2869,7 +2869,7 @@ int main() {
                    .empty(),
               "s2d-image");
         g_positions.push_back(MkPos("AAPL", -100));
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "s2d-recover");
         Check(g.Cycle(g_now), "s2d-cycle");
         std::string al = ReadWhole(r.dir + "/alerts.jsonl");
@@ -2887,7 +2887,7 @@ int main() {
         g_venue_open = 1;
         g_venue_spread = 1;
         g_positions.push_back(MkPos("AAPL", 100));
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "sw-recover");
         g_kill.spend_tier = 3;  // MEDIUM
         PushRule("GET", "by_client_order_id", 200,
@@ -2912,10 +2912,10 @@ int main() {
         std::snprintf(rtag, sizeof(rtag),
                         "medium-%lld-AAPL-60", g_now);
         char rcoid[65] = {0};
-        Check(jev::broker::MakeClientOrderId(
+        Check(kernel::broker::MakeClientOrderId(
                   "alpaca-paper", "test",
                   std::string(64, 'a').c_str(), "AAPL",
-                  jev::broker::OrderSide::SELL, rtag,
+                  kernel::broker::OrderSide::SELL, rtag,
                   rcoid),
               "sw-coid");
         bool remainder_carries = false;
@@ -2949,16 +2949,16 @@ int main() {
             "order_replace_rejected", "order_cancel_rejected",
             "restated"};
         for (int li = 0; li < 17; ++li) {
-            jev::runner::SseEvent ev;
+            kernel::runner::SseEvent ev;
             ev.id = MkUlid(1900000000000ULL, (unsigned)li);
             ev.type = lifes[li];
             ev.data = "{\"client_order_id\":\"ord-1\","
                         "\"order\":{\"filled_qty\":\"5\"}}";
-            jev::runner::StreamObs so =
-                jev::runner::MapTradeEvent(ev);
+            kernel::runner::StreamObs so =
+                kernel::runner::MapTradeEvent(ev);
             char ln[48];
             std::snprintf(ln, sizeof(ln), "life-%s", lifes[li]);
-            Check(so.kind == jev::runner::StreamKind::LIFE,
+            Check(so.kind == kernel::runner::StreamKind::LIFE,
                   ln);
         }
     }
@@ -2981,14 +2981,14 @@ int main() {
             "{\"client_order_id\":\"" + cid + "\","
             "\"order\":{\"filled_qty\":\"50\"}}\n\n";
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "cu-recover");
         Check(g.Cycle(g_now), "cu-cycle");
         Check(g.cursor() == ub, "cu-advanced-past-foreign");
         Check(ReadWhole(r.dir + "/cursor.txt") == ub,
               "cu-durable");
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "cu-recover2");
         Check(g2.cursor() == ub, "cu-resumed");
     }
@@ -2998,7 +2998,7 @@ int main() {
         Rig r;
         r.deps.restart_flag = false;
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "rf-recover");
         Check(!g.SubmitIntent(GoodIntent("intent-350", "AAPL",
                                          false, 100),
@@ -3010,7 +3010,7 @@ int main() {
               "rf-exit-alive");
         r.deps.restart_flag = true;
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "rf-recover2");
         Check(g2.SubmitIntent(GoodIntent("intent-352", "AAPL",
                                          false, 100),
@@ -3023,7 +3023,7 @@ int main() {
         Rig r;
         r.deps.list_positions = FakePositions;
         g_pos_fail = 1;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hu2-recover");
         g_kill.broker_auth_fail = true;  // HARD
         Check(!g.Cycle(g_now), "hu2-terminates");
@@ -3032,7 +3032,7 @@ int main() {
                   std::string::npos,
               "hu2-unknown-alert");
     }
-    // T2. Converse ownership (doc 06 sec. 6.1b): a live
+    // T2. Converse ownership: a live
     // incident-sweep close blocks the local flatten (arm + wait,
     // zero POSTs); when the sweep lands FILLED-full, attribution
     // zeroes the entry and the FSM finalizes — one position, one
@@ -3056,7 +3056,7 @@ int main() {
         std::snprintf(ebe, sizeof(ebe), "%lld", g_now);
         WriteFile(r.dir + "/medium-incident.txt",
                   std::string(ebe) + "\n");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "ow-recover");
         g_kill.spend_tier = 3;  // MEDIUM
         // Cycle 1: flatten's sweep check finds the live sweep
@@ -3112,7 +3112,7 @@ int main() {
                           9, 0, &xid)
                    .empty(),
               "hx2-exit");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hx2-recover");
         g_kill.drift_unresolvable = true;  // HARD
         // Entry order found with protection (skip reprotect) +
@@ -3130,9 +3130,9 @@ int main() {
         Check(CountMethod("DELETE", "/v2/orders/") == 0,
               "hx2-no-cancel");
         Check(Exists(r.dir + "/HALT"), "hx2-halt");
-        std::vector<jev::journal::Row> rows;
+        std::vector<kernel::journal::Row> rows;
         int hard_rows = 0;
-        if (jev::runner::JournalLoad(
+        if (kernel::runner::JournalLoad(
                 (r.dir + "/journal.jsonl").c_str(), &rows)) {
             for (std::size_t i = 0; i < rows.size(); ++i) {
                 if (rows[i].kind == "drift-directive")
@@ -3153,7 +3153,7 @@ int main() {
                    .empty(),
               "hx3-exit");
         g_positions.push_back(MkPos("AAPL", 100));
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hx3-recover");
         g_kill.broker_auth_fail = true;  // HARD
         PushRule("GET", "by_client_order_id", 200,
@@ -3178,7 +3178,7 @@ int main() {
                           9, 0, &xid)
                    .empty(),
               "hx4-exit");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hx4-recover");
         g_kill.drift_unresolvable = true;  // HARD
         PushRule("GET", "by_client_order_id", 404, "{}");
@@ -3192,10 +3192,10 @@ int main() {
         std::snprintf(htag, sizeof(htag), "hard-%lld-AAPL",
                         g_now);
         char hcoid[65] = {0};
-        Check(jev::broker::MakeClientOrderId(
+        Check(kernel::broker::MakeClientOrderId(
                   "alpaca-paper", "test",
                   std::string(64, 'a').c_str(), "AAPL",
-                  jev::broker::OrderSide::SELL, htag, hcoid),
+                  kernel::broker::OrderSide::SELL, htag, hcoid),
               "hx4-coid");
         bool carries = false;
         for (std::size_t i = 0; i < g_log.size(); ++i) {
@@ -3206,8 +3206,7 @@ int main() {
         Check(carries, "hx4-incident-id");
         Check(Exists(r.dir + "/HALT"), "hx4-halt");
     }
-    // T4/R1. Incident identity + AUTOMATIC re-entry (doc 06 sec.
-    // 6.1b): two MEDIUM incidents on one symbol send two real
+    // T4/R1. Incident identity + AUTOMATIC re-entry: two MEDIUM incidents on one symbol send two real
     // closes under two distinct incident ids — the second never
     // adopts the first's historical fill, and NO operator file
     // deletion happens between them (the runner auto-clears the
@@ -3218,7 +3217,7 @@ int main() {
         r.deps.venue_gate = FakeVenue;
         g_venue_open = 1;
         g_venue_spread = 1;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "ii-recover");
         g_kill.spend_tier = 3;  // MEDIUM
         g_positions.push_back(MkPos("AAPL", 100));
@@ -3240,7 +3239,7 @@ int main() {
         // End incident 1: flat books + kill cleared -> the runner
         // AUTO-CLEARS the closed incident (FSM + epoch files go
         // empty, journaled) — no manual deletion.
-        g_kill = jev::kill::KillInputs();
+        g_kill = kernel::kill::KillInputs();
         g_positions.clear();
         Check(g.Cycle(g_now), "ii-cycle2");
         Check(ReadWhole(r.dir + "/medium.txt").empty(),
@@ -3286,7 +3285,7 @@ int main() {
         std::string coid1;
         char ebe[32];
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hi-recover");
         g_kill.broker_auth_fail = true;  // HARD #1
         g_positions.push_back(MkPos("SPY", 50));
@@ -3311,7 +3310,7 @@ int main() {
         // Crash-mid-HARD restart (HALT still present): the close
         // pre-flights FOUND -> adopted, zero new POSTs, same epoch.
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "hi-recover2");
         PushRule("GET", "by_client_order_id", 200,
                  HeldReply("filled", "50").c_str());
@@ -3324,7 +3323,7 @@ int main() {
         // Operator ends the incident: HALT cleared + clean cycle
         // truncates the file; the next HARD mints fresh.
         std::remove((r.dir + "/HALT").c_str());
-        g_kill = jev::kill::KillInputs();
+        g_kill = kernel::kill::KillInputs();
         g_positions.clear();
         Check(g2.Cycle(g_now), "hi-clean");
         Check(ReadWhole(r.dir + "/hard-incident.txt").empty(),
@@ -3351,7 +3350,7 @@ int main() {
         Check(!coid2.empty() && coid2 != coid1,
               "hi-distinct-incident-id");
     }
-    // R2. HARD quantity authority (doc 06 sec. 6.1b): the SIGNED
+    // R2. HARD quantity authority: the SIGNED
     // broker position sizes the close — local +100 vs broker +50
     // closes 50 (not 100); vs +150 closes 150 (nothing unmanaged);
     // vs -100 closes BUY 100 (the actual exposure) + drift alert;
@@ -3371,7 +3370,7 @@ int main() {
                        .empty(),
                   "bq-image");
         }
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "bq-recover");
         g_kill.drift_unresolvable = true;  // HARD
         if (rc < 3) {
@@ -3410,7 +3409,7 @@ int main() {
         }
         Check(Exists(r.dir + "/HALT"), "bq-halt");
     }
-    // R3. HARD remainder identity (doc 06 sec. 6.1b): primary 100
+    // R3. HARD remainder identity: primary 100
     // fills 40 then dies -> restart under the same incident
     // (HALT present, epoch reused) sends exactly one 60-share
     // remainder under hard-<epoch>-<SYM>-60 (never reusing the
@@ -3420,7 +3419,7 @@ int main() {
         r.deps.list_positions = FakePositions;
         std::string coid1;
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hrc-recover");
         g_kill.broker_auth_fail = true;  // HARD #1
         g_positions.push_back(MkPos("AAPL", 100));
@@ -3446,7 +3445,7 @@ int main() {
         // identity (60 - 40 = 20 would leave 40 exposed).
         }
         {
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "hrc-recover2");
         g_positions.clear();
         g_positions.push_back(MkPos("AAPL", 60));
@@ -3479,7 +3478,7 @@ int main() {
         // remainder FILLED-60 both sufficient -> zero new orders.
         }
         {
-        G0Runner g3(r.cfg, r.deps);
+        PaperRunner g3(r.cfg, r.deps);
         Check(g3.Recover(nullptr), "hrc-recover3");
         PushRule("GET", "by_client_order_id", 200,
                  HeldReply("filled", "40").c_str());
@@ -3490,14 +3489,14 @@ int main() {
               "hrc-no-resend");
         // Fourth cycle, broker fully settled (flat): quiet.
         }
-        G0Runner g4(r.cfg, r.deps);
+        PaperRunner g4(r.cfg, r.deps);
         Check(g4.Recover(nullptr), "hrc-recover4");
         g_positions.clear();
         Check(!g4.Cycle(g_now), "hrc-hard4");
         Check(CountMethod("POST", "/v2/orders") == 2,
               "hrc-settled-quiet");
     }
-    // R4. Multiple EXIT coherence (doc 06 sec. 6.1b): ENTRY +100
+    // R4. Multiple EXIT coherence: ENTRY +100
     // with EXIT A 50 DEAD + EXIT B 50 LIVE under HARD reconciles
     // both exits — A's 50 replaces (one legitimate POST), B's 50
     // adopts, and NO second 100-share close fires while B lives.
@@ -3518,7 +3517,7 @@ int main() {
                    .empty(),
               "mx-b");
         g_positions.push_back(MkPos("AAPL", 100));
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "mx-recover");
         g_kill.drift_unresolvable = true;  // HARD
         // Journal order: entry, A, B. Entry order protected;
@@ -3563,7 +3562,7 @@ int main() {
                    .empty(),
               "hx-image");
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hx-recover");
         g_kill.broker_auth_fail = true;  // HARD #1
         g_positions.push_back(MkPos("AAPL", 100));
@@ -3594,7 +3593,7 @@ int main() {
         // Restart, broker settled to +60, the replace itself now
         // terminal-40: chain (60 - 40) sends exactly one 20.
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "hx-recover2");
         g_positions.clear();
         g_positions.push_back(MkPos("AAPL", 60));
@@ -3629,7 +3628,7 @@ int main() {
         }
         Check(qty20, "hx-remainder-qty");
     }
-    // MS. MEDIUM teardown certification (doc 06 sec. 6.1b): a
+    // MS. MEDIUM teardown certification: a
     // missing or failing position seam is UNKNOWN — a FLATTENED
     // incident + epoch are RETAINED, never cleared; once the
     // seam confirms flat the clear is automatic; the next MEDIUM
@@ -3641,7 +3640,7 @@ int main() {
         WriteFile(r.dir + "/medium-incident.txt",
                   "1799999999000000000\n");
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "ms-recover");
         // (a) missing seam: retained.
         Check(g.Cycle(g_now), "ms-cycle1");
@@ -3656,7 +3655,7 @@ int main() {
         r.deps.list_positions = FakePositions;
         r.deps.venue_gate = FakeVenue;
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "ms-recover2");
         // (b) failing seam: retained.
         g_pos_fail = 1;
@@ -3692,7 +3691,7 @@ int main() {
                   std::string(mbe),
               "ms-fresh-epoch");
     }
-    // HB. HARD slot-blind fallback (doc 06 sec. 6.1b): the entry
+    // HB. HARD slot-blind fallback: the entry
     // query transport-fails, so the slot path owns nothing — the
     // position loop still flattens the authoritative broker
     // position under the same incident id (the pre-flight, not
@@ -3706,7 +3705,7 @@ int main() {
                    .empty(),
               "hb-image");
         g_positions.push_back(MkPos("AAPL", 100));
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hb-recover");
         g_kill.drift_unresolvable = true;  // HARD
         PushRule("GET", "by_client_order_id", 500, "{}");
@@ -3749,7 +3748,7 @@ int main() {
         Check(PatchClosedCounted(r.dir, "intent-531", 40, 40),
               "ec-exit-patch");
         g_positions.push_back(MkPos("AAPL", 10));
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "ec-recover");
         g_kill.drift_unresolvable = true;  // HARD
         PushRule("GET", "by_client_order_id", 200,
@@ -3784,7 +3783,7 @@ int main() {
               "ec-exact-books");
         Check(Exists(r.dir + "/HALT"), "ec-halt");
     }
-    // R5. Broker-fill regression (doc 06 sec. 6.1b): the chain
+    // R5. Broker-fill regression: the chain
     // already attributes 40 of a 100-share request, then the
     // broker reports filled=30 terminal for the same id. Nothing
     // folds (30 < 40 already booked), the regression journals +
@@ -3796,7 +3795,7 @@ int main() {
         Rig r;
         r.deps.list_positions = FakePositions;
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "rg-recover");
         g_kill.drift_unresolvable = true;  // HARD
         g_positions.push_back(MkPos("AAPL", 100));
@@ -3822,7 +3821,7 @@ int main() {
         // Restart: broker need 60, primary pre-flight reports
         // the regressed 30 terminal.
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "rg-recover2");
         g_positions.clear();
         g_positions.push_back(MkPos("AAPL", 60));
@@ -3853,7 +3852,7 @@ int main() {
                   std::string::npos,
               "rg-regressed-alert");
     }
-    // LR. Logical remainder identity (doc 06 sec. 6.1b): the chain
+    // LR. Logical remainder identity: the chain
     // records the LOGICAL request, never the broker-capped send.
     // Primary 100, first send capped to broker need 20 (404 ->
     // reuse, send 20, chain still says 100); later need 60 with 20 landed
@@ -3864,7 +3863,7 @@ int main() {
         r.deps.list_positions = FakePositions;
         char hid[64];
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "lr-recover");
         g_kill.drift_unresolvable = true;  // HARD
         g_positions.push_back(MkPos("AAPL", 100));
@@ -3884,7 +3883,7 @@ int main() {
         // (404) -> same identity sends 20, chain keeps 100.
         }
         {
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "lr-recover2");
         g_positions.clear();
         g_positions.push_back(MkPos("AAPL", 20));
@@ -3909,7 +3908,7 @@ int main() {
         // Restart: broker need 60, primary landed 20 terminal ->
         // remainder 80 under a new identity, send capped to 60.
         }
-        G0Runner g3(r.cfg, r.deps);
+        PaperRunner g3(r.cfg, r.deps);
         Check(g3.Recover(nullptr), "lr-recover3");
         g_positions.clear();
         g_positions.push_back(MkPos("AAPL", 60));
@@ -3939,7 +3938,7 @@ int main() {
                   std::string::npos,
               "lr-remainder-logical");
     }
-    // BI. Burned hard identity (doc 06 sec. 6.1b): a 404 on an
+    // BI. Burned hard identity: a 404 on an
     // id whose chain row already carries attributed fills must
     // never POST that tag again (single-use). Restart shape:
     // primary requested=100, attributed=40, broker primary=404
@@ -3948,7 +3947,7 @@ int main() {
     {
         Rig r;
         r.deps.list_positions = FakePositions;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "bi-recover");
         char hid[64];
         std::snprintf(hid, sizeof(hid), "hard-%lld-AAPL",
@@ -3972,15 +3971,15 @@ int main() {
         std::snprintf(rid, sizeof(rid), "hard-%lld-AAPL-60",
                         g_now);
         char ph[65] = {0}, rh[65] = {0};
-        Check(jev::broker::MakeClientOrderId(
+        Check(kernel::broker::MakeClientOrderId(
                   r.cfg.venue.broker, r.cfg.venue.account,
                   r.cfg.venue.context_hash, "AAPL",
-                  jev::broker::OrderSide::SELL, hid, ph),
+                  kernel::broker::OrderSide::SELL, hid, ph),
               "bi-primary-hcoid");
-        Check(jev::broker::MakeClientOrderId(
+        Check(kernel::broker::MakeClientOrderId(
                   r.cfg.venue.broker, r.cfg.venue.account,
                   r.cfg.venue.context_hash, "AAPL",
-                  jev::broker::OrderSide::SELL, rid, rh),
+                  kernel::broker::OrderSide::SELL, rid, rh),
               "bi-remainder-hcoid");
         bool saw_prim = false, saw_rem = false, qty60 = false;
         for (std::size_t i = 0; i < g_log.size(); ++i) {
@@ -4007,7 +4006,7 @@ int main() {
                   std::string::npos,
               "bi-remainder-noted");
     }
-    // XA. Adopt crash ordering (doc 06 sec. 6.1b): durable entry
+    // XA. Adopt crash ordering: durable entry
     // attribution lands before the EXIT counters persist. An exit
     // persist failure therefore leaves entries durably attributed
     // with counters in memory (never the reverse: durable counters
@@ -4029,7 +4028,7 @@ int main() {
         g_positions.push_back(MkPos("AAPL", 60));
         MkDir(r.dir + "/snap-intent-581.txt");
         MkDir(r.dir + "/snap-intent-581.txt.tmp");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "xa-recover");
         g_kill.drift_unresolvable = true;  // HARD
         PushRule("GET", "by_client_order_id", 200,
@@ -4078,7 +4077,7 @@ int main() {
         MkDir(r.dir + "/snap-intent-583.txt");
         MkDir(r.dir + "/snap-intent-583.txt.tmp");
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "xa-recover2");
         g_kill.drift_unresolvable = true;  // HARD
         PushRule("GET", "by_client_order_id", 200,
@@ -4093,7 +4092,7 @@ int main() {
         RmDir(r.dir + "/snap-intent-583.txt");
         RmDir(r.dir + "/snap-intent-583.txt.tmp");
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "xa-recover3");
         PushRule("GET", "by_client_order_id", 200,
                  HeldReply("filled", "40").c_str());
@@ -4107,9 +4106,9 @@ int main() {
         Check(xn && xn->m.filled_qty - xn->m.exit_closed_qty ==
                          0,
               "xa-entry-flat");
-        std::vector<jev::journal::Row> rows;
+        std::vector<kernel::journal::Row> rows;
         int takes = 0;
-        if (jev::runner::JournalLoad(
+        if (kernel::runner::JournalLoad(
                 (r.dir + "/journal.jsonl").c_str(), &rows)) {
             for (std::size_t i = 0; i < rows.size(); ++i) {
                 if (rows[i].kind == "reconcile") ++takes;
@@ -4121,7 +4120,7 @@ int main() {
         Check(CountMethod("POST", "/v2/orders") == 0,
               "xa-no-resend");
     }
-    // CW. Chain write-ahead ENFORCED (doc 06 sec. 6.1b): the
+    // CW. Chain write-ahead ENFORCED: the
     // chain file is unwritable -> the POST never flies (freeze +
     // refuse, exactly zero POSTs). Filesystem fault injection
     // (chain path as a directory) — no production test hooks.
@@ -4134,7 +4133,7 @@ int main() {
                    .empty(),
               "cw-image");
         g_positions.push_back(MkPos("AAPL", 100));
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "cw-recover");
         g_kill.drift_unresolvable = true;  // HARD
         MkDir(r.dir + "/hard-chain.txt");
@@ -4144,7 +4143,7 @@ int main() {
         Check(!g.Cycle(g_now), "cw-terminates");
         Check(CountMethod("POST", "/v2/orders") == 0,
               "cw-zero-posts");
-        Check(jev::runner::FreezeHas((r.dir + "/freeze.txt").c_str(),
+        Check(kernel::runner::FreezeHas((r.dir + "/freeze.txt").c_str(),
                         "AAPL"),
               "cw-frozen");
         Check(Exists(r.dir + "/HALT"), "cw-halt");
@@ -4157,7 +4156,7 @@ int main() {
         RmDir(r.dir + "/hard-chain.txt");
     }
     // CX. Missing chain on a broker-known hard id is an
-    // integrity failure (doc 06 sec. 6.1b): sent in cycle 1,
+    // integrity failure: sent in cycle 1,
     // chain deleted, restart pre-flights terminal-short ->
     // refuse (freeze, zero new POSTs), never orig = need.
     {
@@ -4170,7 +4169,7 @@ int main() {
               "cx-image");
         g_positions.push_back(MkPos("AAPL", 100));
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "cx-recover");
         g_kill.drift_unresolvable = true;  // HARD
         PushRule("GET", "by_client_order_id", 200,
@@ -4185,7 +4184,7 @@ int main() {
                   0,
               "cx-chain-deleted");
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "cx-recover2");
         PushRule("GET", "by_client_order_id", 200,
                  HeldReply("filled", "100").c_str());
@@ -4194,7 +4193,7 @@ int main() {
         Check(!g2.Cycle(g_now), "cx-hard2");
         Check(CountMethod("POST", "/v2/orders") == 1,
               "cx-no-mint-from-need");
-        Check(jev::runner::FreezeHas((r.dir + "/freeze.txt").c_str(),
+        Check(kernel::runner::FreezeHas((r.dir + "/freeze.txt").c_str(),
                         "AAPL"),
               "cx-frozen");
         Check(ReadWhole(r.dir + "/alerts.jsonl").find(
@@ -4216,7 +4215,7 @@ int main() {
               "cy-image");
         g_positions.push_back(MkPos("AAPL", 100));
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "cy-recover");
         g_kill.drift_unresolvable = true;  // HARD
         PushRule("GET", "by_client_order_id", 200,
@@ -4227,7 +4226,7 @@ int main() {
         Check(CountMethod("POST", "/v2/orders") == 1,
               "cy-note-then-fail");
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "cy-recover2");
         PushRule("GET", "by_client_order_id", 200,
                  HeldReply("filled", "100").c_str());
@@ -4274,7 +4273,7 @@ int main() {
               "cz-image");
         g_positions.push_back(MkPos("AAPL", 100));
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "cz-recover");
         g_kill.drift_unresolvable = true;  // HARD
         PushRule("GET", "by_client_order_id", 200,
@@ -4286,7 +4285,7 @@ int main() {
         Check(CountMethod("POST", "/v2/orders") == 1,
               "cz-sent");
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "cz-recover2");
         PushRule("GET", "by_client_order_id", 200,
                  HeldReply("filled", "100").c_str());
@@ -4298,7 +4297,7 @@ int main() {
         Check(!ReadWhole(r.dir + "/hard-chain.txt").empty(),
               "cz-chain-present");
     }
-    // CV. Chain integrity validation (doc 06 sec. 6.1b): every
+    // CV. Chain integrity validation: every
     // corruption shape refuses (freeze, zero POSTs) — attributed
     // regression, malformed row, conflicting requested,
     // attributed > requested. No broker-derived substitute.
@@ -4329,7 +4328,7 @@ int main() {
         else
             chain = std::string(htag) + " 100 120\n";
         WriteFile(r.dir + "/hard-chain.txt", chain);
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "cv-recover");
         g_kill.drift_unresolvable = true;  // HARD
         PushRule("GET", "by_client_order_id", 200,
@@ -4339,11 +4338,11 @@ int main() {
         Check(!g.Cycle(g_now), "cv-terminates");
         Check(CountMethod("POST", "/v2/orders") == 0,
               "cv-zero-posts");
-        Check(jev::runner::FreezeHas((r.dir + "/freeze.txt").c_str(),
+        Check(kernel::runner::FreezeHas((r.dir + "/freeze.txt").c_str(),
                         "AAPL"),
               "cv-frozen");
     }
-    // CD. Attribution durability (doc 06 sec. 6.1b): entry +100,
+    // CD. Attribution durability: entry +100,
     // hard close fills 40, the entry snapshot persist fails
     // during attribution -> books stay exactly as before (chain
     // still (hid,100,0), entry open still 100, zero POSTs); after
@@ -4365,7 +4364,7 @@ int main() {
         WriteFile(r.dir + "/hard-chain.txt",
                   std::string(htag) + " 100 0\n");
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "cd-recover");
         g_kill.drift_unresolvable = true;  // HARD
         MkDir(r.dir + "/snap-intent-565.txt");
@@ -4387,7 +4386,7 @@ int main() {
         RmDir(r.dir + "/snap-intent-565.txt");
         RmDir(r.dir + "/snap-intent-565.txt.tmp");
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "cd-recover2");
         PushRule("GET", "by_client_order_id", 200,
                  HeldReply("filled", "100").c_str());
@@ -4417,7 +4416,7 @@ int main() {
                   std::string::npos,
               "cd-chain-40");
     }
-    // T7. Quarantine (doc 06 locked): a done_for_day entry freezes
+    // T7. Quarantine: a done_for_day entry freezes
     // its symbol on first sighting (one row), waits (no mint, no
     // terminal), and repeats stay silent.
     {
@@ -4427,7 +4426,7 @@ int main() {
                           3, 50, &cid)
                    .empty(),
               "qz-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "qz-recover");
         PushRule("GET", "by_client_order_id", 200,
                  "{\"id\":\"0193abcd-1234-5678-9abc-"
@@ -4439,16 +4438,16 @@ int main() {
               "qz-frozen");
         Check(CountMethod("POST", "/v2/orders") == 0,
               "qz-no-mint");
-        std::vector<jev::journal::Row> rows;
+        std::vector<kernel::journal::Row> rows;
         int qrows = 0;
-        if (jev::runner::JournalLoad(
+        if (kernel::runner::JournalLoad(
                 (r.dir + "/journal.jsonl").c_str(), &rows)) {
             for (std::size_t i = 0; i < rows.size(); ++i) {
                 if (rows[i].kind == "reconcile") ++qrows;
             }
         }
         Check(qrows == 1, "qz-one-row");
-        // Second sighting (next S2 cadence): silent.
+        // Second sighting (next reconcile cadence): silent.
         g_now += 901LL * 1000000000LL;
         PushRule("GET", "by_client_order_id", 200,
                  "{\"id\":\"0193abcd-1234-5678-9abc-"
@@ -4457,7 +4456,7 @@ int main() {
         Check(g.Cycle(g_now), "qz-cycle2");
         rows.clear();
         qrows = 0;
-        if (jev::runner::JournalLoad(
+        if (kernel::runner::JournalLoad(
                 (r.dir + "/journal.jsonl").c_str(), &rows)) {
             for (std::size_t i = 0; i < rows.size(); ++i) {
                 if (rows[i].kind == "reconcile") ++qrows;
@@ -4477,7 +4476,7 @@ int main() {
                           9, 0, &xid)
                    .empty(),
               "qz2-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "qz2-recover");
         PushRule("GET", "by_client_order_id", 200,
                  "{\"id\":\"0193abcd-1234-5678-9abc-"
@@ -4490,7 +4489,7 @@ int main() {
                   std::string::npos,
               "qz2-frozen");
     }
-    // PL. Position-count contract (doc 06 sec. 6.1b): an adapter
+    // PL. Position-count contract: an adapter
     // that reports n outside 0 <= n <= cap violates the seam —
     // every path treats it as unavailable (never an index past
     // the fixed buffer). g_posn_lie makes the fake report 65.
@@ -4504,7 +4503,7 @@ int main() {
         WriteFile(r.dir + "/medium.txt", "FLATTENED");
         WriteFile(r.dir + "/medium-incident.txt",
                   "1799999999000000000\n");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "pl-recover");
         Check(g.Cycle(g_now), "pl-cycle");
         Check(ReadWhole(r.dir + "/medium.txt") ==
@@ -4514,13 +4513,13 @@ int main() {
               "pl-no-mint-on-lie");
     }
     {
-        // (b) S2 drift check: unavailable snapshot alerts once,
+        // (b) reconcile drift check: unavailable snapshot alerts once,
         // journals no drift row, cycle stays true.
         Rig r;
         r.deps.list_positions = FakePositions;
         g_posn_lie = 65;
         g_positions.push_back(MkPos("AAPL", 40));
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "pl-recover2");
         Check(g.Cycle(g_now), "pl-cycle2");
         FILE* af =
@@ -4535,9 +4534,9 @@ int main() {
                       "positions-unavailable") !=
                       std::string::npos,
               "pl-lie-unavailable");
-        std::vector<jev::journal::Row> rows;
+        std::vector<kernel::journal::Row> rows;
         bool drift_row = false;
-        if (jev::runner::JournalLoad(
+        if (kernel::runner::JournalLoad(
                 (r.dir + "/journal.jsonl").c_str(), &rows)) {
             for (std::size_t i = 0; i < rows.size(); ++i) {
                 if (rows[i].kind == "drift-directive")
@@ -4561,7 +4560,7 @@ int main() {
                           100, 2, 100, &cid)
                    .empty(),
               "pl-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "pl-recover3");
         g_kill.drift_unresolvable = true;  // HARD
         PushRule("GET", "by_client_order_id", 404, "{}");
@@ -4594,7 +4593,7 @@ int main() {
                           100, 2, 100, &cid)
                    .empty(),
               "pl-image2");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "pl-recover4");
         g_kill.drift_unresolvable = true;  // HARD
         PushRule("GET", "by_client_order_id", 500, "{}");
@@ -4607,7 +4606,7 @@ int main() {
                   std::string::npos,
               "pl-unavailable-alert");
     }
-    // RT. Recovery terminal-row rule (doc 06 sec. 6.1b): a journal
+    // RT. Recovery terminal-row rule: a journal
     // terminal row never overrides a durable snapshot. Snapshot
     // nonterminal -> the slot rebuilds and reconciles (the old
     // code skipped it, orphaning live exposure); journal-terminal
@@ -4629,7 +4628,7 @@ int main() {
         Check(AppendRow(r.dir, "exit", "intent-601"),
               "rt-row");
         g_positions.push_back(MkPos("AAPL", 60));
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "rt-recover");
         Check(g.Find("intent-601") != nullptr,
               "rt-exit-rebuilt");
@@ -4667,14 +4666,14 @@ int main() {
                   (r.dir + "/snap-intent-603.txt").c_str()) ==
                   0,
               "rt-snap-deleted");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         const char* rsn = nullptr;
         Check(!g.Recover(&rsn), "rt-refused");
         Check(rsn && std::string(rsn).find("snapshot") !=
                          std::string::npos,
               "rt-reason");
     }
-    // HL. HALT durability (doc 06 sec. 6.1b): the stop is claimed
+    // HL. HALT durability: the stop is claimed
     // only once durably established. An unwritable HALT latches
     // HARD in memory (entries stay blocked even with the kill
     // cleared), journals + alerts, returns false with zero POSTs;
@@ -4690,7 +4689,7 @@ int main() {
         MkDir(r.dir + "/HALT");
         g_positions.push_back(MkPos("AAPL", 100));
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hl-recover");
         g_kill.drift_unresolvable = true;  // HARD
         Check(!g.Cycle(g_now), "hl-refused");
@@ -4701,14 +4700,14 @@ int main() {
                   std::string::npos,
               "hl-alert");
         // Latch proof: kill cleared, entries still refused.
-        g_kill = jev::kill::KillInputs();
+        g_kill = kernel::kill::KillInputs();
         Check(!g.SubmitIntent(
                   GoodIntent("intent-591", "AAPL", false, 100),
                   nullptr),
               "hl-latch-blocks-entries");
         RmDir(r.dir + "/HALT");
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "hl-recover2");
         g_kill.drift_unresolvable = true;  // HARD
         PushRule("GET", "by_client_order_id", 200,
@@ -4725,12 +4724,12 @@ int main() {
         Check(CountMethod("POST", "/v2/orders") == 2,
               "hl-reprotect-plus-flatten");
     }
-    // HX. Unrecoverable HARD incident (doc 06 sec. 6.1b): durable
+    // HX. Unrecoverable HARD incident: durable
     // HALT + missing/corrupt incident epoch refuses — never mints
     // fresh ids over a live HALT. Zero POSTs either way.
     {
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hx-recover");
         WriteFile(r.dir + "/HALT", "HALT\n");
         g_kill.drift_unresolvable = true;  // HARD
@@ -4746,7 +4745,7 @@ int main() {
     }
     {
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "hx-recover2");
         WriteFile(r.dir + "/HALT", "HALT\n");
         WriteFile(r.dir + "/hard-incident.txt", "zzz\n");
@@ -4759,14 +4758,14 @@ int main() {
                   std::string::npos,
               "hx-corrupt-alert");
     }
-    // FL. MEDIUM flatten certification (doc 06 sec. 6.1b): an
+    // FL. MEDIUM flatten certification: an
     // in-progress FSM never becomes FLATTENED on local-only
     // truth — broker confirmation is required. And an unwritable
     // FSM refuses the enter (no mint, alert, retry next cycle).
     {
         Rig r;  // no seam, no slots: locally flat by vacuity
         WriteFile(r.dir + "/medium.txt", "MEDIUM_ACTIVE");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "fl-recover");
         Check(g.Cycle(g_now), "fl-cycle");
         Check(ReadWhole(r.dir + "/medium.txt") ==
@@ -4778,7 +4777,7 @@ int main() {
         r.deps.list_positions = FakePositions;
         MkDir(r.dir + "/medium.txt.tmp");
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "fl-recover2");
         g_kill.spend_tier = 3;  // MEDIUM
         Check(g.Cycle(g_now), "fl-cycle2");
@@ -4794,7 +4793,7 @@ int main() {
               "fl-alert");
         RmDir(r.dir + "/medium.txt.tmp");
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "fl-recover3");
         Check(g2.Cycle(g_now), "fl-cycle3");
         char mbe[32];
@@ -4803,14 +4802,14 @@ int main() {
                   std::string(mbe),
               "fl-mint-retry");
     }
-    // MF. Malformed MEDIUM FSM (doc 06 sec. 6.1b): a present
+    // MF. Malformed MEDIUM FSM: a present
     // regular medium.txt with non-empty unknown content is
     // corruption — refuse + alert, never mint a fresh incident
     // over it. The file is left untouched and no medium-enter
     // fires.
     {
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "mf-recover");
         WriteFile(r.dir + "/medium.txt", "GARBAGE");
         g_kill.spend_tier = 3;  // MEDIUM: MediumPass runs
@@ -4823,14 +4822,13 @@ int main() {
         Check(al.find("medium-enter") == std::string::npos,
               "mf-no-enter");
     }
-    // MF2. FSM validation outside MediumPass (doc 06 sec.
-    // 6.1b): the non-MEDIUM finalize/clear path validates
+    // MF2. FSM validation outside MediumPass: the non-MEDIUM finalize/clear path validates
     // before ANY transition. With medium.txt=GARBAGE at a
     // non-MEDIUM kill level the cycle refuses + alerts and the
     // file is never rewritten into a legitimate-looking state.
     {
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "mf2-recover");
         WriteFile(r.dir + "/medium.txt", "GARBAGE");
         Check(!g.Cycle(g_now), "mf2-refuses");
@@ -4840,7 +4838,7 @@ int main() {
                   "medium-fsm-unknown") != std::string::npos,
               "mf2-alert");
     }
-    // ME. Mint/rollback double failure (doc 06 sec. 6.1b):
+    // ME. Mint/rollback double failure:
     // epoch persistence fails AND the FSM rollback fails. The
     // cycle must fail loud — never a successful return from a
     // stranded ACTIVE+no-epoch state — with no sweep POST, a
@@ -4850,14 +4848,14 @@ int main() {
     // returns to a fresh mint that succeeds normally.
     {
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "me-recover");
         g_kill.spend_tier = 3;  // MEDIUM
-        jev::runner::InjectWriteFault("medium-incident.txt", 0);
-        jev::runner::InjectWriteFault("medium.txt", 1);
+        kernel::runner::InjectWriteFault("medium-incident.txt", 0);
+        kernel::runner::InjectWriteFault("medium.txt", 1);
         g_log.clear();
         Check(!g.Cycle(g_now), "me-cycle-fails");
-        jev::runner::ClearWriteFaults();
+        kernel::runner::ClearWriteFaults();
         Check(ReadWhole(r.dir + "/medium.txt") ==
                   "MEDIUM_ACTIVE",
               "me-stranded-file");
@@ -4867,7 +4865,7 @@ int main() {
                   "medium-rollback-unpersisted") !=
                   std::string::npos,
               "me-alert");
-        Check(jev::runner::JournalVerifyFile(
+        Check(kernel::runner::JournalVerifyFile(
                   (r.dir + "/journal.jsonl").c_str()),
               "me-chain-valid");
         bool posted = false;
@@ -4894,7 +4892,7 @@ int main() {
               "me-enter");
     }
     // FC. Failed FLATTENED transition must not auto-clear
-    // (doc 06 sec. 6.1b): MEDIUM_ACTIVE on disk + broker/local
+    //: MEDIUM_ACTIVE on disk + broker/local
     // flat + forced FLATTENED persistence failure -> the cycle
     // continues (single failure, retry next) but clears
     // nothing, emits no medium-incident-cleared row, and leaves
@@ -4903,14 +4901,14 @@ int main() {
     {
         Rig r;
         r.deps.list_positions = FakePositions;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "fc-recover");
         WriteFile(r.dir + "/medium.txt", "MEDIUM_ACTIVE");
         WriteFile(r.dir + "/medium-incident.txt",
                   "1800000000000000000");
-        jev::runner::InjectWriteFault("medium.txt", 0);
+        kernel::runner::InjectWriteFault("medium.txt", 0);
         Check(g.Cycle(g_now), "fc-cycle-continues");
-        jev::runner::ClearWriteFaults();
+        kernel::runner::ClearWriteFaults();
         Check(ReadWhole(r.dir + "/medium.txt") ==
                   "MEDIUM_ACTIVE",
               "fc-no-transition");
@@ -4918,12 +4916,12 @@ int main() {
                   "1800000000000000000",
               "fc-epoch-intact");
         // The cleared row's observable signature (journal
-        // bodies are hashes by frozen design):
+        // bodies are hashes by fixed design):
         // kind=drift-directive + intent=runner.
         auto cleared_rows = [&] {
-            std::vector<jev::journal::Row> jr;
+            std::vector<kernel::journal::Row> jr;
             int n = 0;
-            if (!jev::runner::JournalLoad(
+            if (!kernel::runner::JournalLoad(
                     (r.dir + "/journal.jsonl").c_str(), &jr))
                 return -1;
             for (std::size_t i = 0; i < jr.size(); ++i) {
@@ -4937,7 +4935,7 @@ int main() {
         Check(ReadWhole(r.dir + "/alerts.jsonl").find(
                   "medium-fsm-unpersisted") != std::string::npos,
               "fc-alert");
-        Check(jev::runner::JournalVerifyFile(
+        Check(kernel::runner::JournalVerifyFile(
                   (r.dir + "/journal.jsonl").c_str()),
               "fc-chain-valid");
         // Fault removed: terminal persist then cleanup.
@@ -4948,13 +4946,13 @@ int main() {
               "fc-epoch-cleared");
         Check(cleared_rows() == 1, "fc-cleared-row");
     }
-    // FS. Strict incident-file shapes (doc 06 sec. 6.1b):
+    // FS. Strict incident-file shapes:
     // trailing lines are corruption, and failed clean-cycle
     // truncations report instead of silently ignoring.
     {
         // FSM with a trailing junk line refuses like GARBAGE.
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "fs-recover");
         WriteFile(r.dir + "/medium.txt",
                   "MEDIUM_ACTIVE\nGARBAGE\n");
@@ -4970,7 +4968,7 @@ int main() {
         // Epoch file with trailing junk mints nothing: ACTIVE
         // + unparseable epoch is never healthy.
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "fs-recover2");
         g_kill.spend_tier = 3;  // MEDIUM
         WriteFile(r.dir + "/medium.txt", "MEDIUM_ACTIVE");
@@ -4985,24 +4983,23 @@ int main() {
         // Failed clean-cycle truncation reports loud + keeps
         // the file (never a silent half-teardown).
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "fs-recover3");
         WriteFile(r.dir + "/hard-incident.txt", "5\n");
-        jev::runner::InjectWriteFault("hard-incident.txt", 0);
+        kernel::runner::InjectWriteFault("hard-incident.txt", 0);
         Check(g.Cycle(g_now), "fs-cycle-continues");
-        jev::runner::ClearWriteFaults();
+        kernel::runner::ClearWriteFaults();
         Check(ReadWhole(r.dir + "/hard-incident.txt") == "5\n",
               "fs-file-intact");
         Check(ReadWhole(r.dir + "/alerts.jsonl").find(
                   "hard-incident-untruncated") !=
                   std::string::npos,
               "fs-trunc-alert");
-        Check(jev::runner::JournalVerifyFile(
+        Check(kernel::runner::JournalVerifyFile(
                   (r.dir + "/journal.jsonl").c_str()),
               "fs-chain-valid");
     }
-    // OR. Orphaned durable books refuse recovery (doc 06 sec.
-    // 6.1b): an intent file + PROTECTED snapshot with the
+    // OR. Orphaned durable books refuse recovery: an intent file + PROTECTED snapshot with the
     // journal absent (then with the journal empty) is torn
     // state — Recover refuses for human recovery, never
     // success-with-zero-slots, and the refusal is stable
@@ -5017,16 +5014,16 @@ int main() {
                    .empty(),
               "or-image");
         std::remove((r.dir + "/journal.jsonl").c_str());
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         const char* ors = nullptr;
         Check(!g.Recover(&ors), "or-refuses-absent");
         Check(ors &&
                   std::string(ors) == "recover-orphaned-state",
               "or-reason");
         Check(g.slots() == 0, "or-no-slots");
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(!g2.Recover(nullptr), "or-still-refuses");
-        Check(jev::runner::JournalVerifyFile(
+        Check(kernel::runner::JournalVerifyFile(
                   (r.dir + "/journal.jsonl").c_str()),
               "or-chain-valid");
     }
@@ -5038,24 +5035,23 @@ int main() {
                    .empty(),
               "or-image-empty");
         WriteFile(r.dir + "/journal.jsonl", "");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(!g.Recover(nullptr), "or-refuses-empty");
         Check(g.slots() == 0, "or-no-slots-empty");
     }
     {
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "or-virgin");
         Check(g.slots() == 0, "or-virgin-empty");
     }
-    // LG. Recovery-before-mutation lifecycle (doc 06 sec.
-    // 6.1b): the constructor alone confers no mutation
+    // LG. Recovery-before-mutation lifecycle: the constructor alone confers no mutation
     // authority. Without Recover, SubmitIntent and Cycle refuse
     // and mutate nothing (no journal, no intent/snap files) —
     // and the same object works normally once recovered.
     {
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         const char* lgr = nullptr;
         Check(!g.SubmitIntent(GoodIntent("intent-731", "AAPL",
                                           false, 100),
@@ -5076,7 +5072,7 @@ int main() {
               "lg-submit-after");
         Check(g.Cycle(g_now), "lg-cycle-after");
     }
-    // OM. Mixed-journal orphan (doc 06 sec. 6.1b): coverage is
+    // OM. Mixed-journal orphan: coverage is
     // PER BOOK. A journal with a legitimate intent-A row plus
     // valid A books must not launder a live PROTECTED orphan B
     // (valid books, no intent-B row) into success — Recover
@@ -5094,32 +5090,31 @@ int main() {
                               0, 100, 4, 100, "", 1)
                    .empty(),
               "om-book-b");
-        G0Runner* gp = new G0Runner(r.cfg, r.deps);
-        G0Runner& g = *gp;
+        PaperRunner* gp = new PaperRunner(r.cfg, r.deps);
+        PaperRunner& g = *gp;
         const char* omr = nullptr;
         Check(!g.Recover(&omr), "om-mixed-refuses");
         Check(omr &&
                   std::string(omr) == "recover-orphaned-state",
               "om-reason");
         Check(g.slots() == 0, "om-no-slots");
-        Check(jev::runner::JournalVerifyFile(
+        Check(kernel::runner::JournalVerifyFile(
                   (r.dir + "/journal.jsonl").c_str()),
               "om-chain-valid");
         delete gp;  // release the directory lock before g2
         std::remove((r.dir + "/intent-intent-741.txt").c_str());
         std::remove((r.dir + "/snap-intent-741.txt").c_str());
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "om-recovers-after-rm");
         Check(g2.slots() == 1, "om-one-slot");
     }
-    // LG2. Failed second Recover revokes authority (doc 06 sec.
-    // 6.1b): Recover clears mutation authority on entry, so a
+    // LG2. Failed second Recover revokes authority: Recover clears mutation authority on entry, so a
     // recovery that fails after an earlier success leaves the
     // object with NO authority — SubmitIntent/Cycle refuse and
     // mutate nothing until a later Recover fully succeeds.
     {
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "lg2-recover");
         WriteFile(r.dir + "/journal.jsonl", "CORRUPT\n");
         const char* lg2r = nullptr;
@@ -5151,7 +5146,7 @@ int main() {
               "lg2-submit-after");
     }
     // AT-A. Recovery-time terminal attribution failure refuses
-    // (doc 06 sec. 6.1b): ENTRY open=100 with a terminal CLOSED
+    //: ENTRY open=100 with a terminal CLOSED
     // EXIT (closed=100) whose attribution persist faults must
     // fail Recover (recover-attribution-unpersisted) with the
     // entry durable byte-identical and mutation authority
@@ -5173,14 +5168,14 @@ int main() {
         Check(AppendRow(r.dir, "exit", "intent-751"), "aa-term");
         std::string before =
             ReadWhole(r.dir + "/snap-intent-750.txt");
-        jev::runner::InjectWriteFault("snap-intent-750.txt", 0);
-        G0Runner g(r.cfg, r.deps);
+        kernel::runner::InjectWriteFault("snap-intent-750.txt", 0);
+        PaperRunner g(r.cfg, r.deps);
         const char* aar = nullptr;
         Check(!g.Recover(&aar), "aa-refuses");
         Check(aar && std::string(aar) ==
                           "recover-attribution-unpersisted",
               "aa-reason");
-        jev::runner::ClearWriteFaults();
+        kernel::runner::ClearWriteFaults();
         Check(ReadWhole(r.dir + "/snap-intent-750.txt") ==
                   before,
               "aa-entry-intact");
@@ -5192,7 +5187,7 @@ int main() {
         Check(aas && std::string(aas) == "submit-not-recovered",
               "aa-no-mutate-reason");
         Check(!g.Cycle(g_now), "aa-no-cycle");
-        Check(jev::runner::JournalVerifyFile(
+        Check(kernel::runner::JournalVerifyFile(
                   (r.dir + "/journal.jsonl").c_str()),
               "aa-chain-valid");
         Check(g.Recover(nullptr), "aa-recovers-after-fix");
@@ -5202,14 +5197,14 @@ int main() {
               "aa-attributed");
     }
     // AT-B. In-cycle terminal attribution failure retains the
-    // EXIT (doc 06 sec. 6.1b): with ENTRY open=100, a closing
+    // EXIT: with ENTRY open=100, a closing
     // EXIT whose attribution persist faults must not go done —
     // the slot stays CLOSED-but-active with no duplicate broker
     // close, and the next cycle retries deterministically
     // (entry open zero, EXIT done, chain valid).
     {
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "ab-recover");
         Check(g.SubmitIntent(GoodIntent("intent-760", "AAPL",
                                         false, 100),
@@ -5230,15 +5225,15 @@ int main() {
               "ab-exit");
         // One-shot fault, skip=1: the entry's routine persist
         // consumes the skip; the attribution write fails.
-        jev::runner::InjectWriteFault("snap-intent-760.txt", 1);
+        kernel::runner::InjectWriteFault("snap-intent-760.txt", 1);
         PushRule("GET", "by_client_order_id", 404, "{}");
         PushRule("POST", "/v2/orders", 200,
                  HeldReply("filled", "100").c_str());
         Check(g.Cycle(g_now), "ab-cycle");
-        jev::runner::ClearWriteFaults();
+        kernel::runner::ClearWriteFaults();
         const auto* abx = g.Find("intent-761");
         Check(abx && !abx->done &&
-                  abx->m.state == jev::exec::RouteState::CLOSED &&
+                  abx->m.state == kernel::exec::RouteState::CLOSED &&
                   abx->m.exit_closed_qty == 100,
               "ab-retained");
         const auto* abe2 = g.Find("intent-760");
@@ -5256,11 +5251,11 @@ int main() {
                              abe3->m.exit_closed_qty ==
                          0,
               "ab-entry-zero");
-        Check(jev::runner::JournalVerifyFile(
+        Check(kernel::runner::JournalVerifyFile(
                   (r.dir + "/journal.jsonl").c_str()),
               "ab-chain-valid");
     }
-    // PK. Path integrity (doc 06 sec. 6.1b): a non-regular node
+    // PK. Path integrity: a non-regular node
     // never reads as a missing file. Directory-in-place refuses
     // or fails closed at every state reader.
     {
@@ -5275,71 +5270,71 @@ int main() {
                   0,
               "pk-journal-removed");
         MkDir(r.dir + "/journal.jsonl");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         const char* rsn = nullptr;
         Check(!g.Recover(&rsn), "pk-journal-refused");
         RmDir(r.dir + "/journal.jsonl");
     }
-    // FZ. Freeze readability (doc 06 sec. 6.1b): ABSENT reads as
+    // FZ. Freeze readability: ABSENT reads as
     // the empty set; a present-but-unreadable regular freeze file
-    // fails closed (frozen). The unreadable shape is POSIX-only
+    // fails closed. The unreadable shape is POSIX-only
     // (chmod 000 is not a read barrier on Windows).
     {
         Rig r;
         std::string fp = r.dir + "/freeze.txt";
-        Check(!jev::runner::FreezeHas(fp.c_str(), "AAPL"),
+        Check(!kernel::runner::FreezeHas(fp.c_str(), "AAPL"),
               "fz-absent-empty");
         WriteFile(fp, "ZZZ");
-        Check(!jev::runner::FreezeHas(fp.c_str(), "AAPL"),
+        Check(!kernel::runner::FreezeHas(fp.c_str(), "AAPL"),
               "fz-other-symbol");
-        Check(jev::runner::FreezeHas(fp.c_str(), "ZZZ"),
+        Check(kernel::runner::FreezeHas(fp.c_str(), "ZZZ"),
               "fz-listed-frozen");
 #ifndef _WIN32
         Check(::chmod(fp.c_str(), 0000) == 0, "fz-chmod");
-        Check(jev::runner::FreezeHas(fp.c_str(), "AAPL"),
+        Check(kernel::runner::FreezeHas(fp.c_str(), "AAPL"),
               "fz-unreadable-frozen");
         Check(::chmod(fp.c_str(), 0600) == 0, "fz-restore");
 #endif
-        Check(!jev::runner::FreezeHas(fp.c_str(), "AAPL"),
+        Check(!kernel::runner::FreezeHas(fp.c_str(), "AAPL"),
               "fz-readable-again");
     }
-    // CY. Startup cycles parsing (doc 06 sec. 6.1b): digits
+    // CY. Startup cycles parsing: digits
     // only, empty = 0 (legacy unbounded shape), and
     // reject-before-overflow — a digit that would overflow
     // signed long long refuses instead of wrapping.
     {
         long long v = -1;
-        Check(jev::runner::ParseCycles("0", &v) && v == 0,
+        Check(kernel::runner::ParseCycles("0", &v) && v == 0,
               "cy-zero");
-        Check(jev::runner::ParseCycles("42", &v) && v == 42,
+        Check(kernel::runner::ParseCycles("42", &v) && v == 42,
               "cy-small");
-        Check(jev::runner::ParseCycles("1000000", &v) &&
+        Check(kernel::runner::ParseCycles("1000000", &v) &&
                   v == 1000000,
               "cy-cap");
-        Check(jev::runner::ParseCycles("", &v) && v == 0,
+        Check(kernel::runner::ParseCycles("", &v) && v == 0,
               "cy-empty");
-        Check(jev::runner::ParseCycles("9223372036854775807",
+        Check(kernel::runner::ParseCycles("9223372036854775807",
                                         &v) &&
                   v == 9223372036854775807LL,
               "cy-max-exact");
-        Check(!jev::runner::ParseCycles(
+        Check(!kernel::runner::ParseCycles(
                   "9223372036854775808", &v),
               "cy-max-plus-one");
-        Check(!jev::runner::ParseCycles(
+        Check(!kernel::runner::ParseCycles(
                   "99999999999999999999999999", &v),
               "cy-huge");
-        Check(!jev::runner::ParseCycles("12x", &v),
+        Check(!kernel::runner::ParseCycles("12x", &v),
               "cy-nondigit");
-        Check(!jev::runner::ParseCycles(nullptr, &v),
+        Check(!kernel::runner::ParseCycles(nullptr, &v),
               "cy-null");
-        Check(!jev::runner::ParseCycles("7", nullptr),
+        Check(!kernel::runner::ParseCycles("7", nullptr),
               "cy-null-out");
     }
     {
         // HALT-as-dir counts as halted: entries refused.
         Rig r;
         MkDir(r.dir + "/HALT");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "pk-recover");
         Check(!g.SubmitIntent(
                   GoodIntent("intent-611", "AAPL", false, 100),
@@ -5352,7 +5347,7 @@ int main() {
         // empty set).
         Rig r;
         MkDir(r.dir + "/freeze.txt");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "pk-recover2");
         Check(!g.SubmitIntent(
                   GoodIntent("intent-612", "AAPL", false, 100),
@@ -5367,7 +5362,7 @@ int main() {
         r.deps.list_positions = FakePositions;
         g_positions.push_back(MkPos("AAPL", 100));
         MkDir(r.dir + "/hard-chain.txt");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "pk-recover3");
         g_kill.drift_unresolvable = true;  // HARD
         Check(!g.Cycle(g_now), "pk-refused");
@@ -5375,7 +5370,7 @@ int main() {
               "pk-zero-posts");
         Check(CountMethod("GET", "by_client_order_id") == 0,
               "pk-zero-lookups");
-        Check(jev::runner::FreezeHas(
+        Check(kernel::runner::FreezeHas(
                     (r.dir + "/freeze.txt").c_str(), "AAPL"),
               "pk-frozen");
         RmDir(r.dir + "/hard-chain.txt");
@@ -5385,7 +5380,7 @@ int main() {
         Rig r;
         r.deps.list_positions = FakePositions;
         MkDir(r.dir + "/medium.txt");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "pk-recover4");
         g_kill.spend_tier = 3;  // MEDIUM
         Check(g.Cycle(g_now), "pk-cycle");
@@ -5397,7 +5392,7 @@ int main() {
               "pk-alert");
         RmDir(r.dir + "/medium.txt");
     }
-    // PV. Position row validation (doc 06 sec. 6.1b): corrupt rows
+    // PV. Position row validation: corrupt rows
     // at a valid count invalidate the whole snapshot (unknown).
     // Modes: 1 unterminated symbol, 2 duplicate symbols, 3
     // over-range qty, 4 LLONG_MIN qty, 5 empty symbol.
@@ -5406,7 +5401,7 @@ int main() {
         r.deps.list_positions = FakePositions;
         g_posn_bad = bad;
         g_positions.push_back(MkPos("AAPL", 40));
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         char nm[32];
         std::snprintf(nm, sizeof(nm), "pv-recover-%d", bad);
         Check(g.Recover(nullptr), nm);
@@ -5425,9 +5420,9 @@ int main() {
                       "positions-unavailable") !=
                       std::string::npos,
               nm);
-        std::vector<jev::journal::Row> rows;
+        std::vector<kernel::journal::Row> rows;
         bool drift_row = false;
-        if (jev::runner::JournalLoad(
+        if (kernel::runner::JournalLoad(
                 (r.dir + "/journal.jsonl").c_str(), &rows)) {
             for (std::size_t i = 0; i < rows.size(); ++i) {
                 if (rows[i].kind == "drift-directive")
@@ -5447,7 +5442,7 @@ int main() {
         WriteFile(r.dir + "/medium.txt", "FLATTENED");
         WriteFile(r.dir + "/medium-incident.txt",
                   "1799999999000000000\n");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "pv-recover-dup");
         Check(g.Cycle(g_now), "pv-cycle-dup");
         Check(ReadWhole(r.dir + "/medium.txt") ==
@@ -5457,14 +5452,14 @@ int main() {
               "pv-no-mint-on-dup");
         g_posn_bad = 0;
     }
-    // CU. Cursor durability fails closed (doc 06 sec. 6.1b): a
+    // CU. Cursor durability fails closed: a
     // foreign stream event dirties the cursor; an unwritable
     // cursor file fails the cycle (alert + journal) without
     // clearing the dirty bit; writability restored, the next
     // cycle persists the same cursor and succeeds.
     {
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "cu-recover");
         g_stream =
             "id: 01J000000000000000000000099\nevent: fill\n"
@@ -5484,8 +5479,7 @@ int main() {
                   "01J000000000000000000000099",
               "cu-cursor-persisted");
     }
-    // ME. MEDIUM epoch mint is durable-or-nothing (doc 06 sec.
-    // 6.1b): an unwritable incident file refuses the mint (no
+    // ME. MEDIUM epoch mint is durable-or-nothing: an unwritable incident file refuses the mint (no
     // sweep identity, FSM reverted so the next cycle retries);
     // writability restored, the mint proceeds.
     {
@@ -5494,7 +5488,7 @@ int main() {
         WriteFile(r.dir + "/medium.txt", "");
         MkDir(r.dir + "/medium-incident.txt");
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "me-recover");
         g_kill.spend_tier = 3;  // MEDIUM
         Check(g.Cycle(g_now), "me-cycle");
@@ -5508,7 +5502,7 @@ int main() {
               "me-alert");
         RmDir(r.dir + "/medium-incident.txt");
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "me-recover2");
         Check(g2.Cycle(g_now), "me-cycle2");
         char mbe[32];
@@ -5533,7 +5527,7 @@ int main() {
         MkDir(r.dir + "/hard-incident.txt");
         g_positions.push_back(MkPos("AAPL", 100));
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "he-recover");
         g_kill.drift_unresolvable = true;  // HARD
         Check(!g.Cycle(g_now), "he-refused");
@@ -5552,7 +5546,7 @@ int main() {
         Check(std::remove((r.dir + "/HALT").c_str()) == 0,
               "he-halt-cleared");
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "he-recover2");
         PushRule("GET", "by_client_order_id", 200,
                  "{\"id\":\"0193abcd-1234-5678-9abc-"
@@ -5577,7 +5571,7 @@ int main() {
         WriteFile(r.dir + "/medium.txt", "");
         WriteFile(r.dir + "/medium-incident.txt",
                   "9223372036854775807\n");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "ll-recover");
         g_kill.spend_tier = 3;  // MEDIUM
         Check(g.Cycle(g_now), "ll-cycle");
@@ -5588,7 +5582,7 @@ int main() {
                   std::string::npos,
               "ll-alert");
     }
-    // CB. Chain byte envelope (doc 06 sec. 6.1b): a hard-chain
+    // CB. Chain byte envelope: a hard-chain
     // file past 64 KiB refuses before rows materialize (freeze
     // + refuse, zero POSTs) — millions of valid duplicates can
     // never drive unbounded memory.
@@ -5605,13 +5599,13 @@ int main() {
         for (int i = 0; i < 6000; ++i)
             big += "cb-h 100 0\n";
         WriteFile(r.dir + "/hard-chain.txt", big.c_str());
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "cb-recover");
         g_kill.drift_unresolvable = true;  // HARD
         Check(!g.Cycle(g_now), "cb-refused");
         Check(CountMethod("POST", "/v2/orders") == 0,
               "cb-zero-posts");
-        Check(jev::runner::FreezeHas(
+        Check(kernel::runner::FreezeHas(
                     (r.dir + "/freeze.txt").c_str(), "AAPL"),
               "cb-frozen");
         Check(ReadWhole(r.dir + "/alerts.jsonl")
@@ -5619,7 +5613,7 @@ int main() {
                   std::string::npos,
               "cb-alert");
     }
-    // SR. MEDIUM sweep remainder (doc 06 sec. 6.1b): after a
+    // SR. MEDIUM sweep remainder: after a
     // terminal-short sweep the replacement never re-sends the
     // stale snapshot size. Sweep 100 lands 40 terminal while the
     // poll still shows 100 -> one 60-share remainder (the logical
@@ -5633,7 +5627,7 @@ int main() {
         g_venue_spread = 1;
         g_positions.push_back(MkPos("AAPL", 100));
         {
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "sr-recover");
         g_kill.spend_tier = 3;  // MEDIUM
         PushRule("GET", "by_client_order_id", 404, "{}");
@@ -5645,7 +5639,7 @@ int main() {
         // Poll still shows 100 (lagged), but the sweep
         // terminally filled 40: truth is 60 open.
         }
-        G0Runner g2(r.cfg, r.deps);
+        PaperRunner g2(r.cfg, r.deps);
         Check(g2.Recover(nullptr), "sr-recover2");
         PushRule("GET", "by_client_order_id", 200,
                  HeldReply("filled", "40").c_str());
@@ -5670,7 +5664,7 @@ int main() {
         Check(qty60, "sr-remainder-60");
         Check(!qty100again, "sr-never-stale-100");
     }
-    // IP. Intent-ID permanence (doc 06 sec. 6.1b): journal history
+    // IP. Intent-ID permanence: journal history
     // wins at both layers. A CLOSED-imaged slot is never rebuilt (terminal), so
     // mid-run file deletion leaves no memory trace, yet re-submit is refused
     // from the journal row alone (recreating the file would fork one identity).
@@ -5682,7 +5676,7 @@ int main() {
                           100, 11, 100, &cid)
                    .empty(),
               "ip-image");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "ip-recover");
         Check(g.Find("intent-620") == nullptr,
               "ip-terminal-unrebuilt");
@@ -5712,17 +5706,17 @@ int main() {
                   (r.dir + "/intent-intent-621.txt").c_str()) ==
                   0,
               "ip-file-deleted2");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(!g.Recover(nullptr), "ip-restart-refused");
     }
-    // MC. Capacity clamp (doc 06 sec. 6.1b): absurd configured
+    // MC. Capacity clamp: absurd configured
     // max_slots clamps to the fixed architecture limit (64
     // entries) — the *2 arithmetic cannot overflow and the 65th
     // entry refuses. LLONG_MAX configures safely too.
     {
         Rig r;
         r.cfg.max_slots = 1000000;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "mc-recover");
         bool all_ok = true;
         for (int i = 0; i < 64; ++i) {
@@ -5744,20 +5738,20 @@ int main() {
     {
         Rig r;
         r.cfg.max_slots = 9223372036854775807LL;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "mc-recover2");
         Check(g.SubmitIntent(
                   GoodIntent("mc-big", "AAPL", false, 100),
                   nullptr),
               "mc-huge-config-safe");
     }
-    // FT. Stream transport contract (doc 06 sec. 6.1b): a
+    // FT. Stream transport contract: a
     // negative or overlong stream_read return is a real feed
     // fault (loud journal + alert, cycle continues) — never
     // silent no-data, never an over-read of the stack buffer.
     {
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "ft-recover");
         g_stream_fault = 5000;
         Check(g.Cycle(g_now), "ft-cycle-huge");
@@ -5769,7 +5763,7 @@ int main() {
     }
     {
         Rig r;
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "ft-recover2");
         g_stream_fault = -1;
         Check(g.Cycle(g_now), "ft-cycle-negative");
@@ -5779,15 +5773,15 @@ int main() {
               "ft-negative-alert");
         g_stream_fault = 0;
     }
-    // CK. Clock split (doc 06 sec. 6.1b): S2 cadence runs on the
+    // CK. Clock split: reconcile cadence runs on the
     // monotonic clock. A wall jump alone never triggers the
     // account reconciliation rhythm; a mono advance does.
     {
         Rig r;
         r.deps.list_positions = FakePositions;
         r.deps.mono_ns = FakeMono;
-        g_pos_fail = 1;  // every S2 run alerts, observably
-        G0Runner g(r.cfg, r.deps);
+        g_pos_fail = 1;  // every reconcile run alerts, observably
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "ck-recover");
         Check(g.Cycle(g_now), "ck-cycle1");
         Check(ReadWhole(r.dir + "/alerts.jsonl").find(
@@ -5813,8 +5807,7 @@ int main() {
               "ck-mono-advance-runs");
         g_pos_fail = 0;
     }
-    // LK. Single-process ownership (doc 06 sec. 6.1b, Phase-4
-    // prerequisite): liveness distinguishes live/self/dead pids;
+    // LK. Single-process ownership: liveness distinguishes live/self/dead pids;
     // a stale lock is taken over (rewritten to the owner).
     {
         Rig r;
@@ -5824,12 +5817,12 @@ int main() {
 #else
             (long long)getpid();
 #endif
-        Check(jev::runner::PidAlive(self), "lk-self-alive");
-        Check(!jev::runner::PidAlive(2147483647LL),
+        Check(kernel::runner::PidAlive(self), "lk-self-alive");
+        Check(!kernel::runner::PidAlive(2147483647LL),
               "lk-dead-pid");
-        Check(!jev::runner::PidAlive(0), "lk-zero-pid");
+        Check(!kernel::runner::PidAlive(0), "lk-zero-pid");
         WriteFile(r.dir + "/runner.lock", "2147483647");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "lk-takeover");
         char me[32];
         std::snprintf(me, sizeof(me), "%lld", self);
@@ -5837,7 +5830,7 @@ int main() {
                   std::string(me),
               "lk-lock-rewritten");
     }
-    // LK2. Concurrent stale takeover (doc 06 sec. 6.1b): two
+    // LK2. Concurrent stale takeover: two
     // takers racing on one stale lock serialize in the kernel
     // into exactly one owner. The hold is tracked per thread
     // with no shared arbiter, so this race genuinely contends
@@ -5857,7 +5850,7 @@ int main() {
         std::atomic<int> arrived{0};
         std::atomic<int> attempted{0};
         auto race = [&](bool* ok) {
-            G0Runner g(r.cfg, r.deps);
+            PaperRunner g(r.cfg, r.deps);
             ++arrived;
             while (arrived.load() < 2) std::this_thread::yield();
             *ok = g.Recover(nullptr);
@@ -5874,8 +5867,7 @@ int main() {
         t2.join();
         Check(ok1 != ok2, "lk2-exactly-one-owner");
     }
-    // JX. Lock refusal writes nothing shared (doc 06 sec.
-    // 6.1b): with a pre-existing nonempty journal, two
+    // JX. Lock refusal writes nothing shared: with a pre-existing nonempty journal, two
     // concurrent contenders yield exactly one owner AND the
     // journal chain stays valid. A refusing contender carries
     // a fresh next_seq_/genesis — appending it would fork the
@@ -5894,7 +5886,7 @@ int main() {
         std::atomic<int> arrived{0};
         std::atomic<int> attempted{0};
         auto race = [&](bool* ok) {
-            G0Runner g(r.cfg, r.deps);
+            PaperRunner g(r.cfg, r.deps);
             ++arrived;
             while (arrived.load() < 2) std::this_thread::yield();
             *ok = g.Recover(nullptr);
@@ -5907,7 +5899,7 @@ int main() {
         t1.join();
         t2.join();
         Check(ok1 != ok2, "jx-exactly-one-owner");
-        Check(jev::runner::JournalVerifyFile(
+        Check(kernel::runner::JournalVerifyFile(
                   (r.dir + "/journal.jsonl").c_str()),
               "jx-journal-valid");
         std::string jr = ReadWhole(r.dir + "/journal.jsonl");
@@ -5924,7 +5916,7 @@ int main() {
     {
         Rig r;
         std::string path = r.dir + "/alerts-escape.jsonl";
-        Check(jev::runner::Alert(path.c_str(), "HARD", "c\"ode",
+        Check(kernel::runner::Alert(path.c_str(), "HARD", "c\"ode",
                                  "a\"b\\c\n{\"ts_ns\":9}\x01\xc3\xa9", 5),
               "al-append");
         std::string got = ReadWhole(path);
@@ -5933,17 +5925,16 @@ int main() {
             if (c == '\n') ++nl;
         }
         Check(nl == 1, "al-single-line");
-        jev::JVal v;
+        kernel::JVal v;
         std::string err;
-        Check(jev::ParseJson(got, v, err), "al-valid-json");
-        Check(v.t == jev::JVal::T::OBJ && v.o.size() == 4, "al-four-keys");
+        Check(kernel::ParseJson(got, v, err), "al-valid-json");
+        Check(v.t == kernel::JVal::T::OBJ && v.o.size() == 4, "al-four-keys");
         std::string longd(400, 'x');
-        Check(jev::runner::Alert(path.c_str(), "MEDIUM", "long", longd.c_str(),
+        Check(kernel::runner::Alert(path.c_str(), "MEDIUM", "long", longd.c_str(),
                                  6),
               "al-long-detail");
     }
-    // LR2. One live mutable runner per directory (doc 06 sec.
-    // 6.1b): the runner is non-copyable/non-movable, and a
+    // LR2. One live mutable runner per directory: the runner is non-copyable/non-movable, and a
     // second live object for the same directory is refused —
     // two independent state machines must never share one
     // ownership token. A recovers; B's Recover is refused on
@@ -5953,9 +5944,9 @@ int main() {
     // journal stays valid throughout.
     {
         Rig r;
-        G0Runner* a = new G0Runner(r.cfg, r.deps);
+        PaperRunner* a = new PaperRunner(r.cfg, r.deps);
         Check(a->Recover(nullptr), "lr2-recover-a");
-        G0Runner* b = new G0Runner(r.cfg, r.deps);
+        PaperRunner* b = new PaperRunner(r.cfg, r.deps);
         Check(!b->Recover(nullptr), "lr2-second-refused");
         Check(!b->SubmitIntent(GoodIntent("intent-730", "AAPL",
                                           false, 100),
@@ -5965,7 +5956,7 @@ int main() {
         delete b;
         bool fok = false;
         std::thread tf([&] {
-            G0Runner g(r.cfg, r.deps);
+            PaperRunner g(r.cfg, r.deps);
             fok = g.Recover(nullptr);
         });
         tf.join();
@@ -5973,16 +5964,16 @@ int main() {
         delete a;
         bool fok2 = false;
         std::thread tf2([&] {
-            G0Runner g(r.cfg, r.deps);
+            PaperRunner g(r.cfg, r.deps);
             fok2 = g.Recover(nullptr);
         });
         tf2.join();
         Check(fok2, "lr2-released-after-a-destroyed");
-        Check(jev::runner::JournalVerifyFile(
+        Check(kernel::runner::JournalVerifyFile(
                   (r.dir + "/journal.jsonl").c_str()),
               "lr2-chain-valid");
     }
-    // PR. PROTECTED rebuilds live (doc 06 sec. 6.1b): a durable
+    // PR. PROTECTED rebuilds live: a durable
     // PROTECTED snapshot + matching intent + terminal journal
     // fill row restarts into an ACTIVE slot with its economics
     // intact. CANCELLED / UNKNOWN_FROZEN / CLOSED stay
@@ -6000,17 +5991,17 @@ int main() {
                           100, 4, 100, &cid, "", 1)
                    .empty(),
               "pr-image");
-        std::vector<jev::journal::Row> pjr;
-        Check(jev::runner::JournalLoad(
+        std::vector<kernel::journal::Row> pjr;
+        Check(kernel::runner::JournalLoad(
                   (r.dir + "/journal.jsonl").c_str(), &pjr) &&
                   !pjr.empty(),
               "pr-jr");
-        jev::journal::Row fr;
+        kernel::journal::Row fr;
         std::string fbody = "fill sym=AAPL";
-        Check(jev::journal::FormatRow(
+        Check(kernel::journal::FormatRow(
                   pjr.back().seq + 1, 1800000000000000000LL,
                   "fill", "intent-710",
-                  jev::Sha256Hex(fbody).c_str(),
+                  kernel::Sha256Hex(fbody).c_str(),
                   pjr.back().row_hash.c_str(), &fr),
               "pr-fill-row");
         char fln[1024];
@@ -6023,19 +6014,19 @@ int main() {
         WriteFile(r.dir + "/journal.jsonl",
                   ReadWhole(r.dir + "/journal.jsonl") +
                       std::string(fln) + "\n");
-        G0Runner g(r.cfg, r.deps);
+        PaperRunner g(r.cfg, r.deps);
         Check(g.Recover(nullptr), "pr-recover");
         Check(g.slots() == 1, "pr-one-slot");
         const auto* s = g.Find("intent-710");
         Check(s && s->active, "pr-slot-live");
-        Check(s->m.state == jev::exec::RouteState::PROTECTED,
+        Check(s->m.state == kernel::exec::RouteState::PROTECTED,
               "pr-state");
         Check(s->m.filled_qty == 100, "pr-economics");
         Check(g.Cycle(g_now), "pr-cycle");
         const auto* s2 = g.Find("intent-710");
         Check(s2 &&
                   s2->m.state ==
-                      jev::exec::RouteState::PROTECTED,
+                      kernel::exec::RouteState::PROTECTED,
               "pr-survives-cycle");
     }
     if (g_fail == 0)

@@ -1,4 +1,4 @@
-// Slice D gate [correctness + drill]: kill evaluation, entry gate,
+// Kill: evaluation, entry gate,
 // MEDIUM flatten FSM, HARD ordered sequence, persistence round-trip.
 // Usage: ./test_kill
 #include <cstdio>
@@ -17,22 +17,22 @@ static void Check(bool cond, const char* name) {
     }
 }
 
-using jev::kill::Closer;
-using jev::kill::FlattenState;
-using jev::kill::HardAction;
-using jev::kill::HardPhase;
-using jev::risk::KillLevel;
+using kernel::kill::Closer;
+using kernel::kill::FlattenState;
+using kernel::kill::HardAction;
+using kernel::kill::HardPhase;
+using kernel::risk::KillLevel;
 
 int main() {
-    using jev::kill::EvaluateLevel;
-    using jev::kill::KillInputs;
+    using kernel::kill::EvaluateLevel;
+    using kernel::kill::KillInputs;
     // 1. empty inputs -> NONE
     {
         KillInputs in;
         auto r = EvaluateLevel(in);
         Check(r.level == KillLevel::NONE, "empty-none");
     }
-    // 2. each SOFT trigger alone -> SOFT + frozen reason
+    // 2. each SOFT trigger alone -> SOFT + fixed reason
     {
         struct Case {
             const char* name;
@@ -40,8 +40,6 @@ int main() {
         };
         KillInputs h;
         h.halt_file = true;
-        KillInputs j;
-        j.jev_streak_s5 = true;
         KillInputs f;
         f.feed_stale_gt30s = true;
         KillInputs s;
@@ -49,14 +47,14 @@ int main() {
         KillInputs r;
         r.research_paused_past_ttl = true;
         const Case cases[] = {
-            {"soft-halt", h}, {"soft-s5", j}, {"soft-stale", f},
+            {"soft-halt", h}, {"soft-stale", f},
             {"soft-tier2", s}, {"soft-research", r},
         };
         const char* reasons[] = {
-            "kill:halt-file", "kill:jev-streak-s5", "kill:feed-stale",
+            "kill:halt-file", "kill:feed-stale",
             "kill:spend-tier-2", "kill:research-paused",
         };
-        for (int i = 0; i < 5; ++i) {
+        for (int i = 0; i < 4; ++i) {
             auto r2 = EvaluateLevel(cases[i].in);
             bool ok = r2.level == KillLevel::SOFT;
             const char* a = r2.reason;
@@ -83,9 +81,6 @@ int main() {
         KillInputs v;
         v.rule_violation = true;
         Check(EvaluateLevel(v).level == KillLevel::MEDIUM, "med-rule");
-        KillInputs c;
-        c.calib_breach = true;
-        Check(EvaluateLevel(c).level == KillLevel::MEDIUM, "med-calib");
         KillInputs t;
         t.spend_tier = 3;
         Check(EvaluateLevel(t).level == KillLevel::MEDIUM, "med-tier3");
@@ -116,7 +111,7 @@ int main() {
         std::snprintf(name, sizeof(name), "tier-%d-no-kill", tier);
         Check(EvaluateLevel(in).level == KillLevel::NONE, name);
     }
-    // 6. precedence: higher tier wins (frozen)
+    // 6. precedence: higher tier wins
     {
         KillInputs sm;
         sm.halt_file = true;
@@ -131,19 +126,18 @@ int main() {
         sh.determinism_fail = true;
         Check(EvaluateLevel(sh).level == KillLevel::HARD, "prec-soft-hard");
         KillInputs all;
-        all.halt_file = all.jev_streak_s5 = all.feed_stale_gt30s = true;
+        all.halt_file = all.feed_stale_gt30s = true;
         all.spend_tier = 2;
         all.research_paused_past_ttl = all.drawdown_r5 = true;
-        all.daily_loss_breach = all.rule_violation = all.calib_breach =
-            true;
+        all.daily_loss_breach = all.rule_violation = true;
         all.journal_chain_break = all.drift_unresolvable = true;
         all.broker_auth_fail = all.determinism_fail = true;
         all.sandbox_compromise = true;
         Check(EvaluateLevel(all).level == KillLevel::HARD, "prec-all-hard");
     }
-    // 7. entry gate: deliberate resume friction (doc 06 sec. 6.4)
+    // 7. entry gate: deliberate resume friction
     {
-        using jev::kill::EntriesAllowed;
+        using kernel::kill::EntriesAllowed;
         Check(EntriesAllowed(KillLevel::NONE, false, true),
               "entry-clean");
         Check(!EntriesAllowed(KillLevel::NONE, false, false),
@@ -159,8 +153,8 @@ int main() {
     }
     // 8. flatten FSM transitions
     {
-        using jev::kill::FlattenStep;
-        using jev::kill::StepFlatten;
+        using kernel::kill::FlattenStep;
+        using kernel::kill::StepFlatten;
         FlattenStep go;
         go.conditions_allow = true;
         auto o = StepFlatten(FlattenState::MEDIUM_ACTIVE, go);
@@ -202,7 +196,7 @@ int main() {
         Check(o.state == FlattenState::FLATTEN_PENDING &&
                   !o.issue_flatten,
               "flat-pending-stable");
-        // Re-attempt contract (frozen sec. 10.3): terminal failure +
+        // Re-attempt contract: terminal failure +
         // good conditions -> exactly one new issuance, still PENDING.
         FlattenStep fail;
         fail.prior_attempt_failed = true;
@@ -258,9 +252,9 @@ int main() {
         // Restart in PENDING with a reconciled failure observation:
         // persistence round-trips, then the fresh observation issues.
         {
-            using jev::kill::ParseKill;
-            using jev::kill::Persisted;
-            using jev::kill::SerializeKill;
+            using kernel::kill::ParseKill;
+            using kernel::kill::Persisted;
+            using kernel::kill::SerializeKill;
             Persisted p;
             p.flatten = FlattenState::FLATTEN_PENDING;
             char buf[16];
@@ -310,9 +304,9 @@ int main() {
     }
     // 9. persistence round-trips every state combination
     {
-        using jev::kill::ParseKill;
-        using jev::kill::Persisted;
-        using jev::kill::SerializeKill;
+        using kernel::kill::ParseKill;
+        using kernel::kill::Persisted;
+        using kernel::kill::SerializeKill;
         for (int f = 0; f <= 3; ++f)
             for (int c = 0; c <= 2; ++c)
                 for (int h = 0; h <= 6; ++h) {
@@ -342,20 +336,20 @@ int main() {
             Check(!SerializeKill(bad, buf, sizeof(buf)), "ser-bad-enum");
             Persisted q;
             Check(!ParseKill(nullptr, &q), "parse-null");
-            Check(!ParseKill("D1:0:0:0", nullptr), "parse-null-out");
-            Check(!ParseKill("D1:0:0", &q), "parse-short");
-            Check(!ParseKill("D1:0:0:00", &q), "parse-long");
+            Check(!ParseKill("KF:0:0:0", nullptr), "parse-null-out");
+            Check(!ParseKill("KF:0:0", &q), "parse-short");
+            Check(!ParseKill("KF:0:0:00", &q), "parse-long");
             Check(!ParseKill("X1:0:0:0", &q), "parse-tag");
-            Check(!ParseKill("D1:4:0:0", &q), "parse-range-f");
-            Check(!ParseKill("D1:0:3:0", &q), "parse-range-c");
-            Check(!ParseKill("D1:0:0:7", &q), "parse-range-h");
+            Check(!ParseKill("KF:4:0:0", &q), "parse-range-f");
+            Check(!ParseKill("KF:0:3:0", &q), "parse-range-c");
+            Check(!ParseKill("KF:0:0:7", &q), "parse-range-h");
             Check(!ParseKill("", &q), "parse-empty");
         }
     }
     // 10. HARD full path, protection present: exact operation order
     {
-        using jev::kill::HardStep;
-        using jev::kill::StepHard;
+        using kernel::kill::HardStep;
+        using kernel::kill::StepHard;
         HardPhase p = HardPhase::IDLE;
         HardStep obs;
         obs.protection_present = true;
@@ -379,8 +373,8 @@ int main() {
     // 11. HARD missing-protection path: ESTABLISH appears exactly once,
     // sequence still terminates at DONE
     {
-        using jev::kill::HardStep;
-        using jev::kill::StepHard;
+        using kernel::kill::HardStep;
+        using kernel::kill::StepHard;
         HardPhase p = HardPhase::IDLE;
         HardStep obs;
         obs.protection_present = false;
@@ -401,8 +395,8 @@ int main() {
     // 12. HARD unconfirmed: never advances to revocation (the ordering
     // property). 50 cycles of unconfirmed stays put, re-querying.
     {
-        using jev::kill::HardStep;
-        using jev::kill::StepHard;
+        using kernel::kill::HardStep;
+        using kernel::kill::StepHard;
         HardPhase p = HardPhase::CONFIRM_PROTECTION;
         HardStep obs;
         obs.protection_present = true;
@@ -420,8 +414,8 @@ int main() {
     // REVOKE fires only from CONFIRM+confirmed; EXIT only from
     // REVOKE_AND_EXIT. (7 phases x 16 combos = 112 checks.)
     {
-        using jev::kill::HardStep;
-        using jev::kill::StepHard;
+        using kernel::kill::HardStep;
+        using kernel::kill::StepHard;
         for (int ph = 0; ph <= 6; ++ph)
             for (int bits = 0; bits < 16; ++bits) {
                 HardStep in;

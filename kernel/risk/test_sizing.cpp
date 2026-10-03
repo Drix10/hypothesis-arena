@@ -13,7 +13,7 @@ static int fails = 0, count = 0;
         }                              \
     } while (0)
 
-using namespace jev::risk;
+using namespace kernel::risk;
 
 static SizingInput Base() {
     SizingInput s;

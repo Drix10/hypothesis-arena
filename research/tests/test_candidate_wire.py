@@ -21,7 +21,7 @@ class Wire(unittest.TestCase):
         r = self.rec()
         self.assertEqual(set(r), {"schema", "created_ns", "candidate"})
         c = r["candidate"]
-        self.assertEqual(len(c), 13)
+        self.assertEqual(len(c), 12)
         self.assertEqual(c["entry_px"], "250.50")
         self.assertEqual(c["cid"],
                          candidate_id(**{k: c[k] for k in ID_FIELDS}))
@@ -40,13 +40,13 @@ class Wire(unittest.TestCase):
 
     def test_sell_to_close_ordering(self):
         c = self.rec(side="SELL", stop=260.0, tp=100.0)["candidate"]
-        self.assertEqual((c["proposed_side"], c["stop_px"], c["tp_px"]),
+        self.assertEqual((c["side"], c["stop_px"], c["tp_px"]),
                          ("SELL", "260.00", "100.00"))
 
     def test_line_is_single_compact_json(self):
         line = W.wire_line("etf_trend", "VTI", TS, 250.5, 230.0, 999.0)
         self.assertTrue(line.endswith("\n") and line.count("\n") == 1)
-        self.assertEqual(json.loads(line)["schema"], "c1")
+        self.assertEqual(json.loads(line)["schema"], "candidate")
 
     def test_atr_stop(self):
         n = 30

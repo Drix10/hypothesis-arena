@@ -3,6 +3,9 @@
 One runner, Alpaca paper only. The transport is hard-wired to
 `paper-api.alpaca.markets`, so nothing here can touch a live account.
 
+This run tests the order path with the passive core only. No strategy runs on
+it and its results are not evidence for one (`plan/roadmap.md`).
+
 Python commands run from the repo root in WSL. The kernel builds and runs
 from `~/ha` (next section).
 
@@ -100,7 +103,7 @@ bash scripts/sign-stage.sh ~/g2
 Terminal 1, the loop (from `~/ha`):
 
 ```bash
-kernel/g0_paper_loop ~/g2 ops/deploy/session_calendar.json --ticks 0 --interval-s 60
+kernel/paper_loop ~/g2 ops/deploy/session_calendar.json --ticks 0 --interval-s 60
 ```
 
 Terminal 2, the emitter, once per session day (US session, from the repo
@@ -184,7 +187,7 @@ tail -f ~/g2/logs/loop.log
   early closes in `early_close_YYYY` arrays. Extend it before the last listed
   year ends; the loop refuses to trade in a year with no listed holiday.
 - Stop a foreground loop with Ctrl-C, a background one with
-  `pkill -f g0_paper_loop`. Exit 2 (refused) or 3 (HARD stop) means: read
+  `pkill -f paper_loop`. Exit 2 (refused) or 3 (HARD stop) means: read
   `~/g2/journal.jsonl` and `~/g2/alerts.jsonl` before starting again.
 - `ops/alert_relay.py` forwards `alerts.jsonl` to `ALERT_WEBHOOK_URL`. It is
   optional.

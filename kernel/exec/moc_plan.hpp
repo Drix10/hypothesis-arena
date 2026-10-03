@@ -1,4 +1,4 @@
-// Market-on-close exit sequencing against a live protective stop (doc 06 6.0).
+// Market-on-close exit sequencing against a live protective stop.
 // Pure: the caller supplies the observed order states and acts on the result.
 // The stop is cancelled only after the MOC is acknowledged; a stop that fills
 // first turns the MOC into an over-sell, so a live MOC is cancelled then; a
@@ -6,7 +6,7 @@
 #pragma once
 #include <cstdint>
 
-namespace jev {
+namespace kernel {
 namespace exec {
 
 enum class StopState : std::uint8_t { NONE, LIVE, FILLED, CANCELLED, UNKNOWN };
@@ -35,4 +35,4 @@ MocAction PlanMoc(const MocInput& in);
 const char* MocActionName(MocAction a);
 
 }  // namespace exec
-}  // namespace jev
+}  // namespace kernel

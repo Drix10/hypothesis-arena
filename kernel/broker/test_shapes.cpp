@@ -8,7 +8,7 @@
 
 #include "alpaca_paper.hpp"
 
-using namespace jev::broker;
+using namespace kernel::broker;
 
 static int fails = 0, count = 0;
 #define CHECK(name, expr)              \

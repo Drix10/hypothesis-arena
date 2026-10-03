@@ -1,4 +1,4 @@
-// G0 runner durability seam (doc 06 6.1/6.5, doc 10 10.1/10.5, doc 13 13.5).
+// Paper runner durability seam.
 //
 // The caller-owned side of the pure kernel's seam: journal file append +
 // OS-commit + restart load + chain verify, atomic machine snapshots, freeze
@@ -15,7 +15,7 @@
 
 #include "../log/journal.hpp"
 
-namespace jev {
+namespace kernel {
 namespace runner {
 
 // ---- primitives ----
@@ -53,11 +53,11 @@ long long FileSizeBytes(const char* path);
 // One canonical row per line:
 //   seq|ts_ns|kind|intent_id|payload_hash|prev_hash|row_hash
 // Fields carry no pipes (intent ids [A-Za-z0-9_.-], lowercase hex hashes,
-// frozen kinds).
+// fixed kinds).
 bool JournalAppend(const char* path, const journal::Row& r);
 // A journal larger than JournalCap() bytes refuses to load; the runner treats
 // that like a corrupt file (halt). Rows are ~250 bytes, so 64 MiB covers
-// decades at G3 order rates; the daily roll alerts at half the cap.
+// decades at full stage order rates; the daily roll alerts at half the cap.
 // SetJournalCap is for tests.
 constexpr std::size_t kJournalDefaultCap = 64u << 20;
 std::size_t JournalCap();
@@ -80,7 +80,7 @@ int JournalTrimTornTail(const char* path);
 std::string PayloadHash(const char* body);
 
 // ---- machine snapshots ----
-// Fixed "H1:..." record per intent (SnapshotMachine/RestoreMachine own the
+// Fixed "RM:..." record per intent (SnapshotMachine/RestoreMachine own the
 // bytes; this makes the write crash-safe).
 bool SaveSnapshot(const char* path, const char* record);
 bool LoadSnapshot(const char* path, char* record, std::size_t n);
@@ -105,7 +105,7 @@ bool LoadIntent(const char* path, IntentDesc* out);
 bool FreezeAdd(const char* path, const char* symbol);
 bool FreezeHas(const char* path, const char* symbol);
 
-// ---- STAGE gate (plan/10: pipe-delimited attest chain) ----
+// ---- STAGE gate ----
 struct Stage {
     char stage[16]{};
     char approved_by[128]{};
@@ -116,10 +116,10 @@ struct Stage {
 // Verify the full chain (genesis prev_attest = "GENESIS"). False + static
 // reason on missing/corrupt/chain-bad. out = last record.
 bool ReadStage(const char* path, Stage* out, const char** reason);
-// G0 startup gate: chain verifies + stage==G0_PAPER + capital==0.
+// paper runner: chain verifies + stage==PAPER + capital==0.
 bool StageGateG0(const char* path, const char** reason);
 
-// ---- alerts (plan/10 10.1 v1 channel: alerts.jsonl) ----
+// ---- alerts ----
 bool Alert(const char* path, const char* level, const char* code,
            const char* detail, long long ts_ns);
 
@@ -161,4 +161,4 @@ bool SummarizeJournal(const char* path, Summary* out);
 bool FormatSummary(const Summary& s, char* out, std::size_t n);
 
 }  // namespace runner
-}  // namespace jev
+}  // namespace kernel

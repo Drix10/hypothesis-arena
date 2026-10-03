@@ -8,7 +8,7 @@
 #include <unistd.h>
 
 #include "../exec/decide.hpp"
-#include "../jev_wire.hpp"
+#include "../wire.hpp"
 #include "../risk/measure.hpp"
 #include "account.hpp"
 #include "bars.hpp"
@@ -16,7 +16,7 @@
 #include "settle.hpp"
 #include "store.hpp"
 
-namespace jev {
+namespace kernel {
 namespace runner {
 namespace {
 
@@ -258,7 +258,7 @@ void PaperLoop::RecordInflight(const std::string& sym, int64_t entry_cents) {
     AppendLine((cfg_.dir + "/inflight.log").c_str(), rec);
 }
 
-PaperLoop::PaperLoop(G0Runner& runner, LoopIO io, LoopConfig cfg)
+PaperLoop::PaperLoop(PaperRunner& runner, LoopIO io, LoopConfig cfg)
     : runner_(runner), io_(io), cfg_(cfg) {
     // Latches survive a restart: a present file is a trip, whatever it holds.
     dd_latched_ = FileExists(cfg_.dir + "/dd-kill.latch");
@@ -462,7 +462,7 @@ bool PaperLoop::Tick(int64_t now_ns) {
             s.session_open = SessionOpen(clock);
             s.day_number = now_ns / 1000 / (86400LL * 1000000LL);
             s.hour_bucket = now_ns / 1000 / (3600LL * 1000000LL);
-            s.stage = risk::Stage::G0_PAPER;
+            s.stage = risk::Stage::PAPER;
             ingest::CandOutcome pre =
                 ingest::ValidateCandidate(cand, in.tables, now_ns);
             if (pre.accepted)
@@ -509,4 +509,4 @@ bool PaperLoop::Tick(int64_t now_ns) {
 }
 
 }  // namespace runner
-}  // namespace jev
+}  // namespace kernel

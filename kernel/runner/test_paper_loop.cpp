@@ -1,4 +1,4 @@
-// PaperLoop against a real G0Runner in a temp directory with injected
+// PaperLoop against a real PaperRunner in a temp directory with injected
 // REST/data. STAGE here is a test artifact; the real one is human-created.
 #include <cmath>
 #include <cstdio>
@@ -10,7 +10,7 @@
 
 #include <sys/stat.h>
 
-#include "../jev_wire.hpp"
+#include "../wire.hpp"
 #include "bars.hpp"
 #include "calendar.hpp"
 #include "paper_loop.hpp"
@@ -25,8 +25,8 @@ static int fails = 0, count = 0;
         }                              \
     } while (0)
 
-using namespace jev;
-using namespace jev::runner;
+using namespace kernel;
+using namespace kernel::runner;
 
 static std::string g_fix;                 // fixtures dir
 static std::string g_account, g_bracket;  // fixture bodies
@@ -77,25 +77,24 @@ static std::string BarsJson(const std::string& sym, int n, double vol) {
     return out + "]},\"next_page_token\":null}";
 }
 
-static const char* K[12] = {"strategy_version", "symbol", "snapshot_ts_ns",
-    "proposed_side", "proposed_family", "entry_px", "stop_px", "tp_px",
-    "time_exit_ns", "exit_profile_version", "cost_model_version",
-    "feature_revision"};
-static std::string Cand(const std::string& sleeve, int64_t age_s = 60,
+static const char* K[11] = {"strategy_id", "symbol", "snapshot_ts_ns", "side",
+    "entry_px", "stop_px", "tp_px", "time_exit_ns", "exit_rule",
+    "cost_model", "feature_revision"};
+static std::string Cand(const std::string& strategy, int64_t age_s = 60,
                         const std::string& side = "BUY") {
     bool sell = side == "SELL";
-    std::string f[12] = {sleeve, "VTI",
+    std::string f[11] = {strategy, "VTI",
                          std::to_string(NOW_S * 1000000000LL - age_s * 1000000000LL),
-                         side, "trend", "250.50", sell ? "999.00" : "230.00",
+                         side, "250.50", sell ? "999.00" : "230.00",
                          sell ? "100.00" : "999.00", "0",
-                         "exit_trend_v1", "cost_v2", "f1"};
+                         "exit_trend", "costs", "1"};
     std::string joined, c;
-    for (int i = 0; i < 12; ++i) {
+    for (int i = 0; i < 11; ++i) {
         if (i) joined += "|";
         joined += f[i];
         c += std::string("\"") + K[i] + "\":\"" + f[i] + "\",";
     }
-    return "{\"schema\":\"c1\",\"created_ns\":\"5\",\"candidate\":{" + c +
+    return "{\"schema\":\"candidate\",\"created_ns\":\"5\",\"candidate\":{" + c +
            "\"cid\":\"" + Sha256Hex(joined) + "\"}}\n";
 }
 
@@ -110,9 +109,9 @@ struct Env {
     Env() {
         (void)!std::system(("rm -rf " + dir).c_str());
         mkdir(dir.c_str(), 0755);
-        std::string body = "G0_PAPER|human|2026-09-25T00:00:00Z|0|GENESIS";
+        std::string body = "PAPER|human|2026-09-25T00:00:00Z|0|GENESIS";
         Write(dir + "/STAGE",
-              "stage: G0_PAPER\napproved_by: human\napproved_at: "
+              "stage: PAPER\napproved_by: human\napproved_at: "
               "2026-09-25T00:00:00Z\ncapital_usd: 0\nattest_hash: " +
                   Sha256Hex(body) + "\n");
     }
@@ -141,7 +140,7 @@ int main(int argc, char** argv) {
     deps.now_ns = Now;
     deps.kill_inputs = NoKill;
     deps.restart_flag = true;
-    G0Runner runner(cfg, deps);
+    PaperRunner runner(cfg, deps);
     const char* why = nullptr;
     CHECK("runner-recovers", runner.Recover(&why));
 
@@ -181,13 +180,13 @@ int main(int argc, char** argv) {
     };
     LoopConfig lc;
     lc.dir = env.dir;
-    lc.tables.sleeves.push_back({"trend_etf_v1", 3600});
+    lc.tables.strategies.push_back({"etf_trend", 3600});
     lc.tables.allowlist = {"VTI", "IEF"};
     lc.holidays = {DaysFromCivil(2026, 12, 25)};
     PaperLoop loop(runner, io, lc);
 
     // 1. account outage: nothing is consumed.
-    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1"));
+    Append(env.dir + "/candidates.jsonl", Cand("etf_trend"));
     g_account_up = false;
     loop.Tick(NOW_S * 1000000000LL);
     CHECK("outage-consumes-nothing", loop.stats().seen == 0 &&
@@ -211,12 +210,12 @@ int main(int argc, char** argv) {
     CHECK("no-reprocessing", loop.stats().seen == 0);
 
     // 4. holds are logged, not silent.
-    Append(env.dir + "/candidates.jsonl", Cand("rogue_v9"));
-    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 7200));
+    Append(env.dir + "/candidates.jsonl", Cand("rogue"));
+    Append(env.dir + "/candidates.jsonl", Cand("etf_trend", 7200));
     loop.Tick(NOW_S * 1000000000LL);
     dec = Slurp(env.dir + "/decisions.jsonl");
     CHECK("unapproved-held", loop.stats().held == 2 &&
-                                 dec.find("cand-sleeve-unapproved") !=
+                                 dec.find("cand-strategy-unapproved") !=
                                      std::string::npos &&
                                  dec.find("cand-stale-or-future") !=
                                      std::string::npos);
@@ -224,7 +223,7 @@ int main(int argc, char** argv) {
     // 5. no market data: R6/R7 unavailable, entry held.
     g_data_up = false;
     Append(env.dir + "/candidates.jsonl",
-           Cand("trend_etf_v1", 30));
+           Cand("etf_trend", 30));
     loop.Tick(NOW_S * 1000000000LL);
     dec = Slurp(env.dir + "/decisions.jsonl");
     CHECK("no-data-holds", loop.stats().held == 1 &&
@@ -235,9 +234,9 @@ int main(int argc, char** argv) {
     Append(env.dir + "/candidates.jsonl", "not json\n");
     loop.Tick(NOW_S * 1000000000LL);
     CHECK("garbage-held", loop.stats().held == 1);
-    // 7. HALT file: entries hold with the frozen reason.
+    // 7. HALT file: entries hold with the fixed reason.
     Write(env.dir + "/HALT", "halt");
-    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 20));
+    Append(env.dir + "/candidates.jsonl", Cand("etf_trend", 20));
     loop.Tick(NOW_S * 1000000000LL);
     dec = Slurp(env.dir + "/decisions.jsonl");
     CHECK("halt-holds-entries", dec.find("entry-halt") != std::string::npos);
@@ -246,7 +245,7 @@ int main(int argc, char** argv) {
     // 8. exit: closes the held position and books unsettled proceeds.
     g_positions = "[{\"symbol\":\"VTI\",\"qty\":\"40\",\"side\":\"long\","
                   "\"market_value\":\"10020.00\"}]";
-    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 10, "SELL"));
+    Append(env.dir + "/candidates.jsonl", Cand("etf_trend", 10, "SELL"));
     loop.Tick(NOW_S * 1000000000LL);
     dec = Slurp(env.dir + "/decisions.jsonl");
     if (loop.stats().proceeded != 1) std::printf("EXIT: %s\n", dec.substr(dec.size() > 400 ? dec.size() - 400 : 0).c_str());
@@ -262,7 +261,7 @@ int main(int argc, char** argv) {
     // 9b. working orders from earlier ticks are respected.
     g_orders = "[{\"symbol\":\"ZZZ\",\"side\":\"buy\",\"qty\":\"5\","
                "\"filled_qty\":\"0\"}]";
-    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 30));
+    Append(env.dir + "/candidates.jsonl", Cand("etf_trend", 30));
     loop.Tick(NOW_S * 1000000000LL);
     dec = Slurp(env.dir + "/decisions.jsonl");
     CHECK("unexplained-order-halts-entries",
@@ -270,7 +269,7 @@ int main(int argc, char** argv) {
               dec.find("entry-halt") != std::string::npos);
     g_orders = "[{\"symbol\":\"VTI\",\"side\":\"sell\",\"qty\":\"40\","
                "\"filled_qty\":\"0\"}]";
-    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 40, "SELL"));
+    Append(env.dir + "/candidates.jsonl", Cand("etf_trend", 40, "SELL"));
     loop.Tick(NOW_S * 1000000000LL);
     dec = Slurp(env.dir + "/decisions.jsonl");
     CHECK("exit-in-flight-held", dec.find("exit-in-flight") != std::string::npos);
@@ -283,13 +282,13 @@ int main(int argc, char** argv) {
     Append(env.dir + "/candidates.jsonl", std::string(1100000, 'x'));
     loop.Tick(NOW_S * 1000000000LL);
     CHECK("oversize-skipped", loop.stats().skipped_long == 1);
-    Append(env.dir + "/candidates.jsonl", "\n" + Cand("rogue_v9"));
+    Append(env.dir + "/candidates.jsonl", "\n" + Cand("rogue"));
     loop.Tick(NOW_S * 1000000000LL);
     CHECK("queue-resumes", loop.stats().seen == 2);
 
     // 11. a rotated (shorter) candidates file is replayed, not lost.
     std::remove((env.dir + "/candidates.jsonl").c_str());
-    Append(env.dir + "/candidates.jsonl", Cand("rogue_v9"));
+    Append(env.dir + "/candidates.jsonl", Cand("rogue"));
     loop.Tick(NOW_S * 1000000000LL);
     CHECK("rotation-replays", loop.stats().seen == 1);
 
@@ -306,14 +305,14 @@ int main(int argc, char** argv) {
     };
     g_positions = "[]";
     g_account = Acct("97000", "100000");  // exactly -3%: not a breach
-    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 51));
+    Append(env.dir + "/candidates.jsonl", Cand("etf_trend", 51));
     loop.Tick(NOW_S * 1000000000LL);
     dec = Slurp(env.dir + "/decisions.jsonl");
     CHECK("loss-3pct-exact-no-hold",
           dec.find("daily-loss-3pct") == std::string::npos &&
               Slurp(env.dir + "/daily-loss.day").empty());
     g_account = Acct("96900", "100000");  // -3.1%
-    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 52));
+    Append(env.dir + "/candidates.jsonl", Cand("etf_trend", 52));
     loop.Tick(NOW_S * 1000000000LL);
     dec = Slurp(env.dir + "/decisions.jsonl");
     CHECK("daily-loss-holds-entry",
@@ -323,13 +322,13 @@ int main(int argc, char** argv) {
           Slurp(env.dir + "/dd-kill.latch").empty());
     g_positions = "[{\"symbol\":\"VTI\",\"qty\":\"40\",\"side\":\"long\","
                   "\"market_value\":\"10020.00\"}]";
-    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 53, "SELL"));
+    Append(env.dir + "/candidates.jsonl", Cand("etf_trend", 53, "SELL"));
     loop.Tick(NOW_S * 1000000000LL);
     CHECK("daily-loss-exit-proceeds", loop.stats().proceeded == 1);
     g_positions = "[]";
     g_account = acct_ok;  // equity recovered: the day stays held
     std::remove((env.dir + "/submitted.log").c_str());  // clear r3 counters
-    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 54));
+    Append(env.dir + "/candidates.jsonl", Cand("etf_trend", 54));
     loop.Tick(NOW_S * 1000000000LL);
     dec = Slurp(env.dir + "/decisions.jsonl");
     CHECK("daily-loss-latched-for-day",
@@ -340,7 +339,7 @@ int main(int argc, char** argv) {
     g_account_up = true;
     CHECK("daily-loss-survives-outage", !loop.stats().account_ok);
     PaperLoop restarted(runner, io, lc);  // latch reloads from disk
-    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 55));
+    Append(env.dir + "/candidates.jsonl", Cand("etf_trend", 55));
     restarted.Tick(NOW_S * 1000000000LL);
     CHECK("daily-loss-survives-restart", restarted.stats().proceeded == 0);
     // Missing last_equity falls back to equity: no breach.
@@ -390,14 +389,14 @@ int main(int argc, char** argv) {
     CHECK("dd-latch-restart", feed2.drawdown_r5);
     CHECK("dd-hwm-untouched", Slurp(env.dir + "/hwm.txt") == "10000000");
     std::remove((env.dir + "/submitted.log").c_str());  // clear r3 counters
-    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 56));
+    Append(env.dir + "/candidates.jsonl", Cand("etf_trend", 56));
     dd.Tick(NOW_S * 1000000000LL);
     dec = Slurp(env.dir + "/decisions.jsonl");
     CHECK("dd-holds-entry-named", dd.stats().proceeded == 0 &&
               dec.rfind("drawdown-10pct-kill") != std::string::npos);
     g_positions = "[{\"symbol\":\"VTI\",\"qty\":\"40\",\"side\":\"long\","
                   "\"market_value\":\"10020.00\"}]";
-    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1", 57, "SELL"));
+    Append(env.dir + "/candidates.jsonl", Cand("etf_trend", 57, "SELL"));
     dd.Tick(NOW_S * 1000000000LL);
     CHECK("dd-exit-proceeds", dd.stats().proceeded == 1);
     g_positions = "[]";
@@ -450,7 +449,7 @@ int main(int argc, char** argv) {
     }
 
     // 12. a calendar with no holiday in the traded year fails closed.
-    Append(env.dir + "/candidates.jsonl", Cand("trend_etf_v1"));
+    Append(env.dir + "/candidates.jsonl", Cand("etf_trend"));
     loop.Tick((NOW_S + 400LL * 86400) * 1000000000LL);
     CHECK("calendar-year-uncovered", !loop.stats().account_ok);
 

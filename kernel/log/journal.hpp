@@ -1,7 +1,6 @@
-// Journal row formatter/verifier (doc 05 5.5, doc 06 6.1/6.5). Pure kernel
-// contract: format, hash-chain, verify, with no file I/O. Durable persistence
+// Journal row formatter/verifier. Pure contract: format, hash-chain, verify, with no file I/O. Durable persistence
 // (append, fsync/atomic, restart load, 90-day retention, daily backup,
-// summary) is the G0 runner's seam; a drill Sink proves row shape and chain
+// summary) is the paper runner's seam; a drill Sink proves row shape and chain
 // logic only.
 //
 // Append-only rows chained by prev_hash; nothing trades without a row
@@ -15,7 +14,7 @@
 #include <cstdint>
 #include <string>
 
-namespace jev {
+namespace kernel {
 namespace journal {
 
 // Row kinds (append-only vocabulary; unknown kinds never verify).
@@ -60,13 +59,13 @@ bool FormatRow(std::uint64_t seq, std::int64_t ts_ns, const char* kind,
 // Recomputes the digest and checks every field rule. False = broken.
 bool VerifyRow(const Row& r);
 // Chain rule: rows link seq+1, prev_hash == previous row_hash, every
-// row verifies. False = broken (caller HARD-kills per doc 10).
+// row verifies. False = broken (caller HARD-kills).
 bool VerifyChain(const Row* rows, std::size_t n);
 
-// Redaction gate (doc 06 6.5): payload bodies must already be redacted
+// Redaction gate: payload bodies must already be redacted
 // upstream (texts <= 280 chars); this refuses credential-shaped tokens and
 // overlong text so a violation fails at write time.
 bool RedactionOk(const char* body);
 
 }  // namespace journal
-}  // namespace jev
+}  // namespace kernel

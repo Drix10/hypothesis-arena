@@ -43,7 +43,7 @@ N = 0
 def feat(**kw):
     global N
     N += 1
-    f = {"feature_id": "f%d" % N, "schema_version": "f2", "kind": "filing_event",
+    f = {"feature_id": "f%d" % N, "schema_version": "1", "kind": "filing_event",
          "symbols": ["AAPL"], "observed_at_ns": IN_SESSION, "ttl_s": 10800,
          "value": {"type": "enum", "v": "8-K:item-2.02"}, "effect": "bullish",
          "evidence": "source", "confidence_bucket": "high",
@@ -66,7 +66,7 @@ def wm_full(*sources):
 
 
 def run(features, extra=None, name="b"):
-    b = {"bundle_id": name, "commit": True, "schema_version": "f2",
+    b = {"bundle_id": name, "commit": True, "schema_version": "1",
          "research_epoch": 0, "watermarks": wm_full(),
          "features": features}
     b.update(extra or {})
@@ -91,7 +91,7 @@ r = run([feat(), multi])
 check("valid-accepted", r["stats"]["accepted"] == 2 and r["stats"]["rejected"] == 0)
 
 # 2. incomplete bundle rejected wholesale
-b = {"bundle_id": "inc", "commit": False, "schema_version": "f2",
+b = {"bundle_id": "inc", "commit": False, "schema_version": "1",
      "research_epoch": 0, "features": [feat()]}
 p = os.path.join(TMP, "inc.json")
 json.dump(b, open(p, "w"))
@@ -160,7 +160,7 @@ wm2 = {"watermarks": {"entity_map_version": "entity-map",
 r = run([feat()], extra=wm2, name="bmap2")
 check("map-hash-mismatch", r["accepted"] == []
       and "map-hash-mismatch" in r["stats"]["reasons"])
-b = {"bundle_id": "nowm", "commit": True, "schema_version": "f2",
+b = {"bundle_id": "nowm", "commit": True, "schema_version": "1",
      "research_epoch": 0, "features": [feat()]}
 p = os.path.join(TMP, "nowm.json")
 json.dump(b, open(p, "w"))
@@ -347,7 +347,7 @@ check("lineage-right-source", r["stats"]["accepted"] == 1)
 
 
 def raw_bundle(**kw):
-    b = {"bundle_id": "env", "commit": True, "schema_version": "f2",
+    b = {"bundle_id": "env", "commit": True, "schema_version": "1",
          "research_epoch": 3, "watermarks": wm_full(),
          "features": [feat()]}
     b.update(kw)
@@ -409,7 +409,7 @@ check("fed-macro-emitter", r["stats"]["accepted"] == 1)
 
 # 30. duplicate JSON members rejected (bundle + nested feature)
 dup_raw = ('{"bundle_id": "dup", "bundle_id": "dup2", '
-           '"commit": true, "schema_version": "f2", '
+           '"commit": true, "schema_version": "1", '
            '"research_epoch": 0, "watermarks": {}, "features": []}')
 _pp = os.path.join(TMP, "dup.json")
 open(_pp, "w").write(dup_raw)
@@ -417,7 +417,7 @@ r = read_bundle(_pp, DB, MAP, NOW)
 check("bundle-duplicate-keys",
       "bundle-duplicate-keys" in r["stats"]["reasons"])
 _fraw = ('{"bundle_id": "dupf", "commit": true, '
-         '"schema_version": "f2", "research_epoch": 0, '
+         '"schema_version": "1", "research_epoch": 0, '
          '"watermarks": {"entity_map_version": "entity-map", '
          '"entity_map_sha256": "%s"}, '
          '"features": [{"source_id": "edgar_8k", '

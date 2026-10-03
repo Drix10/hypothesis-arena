@@ -1,4 +1,4 @@
-// H1 runtime proof (not only grep): wrapped-malloc counter around
+// Router runtime proof (not only grep): wrapped-malloc counter around
 // the router step core must stay zero. Identity minting
 // (MakeClientOrderId at IDLE) is documented cycle-path and excluded:
 // this loop covers the IDLE-reject path plus every post-identity
@@ -28,11 +28,11 @@ void* __wrap_realloc(void* p, std::size_t n) {
 }
 
 int main() {
-    using jev::exec::OrderIntent;
-    using jev::exec::RouteMachine;
-    using jev::exec::RouteObs;
-    using jev::exec::RouteState;
-    using jev::exec::VenueCtx;
+    using kernel::exec::OrderIntent;
+    using kernel::exec::RouteMachine;
+    using kernel::exec::RouteObs;
+    using kernel::exec::RouteState;
+    using kernel::exec::VenueCtx;
     OrderIntent in;
     for (int i = 0; i < 64; ++i) in.intent_id[i] = 'i';
     in.intent_id[64] = '\0';
@@ -69,7 +69,7 @@ int main() {
         m.state = static_cast<RouteState>((i / 64) % 13);
         m.protection_ok = (i & 64) != 0;
         volatile auto r =
-            jev::exec::RouteStep(m, in, venue, obs);
+            kernel::exec::RouteStep(m, in, venue, obs);
         (void)r;
         if (i == 0 &&
             r.reason[0] == '\0') {

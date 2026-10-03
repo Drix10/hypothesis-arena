@@ -7,7 +7,7 @@
 
 #include "calendar.hpp"
 
-namespace jev {
+namespace kernel {
 namespace runner {
 
 std::string UrlEncode(const std::string& s) {
@@ -64,8 +64,8 @@ std::string FormatIsoZ(int64_t utc_s) {
 
 namespace {
 
-// Minimal bounded JSON scanner for the market-data reply. The frozen P3.1
-// parser caps array length for model payloads and is not used here.
+// Minimal bounded JSON scanner for the market-data reply. The wire parser
+// caps array length for model payloads and is not used here.
 struct Scan {
     const char* p;
     const char* end;
@@ -262,4 +262,4 @@ void AlignCloses(const std::vector<Bar>& bars,
 }
 
 }  // namespace runner
-}  // namespace jev
+}  // namespace kernel

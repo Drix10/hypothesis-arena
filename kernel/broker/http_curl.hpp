@@ -6,7 +6,7 @@
 
 #include "alpaca_paper.hpp"
 
-namespace jev {
+namespace kernel {
 namespace broker {
 
 // Fails closed: any refusal or transport error returns status 0 and an empty
@@ -20,4 +20,4 @@ bool CurlRest(const char* method, const std::string& path,
 bool CurlData(const std::string& path, std::string* out);
 
 }  // namespace broker
-}  // namespace jev
+}  // namespace kernel

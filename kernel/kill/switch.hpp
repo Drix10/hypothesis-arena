@@ -1,11 +1,11 @@
-// Kill switch (doc 10 10.3, R16). Two paths:
+// Kill switch. Two paths:
 //   evaluation: pure deterministic C++ (no network, LLM, research plane,
 //     features.jsonl or clock). Owning modules produce trigger booleans; this
 //     file combines them with fixed precedence. Same inputs -> same level.
 //     Network is never needed to decide that a level is active.
-//   actuation: may invoke the H1-owned broker adapter (protection
+//   actuation: may invoke the router-owned broker adapter (protection
 //     verification, re-establish, flatten/cancel, confirmation) and the
-//     journal-append interface; Slice D tests drive the machines directly.
+//     journal-append interface; tests drive the machines directly.
 //
 // File I/O is the caller's job: persistence is string-in/string-out through a
 // caller-owned buffer. No allocation on the evaluation path (grep-gated in
@@ -18,23 +18,21 @@
 
 #include "../risk/veto.hpp"
 
-namespace jev {
+namespace kernel {
 namespace kill {
 
 // Trigger bundle. Each field is produced by its owning module (spend
-// governor, feed, JEV streak counter, calibration, journal verifier,
+// governor, feed, journal verifier,
 // reconciler, broker adapter, determinism monitor, sandbox supervisor,
 // operator HALT file watch). Kill evaluation reads these only.
 struct KillInputs {
     bool halt_file = false;
-    bool jev_streak_s5 = false;
     bool feed_stale_gt30s = false;
     int spend_tier = 0;  // 0..3; out-of-range clamps (never a level)
     bool research_paused_past_ttl = false;
     bool drawdown_r5 = false;
     bool daily_loss_breach = false;
     bool rule_violation = false;
-    bool calib_breach = false;
     bool journal_chain_break = false;
     bool drift_unresolvable = false;
     bool broker_auth_fail = false;
@@ -44,21 +42,21 @@ struct KillInputs {
 
 struct LevelResult {
     risk::KillLevel level = risk::KillLevel::NONE;
-    const char* reason = "none";  // frozen code, static storage
+    const char* reason = "none";  // fixed code, static storage
 };
 
 // Precedence: HARD > MEDIUM > SOFT. The first armed tier wins the logged
 // reason; every road out except NONE stops entries.
 LevelResult EvaluateLevel(const KillInputs& in);
 
-// Entry gate with resume friction (doc 06 6.4): a removed HALT file alone
+// Entry gate with resume friction: a removed HALT file alone
 // never resumes. Entries are allowed only at level NONE, with no HALT file,
 // and a deliberate restart flag. Any kill level, present HALT file, or
 // flagless (re)start after a kill state -> false.
 bool EntriesAllowed(risk::KillLevel level, bool halt_present,
                     bool restarted_with_flag);
 
-// MEDIUM flatten FSM (doc 10 10.3). One state is persisted per cycle; restart
+// MEDIUM flatten FSM. One state is persisted per cycle; restart
 // reloads it and reconciles with the broker before acting.
 enum class FlattenState : std::uint8_t {
     MEDIUM_ACTIVE = 0,   // entries stopped, flatten not yet achieved
@@ -98,7 +96,7 @@ struct FlattenOut {
 
 FlattenOut StepFlatten(FlattenState s, const FlattenStep& in);
 
-// HARD ordered sequence (doc 10 10.3). The machine returns the next action;
+// HARD ordered sequence. The machine returns the next action;
 // the caller performs the broker/journal operation and feeds the observation
 // back. Phase order is the safety property: nothing revokes credentials
 // before protection is verified and confirmed.
@@ -146,7 +144,7 @@ struct Persisted {
     HardPhase hard = HardPhase::IDLE;
 };
 
-// Fixed format "D1:<flatten>:<closer>:<hard>" (single digits). Returns
+// Fixed format "KF:<flatten>:<closer>:<hard>" (single digits). Returns
 // false (buffer untouched) when out is null or n is too small.
 bool SerializeKill(const Persisted& p, char* out, std::size_t n);
 // Strict parse: exact shape, single digits, in-range values, NUL-terminated
@@ -154,4 +152,4 @@ bool SerializeKill(const Persisted& p, char* out, std::size_t n);
 bool ParseKill(const char* s, Persisted* p);
 
 }  // namespace kill
-}  // namespace jev
+}  // namespace kernel

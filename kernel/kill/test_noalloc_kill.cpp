@@ -1,4 +1,4 @@
-// Slice D runtime proof (not only grep): wrapped-malloc counter
+// Runtime proof (not only grep): wrapped-malloc counter
 // around the kill evaluation + FSM + persistence path must stay zero.
 // Usage: ./test_noalloc_kill
 #include <cstddef>
@@ -26,15 +26,15 @@ void* __wrap_realloc(void* p, std::size_t n) {
 }
 
 int main() {
-    using jev::kill::FlattenState;
-    using jev::kill::HardPhase;
-    using jev::kill::KillInputs;
+    using kernel::kill::FlattenState;
+    using kernel::kill::HardPhase;
+    using kernel::kill::KillInputs;
     KillInputs in;
     in.halt_file = in.feed_stale_gt30s = true;
     in.spend_tier = 2;
-    jev::kill::FlattenStep fs;
-    jev::kill::HardStep hs;
-    jev::kill::Persisted ps;
+    kernel::kill::FlattenStep fs;
+    kernel::kill::HardStep hs;
+    kernel::kill::Persisted ps;
     char buf[16];
     g_allocs = 0;  // static init above this line is not the path
     for (int i = 0; i < 20000; ++i) {
@@ -55,23 +55,23 @@ int main() {
         hs.reestablished = (i & 2) != 0;
         hs.flatten_acked = (i & 4) != 0;
         hs.protection_confirmed = (i & 8) != 0;
-        volatile auto r = jev::kill::EvaluateLevel(in);
+        volatile auto r = kernel::kill::EvaluateLevel(in);
         volatile auto e =
-            jev::kill::EntriesAllowed(r.level, true, true);
-        volatile auto f = jev::kill::StepFlatten(
-            static_cast<jev::kill::FlattenState>((i / 32) % 4), fs);
-        volatile auto h = jev::kill::StepHard(
-            static_cast<jev::kill::HardPhase>(i % 7), hs);
-        volatile auto s = jev::kill::SerializeKill(ps, buf, sizeof(buf));
-        jev::kill::Persisted q;
-        volatile auto pk = jev::kill::ParseKill(
-            (i & 1) ? buf : "D1:9:0:0", &q);
+            kernel::kill::EntriesAllowed(r.level, true, true);
+        volatile auto f = kernel::kill::StepFlatten(
+            static_cast<kernel::kill::FlattenState>((i / 32) % 4), fs);
+        volatile auto h = kernel::kill::StepHard(
+            static_cast<kernel::kill::HardPhase>(i % 7), hs);
+        volatile auto s = kernel::kill::SerializeKill(ps, buf, sizeof(buf));
+        kernel::kill::Persisted q;
+        volatile auto pk = kernel::kill::ParseKill(
+            (i & 1) ? buf : "KF:9:0:0", &q);
         (void)e;
         (void)f;
         (void)h;
         (void)s;
         (void)pk;
-        if (i == 0 && r.level == jev::risk::KillLevel::NONE) return 1;
+        if (i == 0 && r.level == kernel::risk::KillLevel::NONE) return 1;
     }
     if (g_allocs != 0) {
         std::printf("NOALLOC-KILL FAIL: %d allocs\n", g_allocs);

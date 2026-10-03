@@ -1,7 +1,7 @@
 """EDGAR source adapter: submissions JSON + companyfacts only.
 
 Emits raw records (dicts with a `symbols` list, JSON-safe, size-capped);
-classification into f2 happens downstream. observed_at_ns is the SEC
+classification into features happens downstream. observed_at_ns is the SEC
 acceptanceDateTime when it parses strictly; otherwise filing-date midnight,
 flagged observed_at_estimated (context-only downstream). Future acceptance
 is dropped. Outage means stale, never fabricated data.

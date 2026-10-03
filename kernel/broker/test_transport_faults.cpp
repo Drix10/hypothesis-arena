@@ -1,6 +1,6 @@
 // Driver for the fault-injection suite: one operation against the mock venue
-// named by G0_TEST_BASE, result printed as a single line for the Python
-// harness (kernel/tests/transport_faults.py). Built only with G0_TEST_BASE.
+// named by TEST_BASE, result printed as a single line for the Python
+// harness (kernel/tests/transport_faults.py). Built only with TEST_BASE.
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -8,7 +8,7 @@
 #include "alpaca_paper.hpp"
 #include "http_curl.hpp"
 
-using namespace jev::broker;
+using namespace kernel::broker;
 
 int main(int argc, char** argv) {
     if (argc < 2) return 2;

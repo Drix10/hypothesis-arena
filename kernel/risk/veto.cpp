@@ -1,20 +1,18 @@
-// Risk veto implementation. See veto.hpp for the precedence, scaling rule and
-// JEV-isolation boundary.
+// Risk veto implementation. See veto.hpp for the precedence and scaling rule.
 #include "veto.hpp"
 
 #include <cmath>
 #include <limits>
 
-namespace jev {
+namespace kernel {
 namespace risk {
 namespace {
 
-// Window constants (microseconds; the flip lock is fixed by doc 10, unscaled).
+// Window constants (microseconds; the flip lock is fixed by, unscaled).
 constexpr int64_t kHourUs = 3600LL * 1000000LL;
 constexpr int64_t kDayUs = 24LL * 3600LL * 1000000LL;
 constexpr int64_t kFlipWindowUs = kHourUs;      // completion within 1 h
 constexpr int64_t kFlipLockUs = 2 * kHourUs;    // HOLD 2 h after completion
-constexpr int64_t kR13MinOutcomes = 20;
 constexpr int64_t kDriftEpsilonCents = 100;  // $1 zero-denominator guard
 
 int64_t CeilMul(int64_t base, int num, int den) {
@@ -79,13 +77,13 @@ bool R1CountBreaches(const RiskSnapshot& s, int cap, bool include_pending) {
 bool R1DirBreaches(const RiskSnapshot& s, int cap, bool include_pending) {
     return SameSideOpen(s, s.intent.side, include_pending) + 1 > cap;
 }
-// Stage-aware leverage cap (doc 10 stage table + doc 05 5.2):
-//   G1: forex 1x (non-forex is capped at 1x too);
-//   G2: forex 2x, stocks 1x;
-//   G0/G3: 5.2 (forex 5x, stock margin 2x, stock cash 1x).
+// Stage-aware leverage cap:
+//   tiny stage: forex 1x (non-forex is capped at 1x too);
+//   scaled stage: forex 2x, stocks 1x;
+//   paper and full stages: 5.2 (forex 5x, stock margin 2x, stock cash 1x).
 int MaxLeverage(Stage stage, AssetClass asset, AccountType account) {
-    if (stage == Stage::G1_TINY) return 1;
-    if (stage == Stage::G2_SCALED)
+    if (stage == Stage::TINY) return 1;
+    if (stage == Stage::SCALED)
         return (asset == AssetClass::FOREX) ? 2 : 1;
     if (asset == AssetClass::STOCK)
         return (account == AccountType::CASH) ? 1 : 2;
@@ -95,16 +93,16 @@ int MaxLeverage(Stage stage, AssetClass asset, AccountType account) {
 // out-of-range field is malformed input (bad-inputs), never neutral and never
 // an exit bypass.
 bool ValidStage(Stage s) {
-    return s == Stage::G0_PAPER || s == Stage::G1_TINY ||
-           s == Stage::G2_SCALED || s == Stage::G3_FULL;
+    return s == Stage::PAPER || s == Stage::TINY ||
+           s == Stage::SCALED || s == Stage::FULL;
 }
 bool ValidSide(Side side) {
     return side == Side::LONG || side == Side::SHORT;
 }
-// Intent structure: what H1 needs to construct an order (identity, direction,
+// Intent structure: what the router needs to construct an order (identity, direction,
 // market, non-negative size), checked for both kinds first. Risk-state fields
 // (equity, stage, counters, HWM, calibration, flip history, kill) are not
-// intent structure and never block a valid EXIT (doc 10 10.3).
+// intent structure and never block a valid EXIT.
 bool ValidIntentStructure(const Intent& in) {
     if (in.kind != IntentKind::ENTRY && in.kind != IntentKind::EXIT)
         return false;
@@ -126,9 +124,6 @@ bool ValidEnums(const RiskSnapshot& s) {
         return false;
     if (s.phase != Phase::NONE && s.phase != Phase::PRE &&
         s.phase != Phase::BLACKOUT && s.phase != Phase::POST)
-        return false;
-    if (s.calib != CalibState::PASS && s.calib != CalibState::INSUFFICIENT &&
-        s.calib != CalibState::BREACH)
         return false;
     if (s.kill != KillLevel::NONE && s.kill != KillLevel::SOFT &&
         s.kill != KillLevel::MEDIUM && s.kill != KillLevel::HARD)
@@ -189,11 +184,6 @@ int64_t BuyingPower(const RiskSnapshot& s) {
     if (t < std::numeric_limits<int64_t>::min())
         return std::numeric_limits<int64_t>::min();
     return (int64_t)t;
-}
-
-bool R13FloorTrips(double brier_delta, int64_t realized_outcomes) {
-    if (!std::isfinite(brier_delta)) return true;  // unknown => trip
-    return brier_delta > 0.02 && realized_outcomes >= kR13MinOutcomes;
 }
 
 bool R5Trips(int64_t equity_cents, int64_t peak_cents) {
@@ -260,7 +250,7 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
         v.reason = "bad-inputs";
         return v;
     }
-    // A valid EXIT bypasses risk limits (doc 10 10.3). Corrupt risk state
+    // A valid EXIT bypasses risk limits. Corrupt risk state
     // (equity, stage, counters, HWM, calibration, flip history, kill) never
     // blocks a structurally valid exit; reconcile owns bookkeeping truth.
     if (s.intent.kind == IntentKind::EXIT) {
@@ -277,7 +267,7 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
                s.equity_cents <= 0 || s.margin_used_cents < 0 ||
                s.daily_close_hwm_cents < 0 || s.intraday_hwm_cents < 0 ||
                s.risk_fraction_bp < 0 || s.day_count < 0 ||
-               s.hour_count < 0 || s.realized_outcomes < 0 ||
+               s.hour_count < 0 ||
                (s.v3_constraints && s.settled_cash_cents < 0);
     int64_t peak =
         s.daily_close_hwm_cents > s.intraday_hwm_cents
@@ -308,7 +298,7 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
              s.flip_t2_us < 0 || s.flip_t2_us < s.flip_t1_us ||
              s.now_us < s.flip_t2_us))
             bad = true;
-        // A claimed drift breach with phantom candidates is corrupt input: H1
+        // A claimed drift breach with phantom candidates is corrupt input: the router
         // would "resolve" the breach against thin air and let the entry
         // proceed (the drift_idx ordering contract is in veto.hpp).
         if (!bad && s.r7_drift_breach)
@@ -350,7 +340,7 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
     if (R5Trips(s.equity_cents, peak)) arm("r5-loss-cap");
     if (!s.intent.has_stop) arm("no-stop");
     {
-        // Stage-aware cap (MaxLeverage): G1 FX 1x, G2 FX 2x / stock 1x, G0/G3
+        // Stage-aware cap (MaxLeverage): tiny stage FX 1x, scaled stage FX 2x / stock 1x, paper and full stages
         // 5.2. R2 usually binds first; this is the hard ceiling.
         int maxlev =
             MaxLeverage(s.stage, s.intent.asset, s.intent.account);
@@ -437,11 +427,7 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
             v.drift_idx = idx;  // index, never a copied string
         }
     }
-    if (s.filter == FilterPolicy::JEV_FILTER) {
-        if (s.disagreement) arm("disagreement");
-        if (R13FloorTrips(s.brier_delta, s.realized_outcomes))
-            arm("r13-calibration");
-    }
+    if (s.disagreement) arm("disagreement");
     if (s.entry_halt) arm("entry-halt");
     if (s.kill != KillLevel::NONE) {
         arm(s.kill == KillLevel::HARD    ? "kill-hard"
@@ -460,49 +446,5 @@ VetoVerdict EvaluateVeto(const RiskSnapshot& s) {
     return v;
 }
 
-EngineInputs BuildEngineInputs(const RiskSnapshot& s, const VetoVerdict& v) {
-    EngineInputs in;
-    const bool filtered = s.filter == FilterPolicy::JEV_FILTER;
-    in.disagreement = filtered && s.disagreement;
-    in.event_blackout = EventBlackout(s.impact, s.phase);
-    if (!filtered)
-        in.calibration_gate = CalibrationGate::PASS;  // no filter to calibrate
-    else if (R13FloorTrips(s.brier_delta, s.realized_outcomes))
-        in.calibration_gate = CalibrationGate::BREACH;
-    else if (s.calib == CalibState::PASS)
-        in.calibration_gate = CalibrationGate::PASS;
-    else if (s.calib == CalibState::BREACH)
-        in.calibration_gate = CalibrationGate::BREACH;
-    else
-        in.calibration_gate = CalibrationGate::INSUFFICIENT;
-    in.r6_vol_trip = s.r6_trip;
-    {
-        const char* which = nullptr;
-        Caps caps = BuildCaps(ScaleFor(s.stage));
-        in.exposure_headroom_r2 =
-            !R2Breaches(s, caps.expo_scale, true, which);
-    }
-    in.pending_risk_breach = StrEq(v.reason, "pending-risk");
-    if (!v.proceed) {
-        in.deterministic_veto = true;
-        const char* r = v.reason ? v.reason : "";
-        if (StrEq(r, "r5-loss-cap"))
-            in.veto_reason = VetoReason::LOSS_CAP_R5;
-        else if (StrEq(r, "session-closed"))
-            in.veto_reason = VetoReason::SESSION_CLOSED;
-        else if (StrEq(r, "short-block"))
-            in.veto_reason = VetoReason::SHORT_BLOCK;
-        else if (StrEq(r, "corp-action-block"))
-            in.veto_reason = VetoReason::CORP_ACTION_BLOCK;
-        else if (StrEq(r, "pending-risk"))
-            in.veto_reason = VetoReason::PENDING_RISK;
-        else if (StrEq(r, "r6-unavailable"))
-            in.veto_reason = VetoReason::VOL_TRIP_R6;
-        else
-            in.veto_reason = VetoReason::OTHER_BREACH;
-    }
-    return in;
-}
-
 }  // namespace risk
-}  // namespace jev
+}  // namespace kernel

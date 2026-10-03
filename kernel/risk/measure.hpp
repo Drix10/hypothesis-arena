@@ -1,9 +1,9 @@
-// R6 / R7 measurement (doc 05 5.1a) from hourly closes. Availability is a
+// R6 / R7 measurement from hourly closes. Availability is a
 // first-class outcome: stale, thin or degenerate inputs make the rule
 // UNAVAILABLE, and the veto holds entries on unavailable.
 #pragma once
 
-namespace jev {
+namespace kernel {
 namespace risk {
 
 constexpr int kVolBaselineReturns = 480;
@@ -38,4 +38,4 @@ CorrResult MeasureCorr(const double* a, const double* b, int n,
                        int stale_bars);
 
 }  // namespace risk
-}  // namespace jev
+}  // namespace kernel

@@ -1,6 +1,6 @@
 #include "calendar.hpp"
 
-namespace jev {
+namespace kernel {
 namespace runner {
 namespace {
 
@@ -82,4 +82,4 @@ int ExpectedBarsBetween(int64_t last_bar_start_utc_s, int64_t now_utc_s,
 }
 
 }  // namespace runner
-}  // namespace jev
+}  // namespace kernel

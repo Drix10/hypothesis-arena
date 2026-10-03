@@ -1,4 +1,4 @@
-// Feed state machines (Slice F, doc 04 4.2.2). Pure logic: no I/O, network or
+// Feed state machines. Pure logic: no I/O, network or
 // clock reads; every function takes explicit inputs. Machinery only, never a
 // second authority: it records ticks, flags gaps, schedules reconnects and
 // marks sessions. Veto/staleness decisions belong to risk/ctx downstream.
@@ -23,7 +23,7 @@ struct Tick {
 };
 
 // Fixed ring (single-threaded core; a lock-free claim for the threaded driver
-// is integration scope). Capacity 65536 per doc 04. Overwrites the oldest; a
+// is integration scope). Capacity 65536. Overwrites the oldest; a
 // monotonic write counter survives overwrite so readers can detect loss.
 class TickRing {
 public:

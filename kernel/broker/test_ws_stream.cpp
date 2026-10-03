@@ -1,5 +1,5 @@
 // TradeStream checks. `unit`: pure message conversion. `live <seconds>`: run
-// the client against G0_TEST_WS_BASE and print the SSE bytes and counters for
+// the client against TEST_WS_BASE and print the SSE bytes and counters for
 // kernel/tests/ws_faults.py.
 #include <chrono>
 #include <cstdio>
@@ -9,7 +9,7 @@
 
 #include "ws_stream.hpp"
 
-using jev::broker::TradeStream;
+using kernel::broker::TradeStream;
 
 static int fails = 0, count = 0;
 #define CHECK(name, expr)                   \

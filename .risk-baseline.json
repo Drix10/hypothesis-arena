@@ -3,17 +3,6 @@
   "lastScan": "2026-10-03T06:38:39.346Z",
   "surfaces": [
     {
-      "key": "auth:collector/jev.py",
-      "type": "auth",
-      "path": "collector/jev.py",
-      "detail": "auth pattern",
-      "lines": [
-        79,
-        1270
-      ],
-      "firstSeen": "2026-10-01T14:24:26.745Z"
-    },
-    {
       "key": "auth:research/engine/workers.py",
       "type": "auth",
       "path": "research/engine/workers.py",
@@ -91,16 +80,6 @@
       "lines": [
         221,
         244
-      ],
-      "firstSeen": "2026-10-01T14:24:26.745Z"
-    },
-    {
-      "key": "data-mutation:collector/jev.py",
-      "type": "data-mutation",
-      "path": "collector/jev.py",
-      "detail": "data-mutation pattern",
-      "lines": [
-        651
       ],
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
@@ -343,13 +322,6 @@
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
     {
-      "key": "dependency:research/strategy/requirements.txt:pytest",
-      "type": "dependency",
-      "path": "research/strategy/requirements.txt",
-      "detail": "Dependency: pytest",
-      "firstSeen": "2026-10-01T14:24:26.745Z"
-    },
-    {
       "key": "exec:collector/soak_check.py",
       "type": "exec",
       "path": "collector/soak_check.py",
@@ -389,18 +361,6 @@
         15,
         33,
         235
-      ],
-      "firstSeen": "2026-10-01T14:24:26.745Z"
-    },
-    {
-      "key": "external-api:collector/jev.py",
-      "type": "external-api",
-      "path": "collector/jev.py",
-      "detail": "external-api pattern",
-      "lines": [
-        18,
-        1059,
-        1064
       ],
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },

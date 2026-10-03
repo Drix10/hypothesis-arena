@@ -1,10 +1,10 @@
-"""Compressed soak of g0_paper_loop against the mock venue with random faults.
+"""Compressed soak of paper_loop against the mock venue with random faults.
 
 Not part of the gate (minutes, not hours). Feeds candidates while the venue
 misbehaves and samples the loop process for memory and descriptor growth.
-The real 24 h soak (K9) needs a persistent host and the live paper API.
+The real 24 h soak needs a persistent host and the live paper API.
 
-    python3 kernel/tests/soak_mock.py <g0_paper_loop_test_binary> [ticks]
+    python3 kernel/tests/soak_mock.py <paper_loop_test_binary> [ticks]
 """
 import os
 import random

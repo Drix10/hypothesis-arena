@@ -1,6 +1,5 @@
-// STAGE file read + hash-chain verify (Slice E, doc 10 10.1). Legacy G0
-// bootstrap format only. Pure string logic (file I/O is the caller's); any
-// unverifiable content resolves to G0_PAPER, never to capital. ParseError is a
+// STAGE file read + hash-chain verify. Paper-stage bootstrap format only. Pure string logic (file I/O is the caller's); any
+// unverifiable content resolves to PAPER, never to capital. ParseError is a
 // returned reason, not a throw.
 #pragma once
 #include <cstdint>
@@ -8,16 +7,16 @@
 
 namespace stage {
 
-// effective stage values (frozen doc 10 vocabulary)
+// effective stage values (fixed vocabulary)
 inline bool IsKnownStage(const std::string& s) {
-    return s == "G0_PAPER" || s == "G1_TINY" || s == "G2_SCALED" ||
-           s == "G3_FULL";
+    return s == "PAPER" || s == "TINY" || s == "SCALED" ||
+           s == "FULL";
 }
 
 struct VerifyResult {
     bool ok;               // chain verifies
-    std::string effective; // parsed stage if ok, else "G0_PAPER"
-    std::string reason;    // "ok" or frozen failure code
+    std::string effective; // parsed stage if ok, else "PAPER"
+    std::string reason;    // "ok" or fixed failure code
 };
 
 // Strict parse of the 5-field legacy file: exact keys, none missing, extra or

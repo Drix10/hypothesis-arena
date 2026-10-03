@@ -9,7 +9,7 @@
 
 typedef void CURL;
 
-namespace jev {
+namespace kernel {
 namespace broker {
 
 class TradeStream {
@@ -57,4 +57,4 @@ class TradeStream {
 };
 
 }  // namespace broker
-}  // namespace jev
+}  // namespace kernel

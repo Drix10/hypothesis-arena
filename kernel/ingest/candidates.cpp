@@ -1,13 +1,12 @@
 #include "candidates.hpp"
 
-namespace jev {
+namespace kernel {
 namespace ingest {
 namespace {
 const int64_t kMaxFutureSkewNs = 120LL * 1000000000LL;
-const char* kIdFields[12] = {
-    "strategy_version", "symbol", "snapshot_ts_ns", "proposed_side",
-    "proposed_family", "entry_px", "stop_px", "tp_px", "time_exit_ns",
-    "exit_profile_version", "cost_model_version", "feature_revision"};
+const char* kIdFields[11] = {
+    "strategy_id", "symbol", "snapshot_ts_ns", "side", "entry_px", "stop_px",
+    "tp_px", "time_exit_ns", "exit_rule", "cost_model", "feature_revision"};
 
 const JVal* Get(const JVal& o, const char* k) {
     std::u32string key;
@@ -80,15 +79,15 @@ CandOutcome ValidateCandidate(const JVal& rec, const CandidateTables& t,
     const JVal* c = Get(rec, "candidate");
     if (!sch || !cr || !c) return Rej(CandReject::SHAPE);
     if (sch->t != JVal::T::STR || cr->t != JVal::T::STR ||
-        c->t != JVal::T::OBJ || c->o.size() != 13)
+        c->t != JVal::T::OBJ || c->o.size() != 12)
         return Rej(CandReject::SHAPE);
-    if (!U32IsAscii(sch->s, "c1")) return Rej(CandReject::SCHEMA);
+    if (!U32IsAscii(sch->s, "candidate")) return Rej(CandReject::SCHEMA);
     int64_t created = 0;
     if (!ParseNonNegI64(U32ToUtf8(cr->s), created))
         return Rej(CandReject::SHAPE);
 
-    std::string f[12], joined;
-    for (int i = 0; i < 12; i++) {
+    std::string f[11], joined;
+    for (int i = 0; i < 11; i++) {
         // '|' is the join separator: a field containing it makes the CID
         // preimage ambiguous, so it is refused outright.
         if (!Str(*c, kIdFields[i], f[i]) || f[i].find('|') != std::string::npos)
@@ -100,20 +99,20 @@ CandOutcome ValidateCandidate(const JVal& rec, const CandidateTables& t,
     if (!Str(*c, "cid", cid) || !IsHex64(cid)) return Rej(CandReject::CID);
     if (Sha256Hex(joined) != cid) return Rej(CandReject::CID);
 
-    const std::string& sleeve = f[0];
+    const std::string& strategy = f[0];
     const std::string& symbol = f[1];
     const std::string& side = f[3];
-    const ApprovedSleeve* sl = nullptr;
-    for (auto& a : t.sleeves)
-        if (a.id == sleeve && a.window_s > 0) sl = &a;
-    if (!sl) return Rej(CandReject::SLEEVE);
+    const ApprovedStrategy* sl = nullptr;
+    for (auto& a : t.strategies)
+        if (a.id == strategy && a.window_s > 0) sl = &a;
+    if (!sl) return Rej(CandReject::STRATEGY);
     if (!In(t.allowlist, symbol)) return Rej(CandReject::ALLOWLIST);
 
     int64_t snap = 0;
     if (!ParseNonNegI64(f[2], snap)) return Rej(CandReject::SHAPE);
     int64_t entry = 0, stop = 0, tp = 0;
-    if (!ParseCents(f[5], entry) || !ParseCents(f[6], stop) ||
-        !ParseCents(f[7], tp))
+    if (!ParseCents(f[4], entry) || !ParseCents(f[5], stop) ||
+        !ParseCents(f[6], tp))
         return Rej(CandReject::SHAPE);
     if (side == "BUY" && !(stop < entry && entry < tp))
         return Rej(CandReject::SHAPE);
@@ -138,7 +137,7 @@ CandOutcome ValidateCandidate(const JVal& rec, const CandidateTables& t,
     o.cid = cid;
     o.symbol = symbol;
     o.side = side;
-    o.exit_profile = f[9];
+    o.exit_rule = f[8];
     o.entry_cents = entry;
     o.stop_cents = stop;
     o.tp_cents = tp;
@@ -146,4 +145,4 @@ CandOutcome ValidateCandidate(const JVal& rec, const CandidateTables& t,
 }
 
 }  // namespace ingest
-}  // namespace jev
+}  // namespace kernel

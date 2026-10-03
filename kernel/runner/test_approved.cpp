@@ -14,25 +14,25 @@ static int fails = 0, count = 0;
         }                              \
     } while (0)
 
-using namespace jev::runner;
+using namespace kernel::runner;
 
 int main(int argc, char** argv) {
-    jev::ingest::CandidateTables t;
+    kernel::ingest::CandidateTables t;
     CHECK("approved-ok", ParseApproved(
-        "{\"sleeves\":[{\"id\":\"trend_etf_v1\",\"window_s\":3600}],"
+        "{\"strategies\":[{\"id\":\"etf_trend\",\"window_s\":3600}],"
         "\"allowlist\":[\"VTI\",\"BRK.B\"]}", &t) &&
-                             t.sleeves.size() == 1 && t.allowlist.size() == 2 &&
-                             t.sleeves[0].window_s == 3600);
+                             t.strategies.size() == 1 && t.allowlist.size() == 2 &&
+                             t.strategies[0].window_s == 3600);
     for (const char* bad : {
              "", "[]", "{}",
-             "{\"sleeves\":[],\"allowlist\":[\"VTI\"]}",
-             "{\"sleeves\":[{\"id\":\"a\",\"window_s\":3600}],\"allowlist\":[]}",
-             "{\"sleeves\":[{\"id\":\"a\",\"window_s\":0}],\"allowlist\":[\"VTI\"]}",
-             "{\"sleeves\":[{\"id\":\"a\",\"window_s\":1e9}],\"allowlist\":[\"VTI\"]}",
-             "{\"sleeves\":[{\"id\":\"a\",\"window_s\":3600.5}],\"allowlist\":[\"VTI\"]}",
-             "{\"sleeves\":[{\"id\":\"a\",\"window_s\":3600}],\"allowlist\":[\"vti\"]}",
-             "{\"sleeves\":[{\"id\":\"a\",\"window_s\":3600}],\"allowlist\":[\"V T\"]}",
-             "{\"sleeves\":[{\"id\":\"a\",\"window_s\":3600}],\"allowlist\":[1]}"})
+             "{\"strategies\":[],\"allowlist\":[\"VTI\"]}",
+             "{\"strategies\":[{\"id\":\"a\",\"window_s\":3600}],\"allowlist\":[]}",
+             "{\"strategies\":[{\"id\":\"a\",\"window_s\":0}],\"allowlist\":[\"VTI\"]}",
+             "{\"strategies\":[{\"id\":\"a\",\"window_s\":1e9}],\"allowlist\":[\"VTI\"]}",
+             "{\"strategies\":[{\"id\":\"a\",\"window_s\":3600.5}],\"allowlist\":[\"VTI\"]}",
+             "{\"strategies\":[{\"id\":\"a\",\"window_s\":3600}],\"allowlist\":[\"vti\"]}",
+             "{\"strategies\":[{\"id\":\"a\",\"window_s\":3600}],\"allowlist\":[\"V T\"]}",
+             "{\"strategies\":[{\"id\":\"a\",\"window_s\":3600}],\"allowlist\":[1]}"})
         CHECK("approved-bad", !ParseApproved(bad, &t));
 
     std::set<int64_t> h;

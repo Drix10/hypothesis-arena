@@ -1,11 +1,11 @@
-"""End-to-end drills for g0_paper_loop over the real libcurl transport.
+"""End-to-end drills for paper_loop over the real libcurl transport.
 
 A local mock of the Alpaca paper and data APIs (loopback only, reachable
-through the G0_TEST_BASE build) stands in for the venue so broker faults can
+through the TEST_BASE build) stands in for the venue so broker faults can
 be injected. STAGE here is a test fixture in a temp dir against a mock; it
 authorizes nothing.
 
-    python3 kernel/tests/e2e_mock_venue.py <g0_paper_loop_test_binary>
+    python3 kernel/tests/e2e_mock_venue.py <paper_loop_test_binary>
 """
 import datetime
 import hashlib
@@ -210,29 +210,29 @@ class H(http.server.BaseHTTPRequestHandler):
     do_GET = do_POST = do_DELETE = _handle
 
 
-def make_dir(sleeve="core_passive_v1"):
+def make_dir(strategy="passive_core"):
     d = tempfile.mkdtemp(prefix="e2e_")
     at = "2026-09-25T00:00:00Z"
-    h = hashlib.sha256(("G0_PAPER|human-test|%s|0|GENESIS" % at).encode()).hexdigest()
+    h = hashlib.sha256(("PAPER|human-test|%s|0|GENESIS" % at).encode()).hexdigest()
     open(d + "/STAGE", "w").write(
-        "stage: G0_PAPER\napproved_by: human-test\napproved_at: %s\n"
+        "stage: PAPER\napproved_by: human-test\napproved_at: %s\n"
         "capital_usd: 0\nattest_hash: %s\n" % (at, h))
-    json.dump({"sleeves": [{"id": sleeve, "window_s": 86400}],
+    json.dump({"strategies": [{"id": strategy, "window_s": 86400}],
                "allowlist": ["VTI", "IEF", "SPY"]}, open(d + "/approved.json", "w"))
     return d
 
 
-def candidate(sym="VTI", side="BUY", tag=0, profile="exit_trend_v1"):
+def candidate(sym="VTI", side="BUY", tag=0, profile="exit_trend"):
     now = int(datetime.datetime.now(datetime.timezone.utc).timestamp() * 1e9) + tag
     entry, stop, tp = (100.0, 90.0, 150.0) if side == "BUY" else (100.0, 150.0, 90.0)
-    return W.wire_line("core_passive_v1", sym, now, entry, stop, tp,
-                       family="core", side=side, exit_profile=profile)
+    return W.wire_line("passive_core", sym, now, entry, stop, tp,
+                       side=side, exit_rule=profile)
 
 
 def loop_env(port, key=KEY):
     return dict(os.environ, ALPACA_KEY_ID=key, ALPACA_SECRET=SECRET,
-                G0_TEST_BASE="http://127.0.0.1:%d" % port,
-                G0_TEST_TIMEOUT_MS="2000")
+                TEST_BASE="http://127.0.0.1:%d" % port,
+                TEST_TIMEOUT_MS="2000")
 
 
 def run_loop(binary, port, d, ticks=3, key=KEY):
@@ -347,9 +347,9 @@ def main():
     check("bad-creds-no-orders", V.posts == 0 and "account_ok=0" in out, out)
     shutil.rmtree(d)
 
-    # 7. Stop-only (OTO) entries: the intraday and event profiles place one
+    # 7. Stop-only (OTO) entries: the link and event rules place one
     # OTO order, its single stop leg proves protection, nothing is flattened.
-    for prof, gtc in (("exit_intraday_v1", "day"), ("exit_event_v1", "gtc")):
+    for prof, gtc in (("exit_link", "gtc"), ("exit_event", "gtc")):
         V.reset()
         d = make_dir()
         open(d + "/candidates.jsonl", "w").write(candidate("SPY", "BUY", 5, prof))
@@ -367,7 +367,7 @@ def main():
     # kernel cancels the remainder (which takes the bracket legs), and the
     # venue refuses an OCO repair until the legs release their shares. The
     # position must end up protected by the repair OCO, never flattened,
-    # frozen or alerted, whether the entry stayed partial or completed.
+    # fixed or alerted, whether the entry stayed partial or completed.
     for label, fills in (("partial", False), ("filled-before-cancel", True)):
         V.reset()
         V.realistic, V.cancel_fills = True, fills

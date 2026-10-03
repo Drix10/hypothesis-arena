@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SCHEMA = "f2"
+SCHEMA = "1"
 RULES = "plausibility"
 FROZEN_N = 3
 KINDS = {"filing_event", "macro_release", "calendar_ahead", "osint_event",
@@ -69,7 +69,7 @@ WATERMARK_REQUIRED = {"entity_map_version", "entity_map_sha256",
 WATERMARK_SOURCE_REQUIRED = {"last_observation_at", "cursor"}
 WATERMARK_SKEW_S = 60
 CURSOR_MAX_LEN = 256
-BUNDLE_SCHEMA = "f2"
+BUNDLE_SCHEMA = "1"
 TTL_MAX_S = 7 * 86400  # emitters never grant freshness beyond this
 MAX_FEATURES = 64  # plan cap, now enforced
 MAX_HASHES = 16  # rows contributing to one derived feature

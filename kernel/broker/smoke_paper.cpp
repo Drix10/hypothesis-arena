@@ -10,12 +10,12 @@
 
 #include <unistd.h>
 
-#include "../jev_wire.hpp"
+#include "../wire.hpp"
 #include "alpaca_paper.hpp"
 #include "http_curl.hpp"
 #include "ws_stream.hpp"
 
-using namespace jev::broker;
+using namespace kernel::broker;
 
 static int fails = 0;
 static void Step(const char* name, bool ok) {
@@ -55,8 +55,8 @@ int main() {
     AlpacaPaperAdapter ad(CurlTransport);
     std::string seed = "smoke|" + std::to_string(std::time(nullptr)) + "|" +
                        std::to_string(getpid());
-    std::string cid = jev::Sha256Hex(seed);
-    std::string iid = jev::Sha256Hex(seed + "|intent");
+    std::string cid = kernel::Sha256Hex(seed);
+    std::string iid = kernel::Sha256Hex(seed + "|intent");
     ProtectedOrder o{};
     std::strcpy(o.symbol, "SPY");
     o.side = OrderSide::BUY;
@@ -85,7 +85,7 @@ int main() {
     Step("cancel-observed", cancelled);
 
     // OTO stop-only entry: one stop leg proves protection.
-    std::string cid2 = jev::Sha256Hex(seed + "|oto");
+    std::string cid2 = kernel::Sha256Hex(seed + "|oto");
     ProtectedOrder t = o;
     t.protection = Protection::OTO_STOP;
     t.tp_cents = 0;
@@ -105,7 +105,7 @@ int main() {
     Step("oto-cancel-observed", ocancelled);
 
     // MOC order shape (a buy: nothing is held to sell), then cancelled.
-    std::string cid3 = jev::Sha256Hex(seed + "|moc");
+    std::string cid3 = kernel::Sha256Hex(seed + "|moc");
     CloseResult mc = ad.CloseAtClose("SPY", 1, OrderSide::BUY, cid3.c_str());
     Step("moc-accepted-pending",
          mc.transport_ok && mc.state == CloseState::PENDING && mc.broker_order_id[0]);

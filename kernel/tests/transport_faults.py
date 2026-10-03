@@ -1,6 +1,6 @@
 """Fault injection against the real libcurl transport.
 
-Runs test_transport_faults (built with G0_TEST_BASE) against a local mock of
+Runs test_transport_faults (built with TEST_BASE) against a local mock of
 the Alpaca paper API and checks how each fault is classified. The mock never
 leaves loopback; the production build has no base-URL override.
 
@@ -92,8 +92,8 @@ def run(binary, port, op, scenario, timeout_ms="1500"):
     Mock.scenario = scenario
     Mock.log = []
     env = dict(os.environ, ALPACA_KEY_ID=KEY, ALPACA_SECRET=SECRET,
-               G0_TEST_BASE="http://127.0.0.1:%d" % port,
-               G0_TEST_TIMEOUT_MS=timeout_ms)
+               TEST_BASE="http://127.0.0.1:%d" % port,
+               TEST_TIMEOUT_MS=timeout_ms)
     return subprocess.run([binary, op], env=env, capture_output=True,
                           text=True, timeout=30).stdout.strip()
 

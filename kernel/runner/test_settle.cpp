@@ -12,7 +12,7 @@ static int fails = 0, count = 0;
         }                              \
     } while (0)
 
-using namespace jev::runner;
+using namespace kernel::runner;
 
 // 2026-09-28 (Monday) = day 20359 since 1970-01-01.
 static const int64_t MON = 20724;

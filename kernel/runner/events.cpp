@@ -3,7 +3,7 @@
 
 #include <cstring>
 
-namespace jev {
+namespace kernel {
 namespace runner {
 
 namespace {
@@ -80,7 +80,7 @@ bool IsFillWord(const char* t) {
            std::strcmp(t, "partial_fill") == 0;
 }
 bool IsLifeWord(const char* t) {
-    // Identity-only lifecycle words (doc 06): force REST, never a direct
+    // Identity-only lifecycle words: force REST, never a direct
     // router verdict. held and stopped are live working states per the
     // trade_updates contract.
     const char* const ws[] = {"new",
@@ -308,4 +308,4 @@ ShapedFill ShapeStreamFill(exec::RouteState st, long long remaining,
 }
 
 }  // namespace runner
-}  // namespace jev
+}  // namespace kernel

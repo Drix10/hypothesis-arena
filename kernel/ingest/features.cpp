@@ -1,4 +1,4 @@
-// f2 validation + fixed-arena retention. See features.hpp for scope, order and
+// Feature validation + fixed-arena retention. See features.hpp for scope, order and
 // the zero-malloc contract.
 //
 // This file uses no heap vocabulary (build-gated, comments stripped).
@@ -9,11 +9,11 @@
 
 #include <cstring>
 
-namespace jev {
+namespace kernel {
 namespace ingest {
 namespace {
 
-// ---- f2 vocabularies (doc 08 8.5; P1.5-identical) ----
+// ---- feature vocabularies ----
 const char* kKinds[] = {"filing_event", "macro_release", "calendar_ahead",
                         "osint_event", "sentiment_tail", "regime_hint"};
 const char* kEffects[] = {"bullish", "bearish", "risk_up", "risk_down",
@@ -22,7 +22,7 @@ const char* kEvidence[] = {"source", "derived", "inference"};
 const char* kConf[] = {"low", "medium", "high"};
 const char* kSources[] = {"edgar_8k",   "fed_monetary", "ecb_mid",
                           "treasury_auctions", "bls_empsit",    "fred_macro"};
-// Source->kind emission registry: kinds with no frozen emitter (osint_event,
+// Source->kind emission registry: kinds with no fixed emitter (osint_event,
 // sentiment_tail, regime_hint) are rejected, not admitted on structure alone.
 const char* kEdgarKinds[] = {"filing_event"};
 const char* kMacroKinds[] = {"macro_release", "calendar_ahead"};
@@ -99,7 +99,7 @@ bool IsHex64U32(const std::u32string& u) {
     return true;
 }
 // Prose quarantine: any object key (at any depth) in the prose set. The field
-// allowlist is the real guard; this keeps the P1.5 first-failure reason.
+// allowlist is the real guard; this keeps the ctx_read.py first-failure reason.
 bool HasProse(const JVal& v) {
     if (v.t == JVal::T::OBJ) {
         for (auto& kv : v.o) {
@@ -202,7 +202,7 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
     };
     if (rec.t != JVal::T::OBJ)
         return reject(RejectCode::SCHEMA_VALUE, nullptr);
-    // 1. prose quarantine (P1.5 first).
+    // 1. prose quarantine.
     if (HasProse(rec)) return reject(RejectCode::PROSE, nullptr);
     // 2/3. unknown fields (first sorted, codepoint order) then missing.
     {
@@ -253,8 +253,8 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
     const JVal* conf = FindAscii(rec, "confidence_bucket");
     const JVal* source = FindAscii(rec, "source_id");
     // 4. version (before the primitive check: a non-string version fails here,
-    // P1.5-identical).
-    if (!schema || schema->t != JVal::T::STR || !AsciiEq(schema->s, "f2"))
+    // same as ctx_read.py).
+    if (!schema || schema->t != JVal::T::STR || !AsciiEq(schema->s, "1"))
         return reject(RejectCode::VERSION, nullptr);
     // 5. source namespace (non-string source fails here too).
     if (!source || source->t != JVal::T::STR ||
@@ -272,15 +272,15 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
         !InAsciiList(kEvidence, NARR(kEvidence), evidence->s) ||
         !InAsciiList(kConf, NARR(kConf), conf->s))
         return reject(RejectCode::ENUM, nullptr);
-    // 8. emitter registry (kinds without a frozen emitter never pass on
+    // 8. emitter registry (kinds without a fixed emitter never pass on
     // structure alone).
     if (is_edgar ? !InAsciiList(kEdgarKinds, NARR(kEdgarKinds), kind->s)
                  : !InAsciiList(kMacroKinds, NARR(kMacroKinds), kind->s))
         return reject(RejectCode::NO_EMITTER, nullptr);
-    // 9. value shape, P1.5 precedence: object -> type is a string -> type is a
+    // 9. value shape, ctx_read.py precedence: object -> type is a string -> type is a
     // known VTYPES member (schema-value) -> exact {type, v} key set -> exact v
     // type -> count >= 0. Multi-defect records report the same first failure as
-    // P1.5 (e.g. {type:"bogus", v:"x", extra:1} is schema-value).
+    // ctx_read.py (e.g. {type:"bogus", v:"x", extra:1} is schema-value).
     const JVal* value = FindAscii(rec, "value");
     if (!value || value->t != JVal::T::OBJ)
         return reject(RejectCode::SCHEMA_VALUE, nullptr);
@@ -326,7 +326,7 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
         const JVal* ob = FindAscii(rec, "observed_at_ns");
         if (!ob || !AsInt64(*ob, observed))
             return reject(RejectCode::OBSERVED_TYPE, nullptr);
-        if (observed < 0)  // P1.5 range is 0..INT64_MAX, mirrored exactly
+        if (observed < 0)  // ctx_read.py range is 0..INT64_MAX, mirrored exactly
             return reject(RejectCode::OBSERVED_RANGE, nullptr);
     }
     int64_t ttl = 0;
@@ -337,7 +337,7 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
         if (ttl < 1 || ttl > kTtlMaxS)
             return reject(RejectCode::TTL_TYPE, nullptr);
     }
-    // 13. lineage shape + combination (DB resolution is Slice G).
+    // 13. lineage shape + combination (DB resolution is ).
     {
         const JVal* ch = FindAscii(rec, "canonical_hash");
         if (!ch || ch->t != JVal::T::STR || !IsHex64U32(ch->s))
@@ -394,9 +394,9 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
         }
         // single-hash case: canonical_hash equals itself by construction.
     }
-    // 14/15. R12: integer-exact, no float time math (D6 spirit).
-    // Future first (P1.5 order): observed past the snapshot is dropped.
-    // Deliberate precision upgrade over P1.5, which divides to float seconds:
+    // 14/15. R12: integer-exact, no float time math.
+    // Future first: observed past the snapshot is dropped.
+    // Deliberate precision upgrade over ctx_read.py, which divides to float seconds:
     // a 1ns-future stamp and a 1ns-past-TTL expiry vanish in float rounding
     // near 1.8e9 s. The integer rule below is exact at both boundaries.
     if (observed > snapshot_ns) return reject(RejectCode::FUTURE, nullptr);
@@ -428,7 +428,7 @@ IngestOutcome IngestRecord(IngestState& st, const JVal& rec, const char* canon,
             return reject(RejectCode::PROVENANCE_TYPE, nullptr);
     }
     // 18. entity_ref shape (optional): exactly {"cik": str}. Resolution against
-    // the pinned map is Slice G.
+    // the pinned map is .
     {
         const JVal* er = FindAscii(rec, "entity_ref");
         if (er) {
@@ -534,4 +534,4 @@ const IngestState::Slot& PayloadSlot(const IngestState& st, int i) {
 }
 
 }  // namespace ingest
-}  // namespace jev
+}  // namespace kernel

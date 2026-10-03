@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace jev {
+namespace kernel {
 namespace runner {
 
 // Decimal string -> cents, rounded toward zero (conservative for both
@@ -43,4 +43,4 @@ bool ParsePositions(const std::string& body, std::vector<PositionView>* out);
 bool ParseOpenOrders(const std::string& body, std::vector<OrderView>* out);
 
 }  // namespace runner
-}  // namespace jev
+}  // namespace kernel

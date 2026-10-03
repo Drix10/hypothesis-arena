@@ -295,7 +295,7 @@ def _verify_semantics(data, row):
     return (env.get("bundle_id") == row.get("bundle_id") and
             type(env.get("research_epoch")) is int and
             env.get("research_epoch") == row.get("research_epoch")
-            and env.get("schema_version") == "f2" and
+            and env.get("schema_version") == "1" and
             env.get("commit") is True)
 
 

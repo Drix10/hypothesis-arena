@@ -15,7 +15,7 @@ static int fails = 0, count = 0;
         }                              \
     } while (0)
 
-using namespace jev::runner;
+using namespace kernel::runner;
 
 int main(int argc, char** argv) {
     if (argc != 2) return 2;

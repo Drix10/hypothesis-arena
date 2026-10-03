@@ -2,7 +2,7 @@
 
 #include <cmath>
 
-namespace jev {
+namespace kernel {
 namespace risk {
 namespace {
 
@@ -76,4 +76,4 @@ CorrResult MeasureCorr(const double* a, const double* b, int n,
 }
 
 }  // namespace risk
-}  // namespace jev
+}  // namespace kernel

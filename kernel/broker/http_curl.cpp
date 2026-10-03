@@ -6,7 +6,7 @@
 #include <cstring>
 #include <string>
 
-namespace jev {
+namespace kernel {
 namespace broker {
 namespace {
 
@@ -76,10 +76,10 @@ bool Perform(const char* base, const char* prefix, const char* method,
     if (!h) return false;
 
     long total_ms = kTotalMs;
-#ifdef G0_TEST_BASE
+#ifdef TEST_BASE
     // Fault-injection build only: point at a local mock and shorten timeouts.
-    if (const char* tb = std::getenv("G0_TEST_BASE")) base = tb;
-    if (const char* tt = std::getenv("G0_TEST_TIMEOUT_MS"))
+    if (const char* tb = std::getenv("TEST_BASE")) base = tb;
+    if (const char* tt = std::getenv("TEST_TIMEOUT_MS"))
         total_ms = std::atol(tt);
 #endif
     std::string url = std::string(base) + path;
@@ -104,7 +104,7 @@ bool Perform(const char* base, const char* prefix, const char* method,
     curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT_MS, kConnectMs);
     curl_easy_setopt(h, CURLOPT_TIMEOUT_MS, total_ms);
     curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
-#ifdef G0_TEST_BASE
+#ifdef TEST_BASE
     curl_easy_setopt(h, CURLOPT_PROTOCOLS_STR, "http,https");
 #else
     curl_easy_setopt(h, CURLOPT_PROTOCOLS_STR, "https");
@@ -154,4 +154,4 @@ bool CurlData(const std::string& path, std::string* out) {
 }
 
 }  // namespace broker
-}  // namespace jev
+}  // namespace kernel

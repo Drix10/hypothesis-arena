@@ -1,4 +1,4 @@
-// Slice F implementation. See feed.hpp for authority boundaries.
+// Feed state machines. See feed.hpp for authority boundaries.
 #include "feed.hpp"
 
 namespace feed {

@@ -1,11 +1,11 @@
-// Slice E gate [correctness]: STAGE chain verify, corruption fails to
-// G0_PAPER. Usage: ./test_stage
+// STAGE chain verify; corruption fails to
+// PAPER. Usage: ./test_stage
 #include <cstdio>
 #include <string>
 #include <vector>
 
 #include "stage.hpp"
-#include "../jev_wire.hpp"  // Sha256Hex for fixture construction
+#include "../wire.hpp"  // Sha256Hex for fixture construction
 
 static int g_fail = 0;
 
@@ -19,7 +19,7 @@ static void Check(bool cond, const char* name) {
 static std::string Make(const std::string& st, const std::string& by,
                         const std::string& at, const std::string& cap,
                         const std::string& prev = "GENESIS") {
-    std::string attest = jev::Sha256Hex(st + "|" + by + "|" + at + "|" +
+    std::string attest = kernel::Sha256Hex(st + "|" + by + "|" + at + "|" +
                                      cap + "|" + prev);
     return "stage: " + st + "\napproved_by: " + by + "\napproved_at: " +
            at + "\ncapital_usd: " + cap + "\nattest_hash: " + attest +
@@ -28,30 +28,30 @@ static std::string Make(const std::string& st, const std::string& by,
 
 int main() {
     using stage::VerifyStageContents;
-    // 1. valid G0 bootstrap
+    // 1. valid paper bootstrap
     {
         auto r = VerifyStageContents(
-            Make("G0_PAPER", "op", "2026-09-23T12:00:00Z", "0"),
+            Make("PAPER", "op", "2026-09-23T12:00:00Z", "0"),
             "GENESIS");
-        Check(r.ok && r.effective == "G0_PAPER" && r.reason == "ok",
+        Check(r.ok && r.effective == "PAPER" && r.reason == "ok",
               "valid-g0");
     }
     // 2. all four stages verify when the chain is correct
-    for (const char* st : {"G0_PAPER", "G1_TINY", "G2_SCALED",
-                           "G3_FULL"}) {
+    for (const char* st : {"PAPER", "TINY", "SCALED",
+                           "FULL"}) {
         auto r = VerifyStageContents(
             Make(st, "op", "2026-09-23T12:00:00+00:00", "25000"),
             "GENESIS");
         Check(r.ok && r.effective == st, st);
     }
-    // 3. tampered capital -> G0_PAPER chain-mismatch
+    // 3. tampered capital -> PAPER chain-mismatch
     {
-        std::string good = Make("G1_TINY", "op",
+        std::string good = Make("TINY", "op",
                                 "2026-09-23T12:00:00Z", "25000");
         std::string bad = good;
         bad.replace(bad.find("25000"), 5, "99000");
         auto r = VerifyStageContents(bad, "GENESIS");
-        Check(!r.ok && r.effective == "G0_PAPER" &&
+        Check(!r.ok && r.effective == "PAPER" &&
                   r.reason == "chain-mismatch",
               "tampered-capital");
     }
@@ -64,7 +64,7 @@ int main() {
     }
     // 5. missing field
     {
-        std::string good = Make("G0_PAPER", "op",
+        std::string good = Make("PAPER", "op",
                                 "2026-09-23T12:00:00Z", "0");
         std::string cut =
             good.substr(0, good.find("capital_usd"));
@@ -74,7 +74,7 @@ int main() {
     // 6. extra field
     {
         auto r = VerifyStageContents(
-            Make("G0_PAPER", "op", "2026-09-23T12:00:00Z", "0") +
+            Make("PAPER", "op", "2026-09-23T12:00:00Z", "0") +
                 "promo: yes\n",
             "GENESIS");
         Check(!r.ok && r.reason == "unknown-or-duplicate-key",
@@ -83,14 +83,14 @@ int main() {
     // 7. duplicate key
     {
         auto r = VerifyStageContents(
-            Make("G0_PAPER", "op", "2026-09-23T12:00:00Z", "0") +
-                "stage: G0_PAPER\n",
+            Make("PAPER", "op", "2026-09-23T12:00:00Z", "0") +
+                "stage: PAPER\n",
             "GENESIS");
         Check(!r.ok, "duplicate-key");
     }
     // 8. bad attest shape
     {
-        std::string good = Make("G0_PAPER", "op",
+        std::string good = Make("PAPER", "op",
                                 "2026-09-23T12:00:00Z", "0");
         std::string bad = good;
         bad.replace(bad.find("attest_hash: ") + 13, 64,
@@ -102,13 +102,13 @@ int main() {
     // 9. non-numeric / negative capital
     {
         auto r = VerifyStageContents(
-            Make("G0_PAPER", "op", "2026-09-23T12:00:00Z", "12x") +
+            Make("PAPER", "op", "2026-09-23T12:00:00Z", "12x") +
                 "",
             "GENESIS");
         // hash recomputed over "12x" would verify; capital check must
         // fire first.
         Check(!r.ok && r.reason == "bad-capital", "bad-capital-alpha");
-        std::string neg = Make("G0_PAPER", "op",
+        std::string neg = Make("PAPER", "op",
                                "2026-09-23T12:00:00Z", "0", "GENESIS");
         neg.replace(neg.find("capital_usd: 0"), 14, "capital_usd: -5");
         auto r2 = VerifyStageContents(neg, "GENESIS");
@@ -118,14 +118,14 @@ int main() {
     // 10. wrong predecessor
     {
         auto r = VerifyStageContents(
-            Make("G0_PAPER", "op", "2026-09-23T12:00:00Z", "0"),
+            Make("PAPER", "op", "2026-09-23T12:00:00Z", "0"),
             "NOTGENESIS");
         Check(!r.ok && r.reason == "chain-mismatch", "wrong-prev");
     }
     // 11. pipe in approved_by
     {
         auto r = VerifyStageContents(
-            Make("G0_PAPER", "a|b", "2026-09-23T12:00:00Z", "0"),
+            Make("PAPER", "a|b", "2026-09-23T12:00:00Z", "0"),
             "GENESIS");
         Check(!r.ok && r.reason == "bad-field", "pipe-in-field");
     }
@@ -138,7 +138,7 @@ int main() {
           "2026-09-23T12:00:00+5:00", "2026-09-23T12:00:00++05:00",
           "2026-09-23T12:00:00+05-00", "2026-09-23T12:00:00Z+05:00"}) {
         auto r = VerifyStageContents(
-            Make("G0_PAPER", "op", bad, "0"), "GENESIS");
+            Make("PAPER", "op", bad, "0"), "GENESIS");
         Check(!r.ok && r.reason == "bad-field", bad);
     }
     // 12b. valid boundary offsets accepted
@@ -147,19 +147,19 @@ int main() {
           "2026-09-23T12:00:00+0530", "2026-09-23T12:00:00Z",
           "2026-09-23T12:00:00"}) {
         auto r = VerifyStageContents(
-            Make("G0_PAPER", "op", good, "0"), "GENESIS");
+            Make("PAPER", "op", good, "0"), "GENESIS");
         Check(r.ok, good);
     }
     // 13. leap day accepted
     {
         auto r = VerifyStageContents(
-            Make("G0_PAPER", "op", "2024-02-29T00:00:00Z", "0"),
+            Make("PAPER", "op", "2024-02-29T00:00:00Z", "0"),
             "GENESIS");
         Check(r.ok, "leap-day");
     }
     // 14. re-read determinism: same bytes twice, same verdict
     {
-        std::string good = Make("G0_PAPER", "op",
+        std::string good = Make("PAPER", "op",
                                 "2026-09-23T12:00:00Z", "0");
         auto a = VerifyStageContents(good, "GENESIS");
         auto b = VerifyStageContents(good, "GENESIS");
@@ -170,7 +170,7 @@ int main() {
     // 15. empty file
     {
         auto r = VerifyStageContents("", "GENESIS");
-        Check(!r.ok && r.effective == "G0_PAPER", "empty-file");
+        Check(!r.ok && r.effective == "PAPER", "empty-file");
     }
     if (g_fail == 0) std::printf("STAGE SUITE: ALL PASS\n");
     return g_fail ? 1 : 0;

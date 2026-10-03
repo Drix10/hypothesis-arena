@@ -1,4 +1,4 @@
-// H1 gate [correctness]: journal chain + redaction.
+// Journal chain and redaction.
 // Usage: ./test_journal
 #include <cstdio>
 
@@ -16,12 +16,12 @@ static void Check(bool cond, const char* name) {
 }
 
 int main() {
-    using jev::journal::FormatRow;
-    using jev::journal::GenesisPrev;
-    using jev::journal::RedactionOk;
-    using jev::journal::Row;
-    using jev::journal::VerifyChain;
-    using jev::journal::VerifyRow;
+    using kernel::journal::FormatRow;
+    using kernel::journal::GenesisPrev;
+    using kernel::journal::RedactionOk;
+    using kernel::journal::Row;
+    using kernel::journal::VerifyChain;
+    using kernel::journal::VerifyRow;
     const char* hex64 =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     // 1. well-formed row verifies
@@ -88,7 +88,7 @@ int main() {
         g[0].prev_hash = hex64;  // first row must link genesis
         Check(!VerifyChain(g, 2), "chain-genesis-break");
     }
-    // 5. all frozen kinds format
+    // 5. all fixed kinds format
     {
         const char* kinds[] = {"intent",  "fill",   "partial", "cancel",
                                "unknown", "exit",   "drift-directive",

@@ -1,10 +1,10 @@
-// Drills for the MOC / protective-stop sequencing (doc 06 6.0).
+// Drills for the MOC / protective-stop sequencing.
 #include <cstdio>
 #include <string_view>
 
 #include "moc_plan.hpp"
 
-using namespace jev::exec;
+using namespace kernel::exec;
 
 static int fails = 0, count = 0;
 #define CHECK(name, expr)                   \
@@ -27,7 +27,7 @@ static MocAction P(StopState s, MocState m, long long now = 100,
 }
 
 int main() {
-    // K5 live finding: Alpaca rejects MOC while stop is live, so cancel stop first.
+    // Live finding: Alpaca rejects MOC while stop is live, so cancel stop first.
     CHECK("cancel-stop-before-moc",
           P(StopState::LIVE, MocState::NOT_SENT) == MocAction::CANCEL_STOP);
     CHECK("submit-unprotected-entry-too",

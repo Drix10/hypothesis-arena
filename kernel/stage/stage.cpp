@@ -1,9 +1,9 @@
-// Slice E implementation. See stage.hpp for the contract.
+// implementation. See stage.hpp for the contract.
 #include "stage.hpp"
 
 #include <cctype>
 
-#include "../jev_wire.hpp"  // Sha256Hex (P3.1 primitive, reused)
+#include "../wire.hpp"  // Sha256Hex
 
 namespace stage {
 namespace {
@@ -114,7 +114,7 @@ bool CleanValue(const std::string& s) {
 
 VerifyResult VerifyStageContents(const std::string& contents,
                                  const std::string& prev_attest) {
-    VerifyResult r{false, "G0_PAPER", "parse-error"};
+    VerifyResult r{false, "PAPER", "parse-error"};
     // Split lines; a single terminal newline is tolerated, interior
     // blanks are rejected.
     std::string stage, by, at, cap, attest;
@@ -122,7 +122,7 @@ VerifyResult VerifyStageContents(const std::string& contents,
     size_t pos = 0;
     auto fail = [&](const char* code) {
         r.reason = code;
-        r.effective = "G0_PAPER";
+        r.effective = "PAPER";
         r.ok = false;
         return r;
     };
@@ -166,7 +166,7 @@ VerifyResult VerifyStageContents(const std::string& contents,
     if (!ParseCapital(cap, &capital)) return fail("bad-capital");
     if (!IsHex64(attest)) return fail("bad-attest-shape");
     std::string expect =
-        jev::Sha256Hex(stage + "|" + by + "|" + at + "|" + cap + "|" +
+        kernel::Sha256Hex(stage + "|" + by + "|" + at + "|" + cap + "|" +
                        prev_attest);
     // Case-insensitive compare (hex); recompute is lowercase.
     std::string lo = attest;

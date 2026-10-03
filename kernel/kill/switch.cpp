@@ -3,11 +3,11 @@
 // caller to perform. See the header for the boundary.
 #include "switch.hpp"
 
-namespace jev {
+namespace kernel {
 namespace kill {
 
 LevelResult EvaluateLevel(const KillInputs& in) {
-    // HARD tier (doc 10 10.3): integrity and resolvability failures. Order
+    // HARD tier: integrity and resolvability failures. Order
     // within the tier is documentation only.
     if (in.journal_chain_break)
         return {risk::KillLevel::HARD, "kill:journal-chain-break"};
@@ -19,7 +19,7 @@ LevelResult EvaluateLevel(const KillInputs& in) {
         return {risk::KillLevel::HARD, "kill:determinism-fail"};
     if (in.sandbox_compromise)
         return {risk::KillLevel::HARD, "kill:sandbox-compromise"};
-    // MEDIUM tier: risk-limit and calibration breaches. Stage demotion is
+    // MEDIUM tier: risk-limit breaches. Stage demotion is
     // immediate on entry (actuation side); evaluation only names it.
     if (in.drawdown_r5)
         return {risk::KillLevel::MEDIUM, "kill:drawdown-r5"};
@@ -27,15 +27,11 @@ LevelResult EvaluateLevel(const KillInputs& in) {
         return {risk::KillLevel::MEDIUM, "kill:daily-loss"};
     if (in.rule_violation)
         return {risk::KillLevel::MEDIUM, "kill:rule-violation"};
-    if (in.calib_breach)
-        return {risk::KillLevel::MEDIUM, "kill:calib-breach"};
     if (in.spend_tier == 3)
         return {risk::KillLevel::MEDIUM, "kill:spend-tier-3"};
     // SOFT tier: entries stop within 1 cycle, management continues. Spend
     // tiers 0-1 never kill (trim only); out-of-range tiers clamp to no-kill.
     if (in.halt_file) return {risk::KillLevel::SOFT, "kill:halt-file"};
-    if (in.jev_streak_s5)
-        return {risk::KillLevel::SOFT, "kill:jev-streak-s5"};
     if (in.feed_stale_gt30s)
         return {risk::KillLevel::SOFT, "kill:feed-stale"};
     if (in.spend_tier == 2)
@@ -84,7 +80,7 @@ FlattenOut StepFlatten(FlattenState s, const FlattenStep& in) {
             if (in.venue_closed_terminal)
                 return {FlattenState::PROTECTION_ONLY, false,
                         Closer::NONE, "flatten:protection-only"};
-            // Re-attempt (doc 10 10.3): the outstanding attempt is terminal,
+            // Re-attempt: the outstanding attempt is terminal,
             // conditions allow and the position is open -> one new issuance.
             // prior_attempt_failed clears once the fresh order is in flight, so
             // this cannot loop.
@@ -133,7 +129,7 @@ HardOut StepHard(HardPhase p, const HardStep& in) {
                         HardAction::REVOKE_CREDENTIALS, "hard:revoke"};
             // Unconfirmed protection never advances to revocation: re-query
             // (idempotent) and let the caller bound the attempts. Revocation
-            // without verification is the catastrophic ordering (doc 10 10.3).
+            // without verification is the catastrophic ordering.
             return {HardPhase::CONFIRM_PROTECTION,
                     HardAction::CONFIRM_ACTIVE, "hard:unconfirmed"};
         case HardPhase::REVOKE_AND_EXIT:
@@ -151,19 +147,19 @@ bool SerializeKill(const Persisted& p, char* out, std::size_t n) {
     int c = static_cast<int>(p.closer);
     int h = static_cast<int>(p.hard);
     if (f < 0 || f > 3 || c < 0 || c > 2 || h < 0 || h > 6) return false;
-    int w = std::snprintf(out, n, "D1:%d:%d:%d", f, c, h);
+    int w = std::snprintf(out, n, "KF:%d:%d:%d", f, c, h);
     return w == 8;
 }
 
 bool ParseKill(const char* s, Persisted* p) {
     if (s == nullptr || p == nullptr) return false;
-    // Exact shape "D1:d:d:d" + NUL: 8 chars (colons at 2/4/6, digits at
+    // Exact shape "KF:d:d:d" + NUL: 8 chars (colons at 2/4/6, digits at
     // 3/5/7, NUL at 8).
     for (int i = 0; i < 8; ++i) {
         char ch = s[i];
         if (ch == '\0') return false;  // short
-        if (i == 0 && ch != 'D') return false;
-        if (i == 1 && ch != '1') return false;
+        if (i == 0 && ch != 'K') return false;
+        if (i == 1 && ch != 'F') return false;
         if ((i == 2 || i == 4 || i == 6) && ch != ':') return false;
         if (i == 3 && (ch < '0' || ch > '3')) return false;
         if (i == 5 && (ch < '0' || ch > '2')) return false;
@@ -179,4 +175,4 @@ bool ParseKill(const char* s, Persisted* p) {
 }
 
 }  // namespace kill
-}  // namespace jev
+}  // namespace kernel

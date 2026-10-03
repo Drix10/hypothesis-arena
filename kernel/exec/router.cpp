@@ -2,14 +2,14 @@
 // (broker adapter, journal file, freeze set, emergency buffer). See
 // router.hpp for the rules enforced here.
 //
-// Protection invariant (doc 06 6.1): PROTECTED is entered only with
+// Protection invariant: PROTECTED is entered only with
 // positively confirmed broker-native protection. A filled position lacking
 // protection routes to ESTABLISH_PROTECTION (recovery-only repair) and, if
 // repair fails, to immediate flatten; never to a cancel of a nonexistent
 // remainder, never to PROTECTED.
 #include "router.hpp"
 
-namespace jev {
+namespace kernel {
 namespace exec {
 
 namespace {
@@ -82,7 +82,7 @@ int CmpUlid(const char* a, const char* b) {
     }
     return 0;
 }
-// Exit sub-identity (P0-2): deterministic client ID for attempt N>=1,
+// Exit sub-identity: deterministic client ID for attempt N>=1,
 // derived from the original intent but distinct from every burned ID
 // (Alpaca uniqueness). Attempt 0 is the base recipe; sub-ids hash intent#eN.
 bool MintExitSubId(const OrderIntent& in, const VenueCtx& venue,
@@ -152,10 +152,10 @@ RouteOut Reject(RouteOut& o, const char* reason) {
     o.reason = reason;
     return o;
 }
-// Exit accounting (P0-2): fold a current-order cumulative fill C into the
+// Exit accounting: fold a current-order cumulative fill C into the
 // persisted totals. exit_counted tracks the current sub-order (reset on
 // sub-ID rotation); exit_closed is the monotonic cumulative total. False =
-// contradictory totals (overfill): the caller freezes for S2/human.
+// contradictory totals (overfill): the caller freezes for reconcile/human.
 bool FoldExitFill(RouteMachine& nx, const OrderIntent& in,
                   std::int64_t cur) {
     if (cur < 0 || cur > 999999999) return false;
@@ -185,7 +185,7 @@ RouteOut FreezeUnknown(RouteOut& o, const char* reason) {
 // time, so it can add monotonic fill knowledge but cannot originate a
 // terminal transition (cancel/dead/absent-terminal) against this state; it
 // reconciles (re-query within budget, else freeze) until stream confirmation
-// or S2/human resolution. Deaths the machine itself requested (CANCEL_SENT
+// or reconcile/human resolution. Deaths the machine itself requested (CANCEL_SENT
 // confirmations) are unaffected.
 bool StreamLive(const RouteMachine& m) { return IsUlid(m.last_event_id); }
 // Exit terminal honoring the emergency ordering exception: the emergency
@@ -219,7 +219,7 @@ RouteOut RestTerminalReconcile(RouteOut& o, const char* reason) {
 // exception, JOURNAL otherwise); DEAD-short -> mint the remainder under a new
 // sub-ID; short-FILLED (contradictory) -> reconcile; PARTIAL/PENDING/
 // ambiguous -> reconcile by ID under budget. Never CLOSED on a partial,
-// never a blind second send. Overfill -> freeze for S2/human.
+// never a blind second send. Overfill -> freeze for reconcile/human.
 RouteOut ExitAckStep(RouteOut& o, const RouteMachine& m,
                      const OrderIntent& intent, const VenueCtx& venue,
                      const broker::CloseResult& ca) {
@@ -287,11 +287,11 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                    const VenueCtx& venue, const RouteObs& obs) {
     RouteOut o;
     // o.next starts as an exact copy of m; the identity/binding checks below
-    // return it unchanged on ignore (P0-3), so callers may assign next
+    // return it unchanged on ignore, so callers may assign next
     // unconditionally. The IDLE branch is the only mint site.
     o.next = m;
     const bool is_exit = (intent.kind == risk::IntentKind::EXIT);
-    // Identity gate (P1-5): an established machine accepts only matching
+    // Identity gate: an established machine accepts only matching
     // tagged observations; foreign and untagged ones are ignored.
     if (m.state != RouteState::IDLE && m.client_id[0] != '\0') {
         bool same = true;
@@ -310,7 +310,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             return o;
         }
     }
-    // Intent binding (P0-4): an established machine ignores steps driven under
+    // Intent binding: an established machine ignores steps driven under
     // a different intent (never terminal), so a restored machine cannot be
     // steered onto another order.
     if (m.state != RouteState::IDLE && m.intent_id[0] != '\0' &&
@@ -319,7 +319,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
         o.reason = "exec:intent-mismatch";
         return o;
     }
-    // Sequence authority (doc 13 13.7): ULID vs ULID compares by venue stream
+    // Sequence authority: ULID vs ULID compares by venue stream
     // order (timestamp, then full-string tiebreak), not business-event time.
     // Non-ULID ids use the caller-assigned monotonic seq per machine: exact
     // redelivery collapses, older seq is stale, same-seq different-id is a
@@ -358,7 +358,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             }
         }
     }
-    // Stamp the applied event (P1-9) before the branch, so every non-ignored
+    // Stamp the applied event before the branch, so every non-ignored
     // observation counts as seen exactly once.
     if (obs.event_id[0] != '\0') {
         Copy33(o.next.last_event_id, obs.event_id);
@@ -476,7 +476,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             }
             if (obs.adapter_responded && obs.ack.accepted &&
                 !obs.ack.protection_accepted) {
-                // P0-3: persist the POST UUID before any cancel path (DELETE
+                // persist the POST UUID before any cancel path (DELETE
                 // needs a broker ID and no hidden lookup may mint one). An
                 // unparseable id reconciles, never cancels blind.
                 char bid[64];
@@ -512,7 +512,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 return o;
             }
             // Accepted (or timed out): persist the POST UUID when the ack
-            // carries one (P0-3: validated, else reconcile).
+            // carries one (validated, else reconcile).
             if (obs.adapter_responded && obs.ack.accepted &&
                 obs.ack.broker_order_id[0] != '\0' &&
                 o.next.broker_id[0] == '\0') {
@@ -559,7 +559,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             const broker::OrderQuery& q = obs.query;
             if (!q.transport_ok) {
                 // Lookup itself failed (not "order absent"): re-issue under the
-                // same identity while budget remains, then freeze for S2/human.
+                // same identity while budget remains, then freeze for reconcile/human.
                 // Auth/rate failures are classified.
                 const char* why = "exec:query-retry";
                 if (q.auth_failure)
@@ -579,7 +579,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 o.reason = "exec:reconcile-exhausted";
                 return o;
             }
-            // Cross-family stale guard (P0/P1-3): fills are monotonic per order.
+            // Cross-family stale guard: fills are monotonic per order.
             // A found snapshot below the established floor (entries: machine
             // filled; exits: current-order counted) is stale regardless of
             // family; REST never regresses stream state.
@@ -596,10 +596,10 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             if (is_exit) {
                 // Exit reconcile: the close order resolved. 404 absent -> back to
                 // EXIT_SENT for same-ID re-issue. Cancelled-unfilled or DEAD ->
-                // the ID is burned: mint the next sub-identity (P0-2). Filled at
+                // the ID is burned: mint the next sub-identity. Filled at
                 // or above the close size -> flat: terminal with the
                 // authoritative quantity. Below size -> query again within
-                // budget, else freeze for S2/human.
+                // budget, else freeze for reconcile/human.
                 if (!q.found) {
                     o.next.filled_qty = o.next.exit_closed_qty;
                     o.exit_qty =
@@ -610,7 +610,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                     return o;
                 }
                 // A canceled/DEAD close order never fills further: fold its
-                // cumulative qty, then mint the remainder under a new ID (P0-2).
+                // cumulative qty, then mint the remainder under a new ID.
                 // Flat -> terminal first.
                 bool x_dead =
                     q.cancelled ||
@@ -664,7 +664,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                     o.reason = "exec:exit-new-identity";
                     return o;
                 }
-                // Fold the authoritative cumulative fill (P0-2): flat -> terminal
+                // Fold the authoritative cumulative fill: flat -> terminal
                 // with that total; below size -> query again within budget, else
                 // freeze. Overfill -> freeze.
                 if (!FoldExitFill(o.next, intent, q.filled_qty)) {
@@ -684,7 +684,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 return FreezeUnknown(o, "exec:reconcile-exhausted");
             }
             if (!q.found) {
-                // transport_ok + !found happens only on 404 (P0-2): authoritative
+                // transport_ok + !found happens only on 404: authoritative
                 // absence, no UUID and no DELETE. Journal the cancellation
                 // directly. Exception: a no-event 404 against stream-live state
                 // is uncertain (stale lookup): reconcile, never terminalize.
@@ -734,7 +734,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 o.reason = "exec:nothing-filled";
                 return o;
             }
-            // Protection verdict (P0-1): legs strictly proven -> confirmed;
+            // Protection verdict: legs strictly proven -> confirmed;
             // bracket held as a unit with legs unexpanded -> constructive (null
             // legs = not expanded, not "absent"); otherwise absent -> repair
             // (no bracket exists to duplicate).
@@ -806,8 +806,8 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
                 return o;
             }
             // Explicit final-canceled observation first; a 204 or
-            // request-accepted never terminals (P1-8). Coverage uses the
-            // authoritative final quantity (P1-4), since fills may have grown
+            // request-accepted never terminals. Coverage uses the
+            // authoritative final quantity, since fills may have grown
             // past the stale machine qty. No authoritative qty -> unproven ->
             // repair.
             if (obs.cancel_confirmed) {
@@ -848,7 +848,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             // merely accepted request (204) is not final: keep confirming.
             // Silence (responded, no flag) means not yet observed: re-check,
             // since UNKNOWN needs a positive failure. Freeze new orders for the
-            // symbol; reconcile per S2 with protection first.
+            // symbol; reconcile per reconcile with protection first.
             if (obs.cancel_failed) {
                 o.action = RouteAction::JOURNAL_UNKNOWN;
                 o.next.state = RouteState::UNKNOWN_FROZEN;
@@ -874,7 +874,7 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
             return ExitAckStep(o, m, intent, venue, obs.exit_ack);
         }
         case RouteState::EXIT_EMERGENCY: {
-            // Emergency exception (doc 06 6.1): the journal write failed, so
+            // Emergency exception: the journal write failed, so
             // execution came first. Only the ordering changes: the exit runs the
             // same accounting/reconcile machinery as EXIT_SENT (a partial/dead
             // emergency close keeps cumulative closed qty and manages the
@@ -921,14 +921,14 @@ RouteOut RouteStep(const RouteMachine& m, const OrderIntent& intent,
 }
 
 }  // namespace exec
-}  // namespace jev
+}  // namespace kernel
 
-namespace jev {
+namespace kernel {
 namespace exec {
 
 namespace {
 // Fixed snapshot:
-// "H1:<st>:<kd>:<filled>:<emg>:<pok>:<att>:<cid>:<bid>:
+// "RM:<st>:<kd>:<filled>:<emg>:<pok>:<att>:<cid>:<bid>:
 //     <intent>:<sym>:<side>:<evid>:<evseq>:<xatt>:<eclosed>:<ecounted>"
 // client id lowercase-hex-or-empty; broker id venue UUID or empty; att =
 // persisted retry budget (0..kQueryMaxAttempts); intent = original intent_id
@@ -1022,7 +1022,7 @@ bool SnapshotMachine(const RouteMachine& m, char* out, std::size_t n) {
         m.exit_counted_qty < 0 || m.exit_counted_qty > 999999999)
         return false;
     int w = std::snprintf(
-        out, n, "H1:%d:%d:%lld:%d:%d:%d:%s:%s:%s:%s:%d:%s:%llu:%d:%lld:%lld",
+        out, n, "RM:%d:%d:%lld:%d:%d:%d:%s:%s:%s:%s:%d:%s:%llu:%d:%lld:%lld",
         st, kd, (long long)m.filled_qty, m.emergency ? 1 : 0,
         m.protection_ok ? 1 : 0, m.query_attempts, cid, bid, iid, sym,
         (m.side == broker::OrderSide::SELL) ? 1 : 0, evid,
@@ -1033,7 +1033,7 @@ bool SnapshotMachine(const RouteMachine& m, char* out, std::size_t n) {
 
 bool RestoreMachine(const char* s, RouteMachine* out) {
     if (!s || !out) return false;
-    if (s[0] != 'H' || s[1] != '1' || s[2] != ':') return false;
+    if (s[0] != 'R' || s[1] != 'M' || s[2] != ':') return false;
     const char* p = s + 3;
     // state
     long st = 0;
@@ -1166,4 +1166,4 @@ bool RestoreMachine(const char* s, RouteMachine* out) {
 }
 
 }  // namespace exec
-}  // namespace jev
+}  // namespace kernel

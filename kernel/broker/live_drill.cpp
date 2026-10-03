@@ -1,5 +1,5 @@
 // Live paper drill (needs an open session and ALPACA_KEY_ID / ALPACA_SECRET):
-// one SPY share bought with an OTO stop, then the exit orders K5 needs to know
+// one SPY share bought with an OTO stop, then the exit orders the router needs to know
 // about are tried against the resting stop, and the account is flattened.
 // Paper host only; never run against anything else. Prints one line per
 // finding; exits 1 if it could not restore a flat SPY position.
@@ -11,12 +11,12 @@
 
 #include <unistd.h>
 
-#include "../jev_wire.hpp"
+#include "../wire.hpp"
 #include "alpaca_paper.hpp"
 #include "http_curl.hpp"
 #include "ws_stream.hpp"
 
-using namespace jev::broker;
+using namespace kernel::broker;
 
 static bool Rest(const char* m, const std::string& path, int* st, std::string* body) {
     return CurlRest(m, path, "", st, body);
@@ -80,7 +80,7 @@ int main() {
     AlpacaPaperAdapter ad(CurlTransport);
     std::string seed = "drill|" + std::to_string(std::time(nullptr)) + "|" +
                        std::to_string(getpid());
-    std::string cid = jev::Sha256Hex(seed);
+    std::string cid = kernel::Sha256Hex(seed);
     ProtectedOrder o{};
     std::strcpy(o.symbol, "SPY");
     o.side = OrderSide::BUY;
@@ -103,12 +103,12 @@ int main() {
 
     if (qty == 1) {
         // Does the venue accept exit orders while the stop leg reserves the share?
-        std::string c2 = jev::Sha256Hex(seed + "|moc");
+        std::string c2 = kernel::Sha256Hex(seed + "|moc");
         CloseResult moc = ad.CloseAtClose("SPY", 1, OrderSide::SELL, c2.c_str());
         std::printf("moc_sell_with_live_stop transport_ok=%d state=%d id=%d\n",
                     moc.transport_ok, (int)moc.state, moc.broker_order_id[0] != 0);
         if (moc.broker_order_id[0]) ad.Cancel(moc.broker_order_id);
-        std::string c3 = jev::Sha256Hex(seed + "|mkt");
+        std::string c3 = kernel::Sha256Hex(seed + "|mkt");
         CloseResult mk = ad.MarketClose("SPY", 1, OrderSide::SELL, c3.c_str());
         std::printf("market_sell_with_live_stop transport_ok=%d state=%d id=%d\n",
                     mk.transport_ok, (int)mk.state, mk.broker_order_id[0] != 0);

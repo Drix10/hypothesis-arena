@@ -1,8 +1,8 @@
-// Paper loop entry (needs a G0_WITH_CURL build). The operator supplies, in
-// <dir>: STAGE (human-signed), approved.json (sleeves + allowlist) and the
+// Paper loop entry (needs a WITH_CURL build). The operator supplies, in
+// <dir>: STAGE (human-signed), approved.json (strategies + allowlist) and the
 // exchange calendar path. Runs against the Alpaca paper host only.
 //
-//   g0_paper_loop <dir> <calendar.json> [--ticks N] [--interval-s S]
+//   paper_loop <dir> <calendar.json> [--ticks N] [--interval-s S]
 //
 // Exit: 0 clean, 2 refused to start, 3 HARD stop.
 #include <chrono>
@@ -40,7 +40,7 @@ long long MonoNs(void*) {
 
 int main(int argc, char** argv) {
     if (argc < 3) {
-        std::printf("usage: g0_paper_loop <dir> <calendar.json> [--ticks N] "
+        std::printf("usage: paper_loop <dir> <calendar.json> [--ticks N] "
                     "[--interval-s S]\n");
         return 2;
     }
@@ -56,69 +56,69 @@ int main(int argc, char** argv) {
     }
     if (ticks < 0 || interval < 1) return 2;
 
-    jev::runner::LoopConfig lc;
+    kernel::runner::LoopConfig lc;
     lc.dir = argv[1];
     std::string text;
-    if (!jev::runner::ReadFile(lc.dir + "/approved.json", &text) ||
-        !jev::runner::ParseApproved(text, &lc.tables)) {
-        std::printf("g0_paper_loop: refused: approved.json missing or invalid\n");
+    if (!kernel::runner::ReadFile(lc.dir + "/approved.json", &text) ||
+        !kernel::runner::ParseApproved(text, &lc.tables)) {
+        std::printf("paper_loop: refused: approved.json missing or invalid\n");
         return 2;
     }
-    if (!jev::runner::ReadFile(argv[2], &text) ||
-        !jev::runner::ParseCalendar(text, &lc.holidays)) {
-        std::printf("g0_paper_loop: refused: calendar missing or invalid\n");
+    if (!kernel::runner::ReadFile(argv[2], &text) ||
+        !kernel::runner::ParseCalendar(text, &lc.holidays)) {
+        std::printf("paper_loop: refused: calendar missing or invalid\n");
         return 2;
     }
-    if (!jev::runner::ParseEarlyCloses(text, &lc.early_closes)) {
-        std::printf("g0_paper_loop: refused: calendar early_close invalid\n");
+    if (!kernel::runner::ParseEarlyCloses(text, &lc.early_closes)) {
+        std::printf("paper_loop: refused: calendar early_close invalid\n");
         return 2;
     }
 
-    jev::runner::RunnerConfig cfg;
+    kernel::runner::RunnerConfig cfg;
     cfg.dir = lc.dir;
     std::strncpy(cfg.venue.broker, "alpaca-paper", 31);
     std::strncpy(cfg.venue.account, "g0-paper", 31);
     std::strncpy(cfg.venue.context_hash, "GENESIS-NO-SNAPSHOT-CONTEXT", 64);
     cfg.venue.context_hash[64] = '\0';
-    jev::runner::RunnerDeps deps;
-    jev::runner::KillFeed kill_feed;
-    deps.kill_inputs = jev::runner::KillFeedInputs;
+    kernel::runner::RunnerDeps deps;
+    kernel::runner::KillFeed kill_feed;
+    deps.kill_inputs = kernel::runner::KillFeedInputs;
     deps.kill_ctx = &kill_feed;
     lc.kill_feed = &kill_feed;
-    deps.transport = jev::broker::CurlTransport;
+    deps.transport = kernel::broker::CurlTransport;
     deps.now_ns = WallNs;
     deps.mono_ns = MonoNs;
     deps.sleep_ms = [](void*, int ms) { usleep((useconds_t)ms * 1000); };
     deps.restart_flag = true;
-    jev::broker::TradeStream stream;
-    deps.stream_read = jev::broker::TradeStream::Thunk;
+    kernel::broker::TradeStream stream;
+    deps.stream_read = kernel::broker::TradeStream::Thunk;
     deps.stream_ctx = &stream;
     deps.stream_endpoint = "alpaca-paper-trade-updates";
-    jev::runner::G0Runner runner(cfg, deps);
+    kernel::runner::PaperRunner runner(cfg, deps);
     const char* why = nullptr;
     if (!runner.Recover(&why)) {
-        std::printf("g0_paper_loop: refused: %s\n", why ? why : "?");
+        std::printf("paper_loop: refused: %s\n", why ? why : "?");
         return 2;
     }
 
-    jev::runner::LoopIO io;
+    kernel::runner::LoopIO io;
     io.rest = [](const char* m, const std::string& path, int* status,
                  std::string* body) {
-        return jev::broker::CurlRest(m, path, "", status, body);
+        return kernel::broker::CurlRest(m, path, "", status, body);
     };
     io.data = [](const std::string& path, std::string* body) {
-        return jev::broker::CurlData(path, body);
+        return kernel::broker::CurlData(path, body);
     };
     {   // Advisory credential probe. Never fatal: an outage or bad key must
         // leave the loop running fail-safe (account_ok=0 -> no orders, alerts).
         int st = 0;
         std::string body;
         if (!io.rest("GET", "/v2/account", &st, &body) || st != 200)
-            std::printf("g0_paper_loop: warning: GET /v2/account status %d; "
+            std::printf("paper_loop: warning: GET /v2/account status %d; "
                         "no orders until the account is readable (check the "
                         "Alpaca paper keys)\n", st);
     }
-    jev::runner::PaperLoop loop(runner, io, lc);
+    kernel::runner::PaperLoop loop(runner, io, lc);
     int bad_ticks = 0;
     std::signal(SIGPIPE, SIG_IGN);
     std::signal(SIGTERM, OnStop);
@@ -126,7 +126,7 @@ int main(int argc, char** argv) {
     std::signal(SIGHUP, OnStop);
     for (long long i = 0; !g_stop && (ticks == 0 || i < ticks); ++i) {
         if (!loop.Tick(WallNs(nullptr))) {
-            std::printf("g0_paper_loop: HARD stop\n");
+            std::printf("paper_loop: HARD stop\n");
             return 3;
         }
         const auto& st = loop.stats();
@@ -136,7 +136,7 @@ int main(int argc, char** argv) {
         if (st.account_ok) {
             bad_ticks = 0;
         } else if (++bad_ticks == 5) {
-            jev::runner::Alert((lc.dir + "/alerts.jsonl").c_str(), "MEDIUM",
+            kernel::runner::Alert((lc.dir + "/alerts.jsonl").c_str(), "MEDIUM",
                                "account-unavailable",
                                "5 consecutive ticks without account data",
                                WallNs(nullptr));
@@ -146,6 +146,6 @@ int main(int argc, char** argv) {
             sleep(1);
         }
     }
-    if (g_stop) std::printf("g0_paper_loop: stopped by signal\n");
+    if (g_stop) std::printf("paper_loop: stopped by signal\n");
     return 0;
 }

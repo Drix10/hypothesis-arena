@@ -2,15 +2,15 @@
 // Alpaca adapter methods, which fail closed without one).
 #include "adapter.hpp"
 
-#include "../jev_wire.hpp"  // Sha256Hex (cycle path only)
+#include "../wire.hpp"  // Sha256Hex (cycle path only)
 
-namespace jev {
+namespace kernel {
 namespace broker {
 
 namespace {
 // Length-bounded append for the id recipe: a full-width unterminated field
 // truncates instead of reading stack garbage into the identity (ids must be
-// stable across restarts for pre-flight dedupe, doc 06 6.1b).
+// stable across restarts for pre-flight dedupe).
 void AppendCapped(std::string& out, const char* s,
                   std::size_t cap) {
     if (!s) return;
@@ -54,7 +54,7 @@ bool MakeClientOrderId(const char* broker, const char* account,
     joined += (side == OrderSide::BUY) ? "BUY" : "SELL";
     joined += '\x1f';
     AppendCapped(joined, intent_id, 64);
-    std::string hex = jev::Sha256Hex(joined);
+    std::string hex = kernel::Sha256Hex(joined);
     if (hex.size() != 64) return false;
     for (int i = 0; i < 64; ++i) out65[i] = hex[i];
     out65[64] = '\0';
@@ -74,4 +74,4 @@ std::int64_t PaperFillPrice(OrderSide side, const Quote& q) {
 }
 
 }  // namespace broker
-}  // namespace jev
+}  // namespace kernel

@@ -1,6 +1,6 @@
 """WebSocket trade_updates client against a loopback mock (RFC 6455 subset).
 
-Drives test_ws_stream (built with G0_TEST_BASE) through the handshake, auth
+Drives test_ws_stream (built with TEST_BASE) through the handshake, auth
 refusal, fragmentation, pings, garbage, oversize frames and a dropped
 connection. Loopback only.
 
@@ -137,7 +137,7 @@ class Server:
 
 def run(binary, port, seconds):
     env = dict(os.environ, ALPACA_KEY_ID=KEY, ALPACA_SECRET=SECRET,
-               G0_TEST_WS_BASE="http://127.0.0.1:%d/stream" % port)
+               TEST_WS_BASE="http://127.0.0.1:%d/stream" % port)
     return subprocess.run([binary, "live", str(seconds)], env=env, capture_output=True,
                           text=True, timeout=60).stdout.strip()
 

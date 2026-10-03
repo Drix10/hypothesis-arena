@@ -6,7 +6,7 @@ read_bundle(). Builders produce canonical-JSON-ready dicts.
 """
 import json
 
-SCHEMA_VERSION = "f2"
+SCHEMA_VERSION = "1"
 MAX_FEATURES = 64
 
 # Bundle envelope keys (BUNDLE_REQUIRED + BUNDLE_OPTIONAL in ctx_read).

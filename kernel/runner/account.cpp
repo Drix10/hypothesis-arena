@@ -1,8 +1,8 @@
 #include "account.hpp"
 
-#include "../jev_wire.hpp"
+#include "../wire.hpp"
 
-namespace jev {
+namespace kernel {
 namespace runner {
 namespace {
 
@@ -165,4 +165,4 @@ bool ParseOpenOrders(const std::string& body, std::vector<OrderView>* out) {
 }
 
 }  // namespace runner
-}  // namespace jev
+}  // namespace kernel

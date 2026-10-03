@@ -2,9 +2,9 @@
 // never journals).
 #include "journal.hpp"
 
-#include "../jev_wire.hpp"  // Sha256Hex
+#include "../wire.hpp"  // Sha256Hex
 
-namespace jev {
+namespace kernel {
 namespace journal {
 
 namespace {
@@ -43,7 +43,7 @@ bool FormatRow(std::uint64_t seq, std::int64_t ts_ns, const char* kind,
                           kind, intent_id, payload_hash_hex,
                           prev_hash_hex);
     if (w <= 0 || w >= static_cast<int>(sizeof(body))) return false;
-    r.row_hash = jev::Sha256Hex(body);
+    r.row_hash = kernel::Sha256Hex(body);
     *out = r;
     return true;
 }
@@ -105,4 +105,4 @@ bool RedactionOk(const char* body) {
 }
 
 }  // namespace journal
-}  // namespace jev
+}  // namespace kernel

@@ -8,7 +8,7 @@ records, heartbeats or logs.
 
 Observations are day-granularity, so observed_at_ns is date midnight flagged
 observed_at_estimated (context-only. Missing "." values are
-dropped and counted. Emits raw records; f2 classification is downstream.
+dropped and counted. Emits raw records; feature classification is downstream.
 Pace 1 req/s, 3 retries with jittered backoff, a 429 halves the rate once
 per episode. Transport, clock, sleep and jitter are injected.
 """

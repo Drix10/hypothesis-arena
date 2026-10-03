@@ -586,7 +586,7 @@ class TestSourceSeam(unittest.TestCase):
         _bid, good_path = emit_mod.emit_bundle(outdir, 7, [], wm,
                                                good_hist)
         # Orphan: valid shape + real hash, but NO manifest row.
-        orphan = {"schema_version": "f2", "research_epoch": 98,
+        orphan = {"schema_version": "1", "research_epoch": 98,
                   "bundle_id": "rp-98-" + "b" * 64, "commit": True,
                   "watermarks": wm, "features": [],
                   "history": {"treasury_auctions": [

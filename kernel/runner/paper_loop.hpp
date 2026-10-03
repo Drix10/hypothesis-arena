@@ -14,7 +14,7 @@
 #include "runner.hpp"
 #include "settle.hpp"
 
-namespace jev {
+namespace kernel {
 namespace runner {
 
 struct LoopIO {
@@ -45,7 +45,7 @@ struct LoopConfig {
     KillFeed* kill_feed = nullptr;  // optional; null = no drawdown kill wiring
     std::set<int64_t> holidays;
     std::set<int64_t> early_closes;  // 13:00 ET closes (optional)
-    ingest::CandidateTables tables;  // approved sleeves + allowlist
+    ingest::CandidateTables tables;  // approved strategies + allowlist
     int64_t risk_bp = 25;
     std::string feed = "iex";
 };
@@ -57,7 +57,7 @@ struct LoopStats {
 
 class PaperLoop {
    public:
-    PaperLoop(G0Runner& runner, LoopIO io, LoopConfig cfg);
+    PaperLoop(PaperRunner& runner, LoopIO io, LoopConfig cfg);
     // One pass: read the account, process new candidate lines, cycle the
     // runner. Returns the runner's Cycle result (false = HARD stop).
     bool Tick(int64_t now_ns);
@@ -70,7 +70,7 @@ class PaperLoop {
     std::map<std::string, int64_t> inflight_;  // symbol -> entry ref cents
     std::set<std::string> warned_;             // unprotected-position alerts sent
     std::set<std::string> booked_;             // cids with proceeds booked
-    G0Runner& runner_;
+    PaperRunner& runner_;
     LoopIO io_;
     LoopConfig cfg_;
     LoopStats stats_;
@@ -80,4 +80,4 @@ class PaperLoop {
 };
 
 }  // namespace runner
-}  // namespace jev
+}  // namespace kernel

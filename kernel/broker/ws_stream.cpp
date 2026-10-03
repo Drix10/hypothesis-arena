@@ -10,9 +10,9 @@
 #include <cstring>
 #include <random>
 
-#include "../jev_wire.hpp"
+#include "../wire.hpp"
 
-namespace jev {
+namespace kernel {
 namespace broker {
 namespace {
 
@@ -196,9 +196,9 @@ bool TradeStream::Connect() {
     h_ = curl_easy_init();
     if (!h_) return false;
     std::string url = "https://paper-api.alpaca.markets/stream";
-#ifdef G0_TEST_BASE
+#ifdef TEST_BASE
     // The test build never reaches the real host: no mock URL, no stream.
-    const char* tb = std::getenv("G0_TEST_WS_BASE");
+    const char* tb = std::getenv("TEST_WS_BASE");
     if (!tb) {
         curl_easy_cleanup(h_);
         h_ = nullptr;
@@ -415,4 +415,4 @@ int TradeStream::Read(char* buf, int n) {
 }
 
 }  // namespace broker
-}  // namespace jev
+}  // namespace kernel

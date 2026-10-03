@@ -1,9 +1,9 @@
-// Position sizing (doc 03 3.3): risk budget first, then every cap, take the
+// Position sizing: risk budget first, then every cap, take the
 // minimum. Pure integer arithmetic; conviction never enters.
 #pragma once
 #include <cstdint>
 
-namespace jev {
+namespace kernel {
 namespace risk {
 
 struct SizingInput {
@@ -26,4 +26,4 @@ struct Sizing {
 Sizing ComputeSize(const SizingInput& in);
 
 }  // namespace risk
-}  // namespace jev
+}  // namespace kernel

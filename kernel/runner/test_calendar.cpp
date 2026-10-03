@@ -12,7 +12,7 @@ static int fails = 0, count = 0;
         }                              \
     } while (0)
 
-using namespace jev::runner;
+using namespace kernel::runner;
 
 static int64_t Utc(int y, unsigned m, unsigned d, int h, int mi = 0) {
     return DaysFromCivil(y, m, d) * 86400 + h * 3600 + mi * 60;

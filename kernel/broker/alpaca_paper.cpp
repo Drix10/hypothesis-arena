@@ -8,7 +8,7 @@
 
 #include <cstring>
 
-namespace jev {
+namespace kernel {
 namespace broker {
 
 namespace {
@@ -107,14 +107,14 @@ std::int64_t StrictQty(const char* body) {
     }
     return -1;  // field absent
 }
-// Normalized order-status classifier (P1-1): maps the venue status onto the
+// Normalized order-status classifier: maps the venue status onto the
 // close lifecycle for EXIT reconciliation (replaced/done_for_day/suspended
 // etc. are not collapsed into generic found+qty). Order statuses are
 // "filled" / "partially_filled"; bare "fill" and "partial_fill" are
 // trade-event names -> UNKNOWN.
 CloseState ClassifyStatus(const char* st) {
     if (!st || !st[0]) return CloseState::UNKNOWN;
-    // Quarantine override first (doc 06): these words never route as their
+    // Quarantine override first: these words never route as their
     // table state, in either direction: not DEAD (a resumed order or a live
     // replacement id would meet a duplicate close) and not PENDING-forever
     // (calculated is done-for-today). UNKNOWN waits: reconcile, never mint.
@@ -141,7 +141,7 @@ CloseState ClassifyStatus(const char* st) {
     //   order_replace_rejected / order_cancel_rejected -> PENDING (the order
     //   survives the rejected request);
     //   done_for_day / calculated / replaced -> UNKNOWN (the quarantine set,
-    //   doc 06: may resume tomorrow / unknown replacement id may be live; the
+    //  : may resume tomorrow / unknown replacement id may be live; the
     //   runner freezes the symbol off status_raw on first sighting);
     //   canceled / expired / rejected -> DEAD (nothing live can duplicate
     //   them; the burned-id remainder path applies).
@@ -201,7 +201,7 @@ bool BracketHeld(const char* body) {
         return false;
     return Contains(body, "\"legs\":null");
 }
-// Strict legs proof (P1-4): protection is active only when the reply carries
+// Strict legs proof: protection is active only when the reply carries
 // a "legs" array of exactly 2 top-level leg objects, each with its own
 // distinct non-empty "id", exactly one TP-shaped ("type":"limit") and
 // exactly one SL-shaped ("type":"stop" or "stop_limit"), and the order
@@ -494,7 +494,7 @@ OrderAck AlpacaPaperAdapter::SubmitProtected(
     req.path = "/v2/orders";
     req.body = body;
     HttpResult r = transport_(req);
-    // Classified outcomes (P1-7), never collapsed:
+    // Classified outcomes, never collapsed:
     //   400/422 shaped refusal -> authoritative_reject (terminal upstream)
     //   401 -> auth_failure (not a trade rejection; reconcile, then freeze)
     //   403 -> authoritative_reject (buying-power/forbidden: the order is
@@ -528,7 +528,7 @@ OrderAck AlpacaPaperAdapter::SubmitProtected(
     }
     ack.transport_ok = true;
     ack.accepted = true;
-    // The accepted POST returns the broker UUID (P0-3), which the router
+    // The accepted POST returns the broker UUID, which the router
     // persists before any cancel path. No id -> ambiguous (the query by
     // client ID resolves it).
     if (!ExtractQuoted(r.body, "id", ack.broker_order_id,
@@ -539,7 +539,7 @@ OrderAck AlpacaPaperAdapter::SubmitProtected(
                   sizeof(ack.reason));
         return ack;
     }
-    // POST filled quantity is strict (P0-1), same grammar as the query path.
+    // POST filled quantity is strict, same grammar as the query path.
     // Missing/malformed -> ambiguous (the reconcile query establishes fills;
     // a silent zero would route a filled order down the cancel path).
     std::int64_t pfq = StrictQty(r.body);
@@ -553,7 +553,7 @@ OrderAck AlpacaPaperAdapter::SubmitProtected(
     }
     ack.filled_qty = pfq;
     // Protection is accepted only when the reply proves every leg via the
-    // strict legs rule (P0-3).
+    // strict legs rule.
     ack.protection_accepted = ack.accepted && ShapeProtected(r.body);
     if (ack.accepted && !ack.protection_accepted)
         CopyField("protection-missing", ack.reason,
@@ -600,13 +600,13 @@ OrderQuery AlpacaPaperAdapter::QueryOnce(
         return q;
     }
     if (r.status < 200 || r.status >= 300) return q;
-    // UUID grammar is enforced on query too (P0-3): an unvalidated id never
+    // UUID grammar is enforced on query too: an unvalidated id never
     // reaches DELETE. Bad id -> unknown, not "absent".
     char oid[64] = {};
     if (!ExtractQuoted(r.body, "id", oid, sizeof(oid)) ||
         !IsBrokerUuid(oid))
         return q;
-    // filled_qty is required and strict (P1-6).
+    // filled_qty is required and strict.
     std::int64_t fq = StrictQty(r.body);
     if (fq < 0) return q;
     CopyField(oid, q.broker_order_id, sizeof(q.broker_order_id));
@@ -615,11 +615,11 @@ OrderQuery AlpacaPaperAdapter::QueryOnce(
     q.filled_qty = fq;
     q.cancelled = Contains(r.body, "\"canceled\"") ||
                   Contains(r.body, "\"cancelled\"");
-    // Normalized status for exit reconciliation (P1-1). Zero-init: fixed-offset
+    // Normalized status for exit reconciliation. Zero-init: fixed-offset
     // reads below must not touch indeterminate bytes on short statuses.
     char qs[32] = {};
     if (ExtractQuoted(r.body, "status", qs, sizeof(qs))) {
-        // Verbatim word for the runner quarantine (doc 06): the normalized
+        // Verbatim word for the runner quarantine: the normalized
         // state cannot tell done_for_day / calculated / replaced from DEAD.
         CopyField(qs, q.status_raw, sizeof(q.status_raw));
         q.close_state = ClassifyStatus(qs);
@@ -634,7 +634,7 @@ CancelResult AlpacaPaperAdapter::Cancel(
     CancelResult c;
     if (!transport_ || !broker_order_id || !broker_order_id[0])
         return c;
-    // Boundary validation (P1-2): malformed or path-like IDs never touch the
+    // Boundary validation: malformed or path-like IDs never touch the
     // transport.
     if (!IsBrokerUuid(broker_order_id)) return c;
     // Cancel: DELETE by broker UUID (from the single QueryOnce lookup; the
@@ -648,7 +648,7 @@ CancelResult AlpacaPaperAdapter::Cancel(
     req.path = path;
     req.body = "";
     HttpResult r = transport_(req);
-    // 204 = cancel request accepted (P1-8); terminal needs an explicit
+    // 204 = cancel request accepted; terminal needs an explicit
     // final-canceled observation. Other 2xx need the id marker. Explicit 422 =
     // refused (failed). Anything else: neither (caller re-checks).
     if (r.status == 204) {
@@ -687,7 +687,7 @@ CloseResult AlpacaPaperAdapter::PostClose(const char* symbol,
     if (!transport_ || !symbol || !symbol[0] || qty_shares <= 0 ||
         !client_order_id || !client_order_id[0])
         return c;
-    // Exit carries the machine's stable client identity (P0-5): an ambiguous
+    // Exit carries the machine's stable client identity: an ambiguous
     // close reconciles by this ID, never re-sends blind.
     char body[640];
     int w = std::snprintf(
@@ -703,7 +703,7 @@ CloseResult AlpacaPaperAdapter::PostClose(const char* symbol,
     req.path = "/v2/orders";
     req.body = body;
     HttpResult r = transport_(req);
-    // Close lifecycle (P0-2): 2xx + UUID only proves the close order exists.
+    // Close lifecycle: 2xx + UUID only proves the close order exists.
     // fill -> executed (full); partial -> reconcile remainder; pending ->
     // wait (never CLOSED); dead -> definitive non-execution; anything else or
     // malformed qty -> unknown.
@@ -848,4 +848,4 @@ bool AlpacaPaperAdapter::EstablishProtection(
 }
 
 }  // namespace broker
-}  // namespace jev
+}  // namespace kernel

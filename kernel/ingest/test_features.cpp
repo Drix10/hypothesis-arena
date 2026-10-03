@@ -1,13 +1,13 @@
-// P3.5 Slice C — ingest suite (§4.5 rejection tests + f2 boundaries).
-// Reasons mirror P1.5 check_feature verbatim where the check is Slice-C
-// owned; DB/entity/history/session steps belong to Slice G (documented
-// in features.hpp, never asserted here).
+// Feature ingest suite: rejection tests and boundaries. Reasons mirror
+// ctx_read.py check_feature verbatim where the check is owned here; the
+// DB, entity, history and session steps are documented in features.hpp and
+// never asserted here.
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
 
-#include "../jev_wire.hpp"
+#include "../wire.hpp"
 #include "features.hpp"
 
 static int fails = 0;
@@ -21,10 +21,10 @@ static int count = 0;
         }                                                     \
     } while (0)
 
-using namespace jev;
-using namespace jev::ingest;
+using namespace kernel;
+using namespace kernel::ingest;
 
-// Frozen clock: snapshot 1.8e18 ns (~2027-01), observed 100 s earlier.
+// fixed clock: snapshot 1.8e18 ns (~2027-01), observed 100 s earlier.
 static const int64_t SNAP = 1800000000000000000LL;
 static const int64_t OBS = SNAP - 100LL * 1000000000LL;
 static const char* HEXA =
@@ -33,11 +33,11 @@ static const char* HEXB =
     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 // Canonical valid record (filing_event/source). %s hooks keep shape
-// tests to one-line mutations of this frozen base.
+// tests to one-line mutations of this fixed base.
 static std::string Base(int64_t obs_ns, int ttl_s) {
     char b[2048];
     snprintf(b, sizeof(b),
-             "{\"schema_version\":\"f2\",\"kind\":\"filing_event\","
+             "{\"schema_version\":\"1\",\"kind\":\"filing_event\","
              "\"symbols\":[\"AAPL\"],"
              "\"observed_at_ns\":%lld,\"ingested_at_ns\":%lld,"
              "\"ttl_s\":%d,"
@@ -54,7 +54,7 @@ static std::string Sub(std::string s, const std::string& from, const std::string
     if (at != std::string::npos) s.replace(at, from.size(), to);
     return s;
 }
-// Parse (frozen P3.1) + canonicalize (frozen P3.2) + ingest. Parse is
+// Parse + canonicalize + ingest. Parse is
 // caller-side by contract; a parse failure here is a broken test.
 static IngestOutcome Feed(IngestState& st, const std::string& json,
                           int64_t snap) {
@@ -95,7 +95,7 @@ int main() {
         CHECK("capped-retained", PayloadSlot(st, 0).context_only == false &&
                                      PayloadSlot(st, 1).context_only == true);
     }
-    // ---- §4.5: bad schema (non-object), future, expired, over-count,
+    // ----: bad schema (non-object), future, expired, over-count,
     // ---- float-where-enum ----
     {
         static IngestState st;
@@ -108,7 +108,7 @@ int main() {
         CHECK("future", Reason(o) == "future-timestamp");
         o = Feed(st, Base(SNAP, 3600), SNAP);  // observed == snapshot: fresh
         CHECK("observed-eq-snap", Accepted(o));
-        // TTL boundary: age == ttl is fresh (P1.5: strictly greater
+        // TTL boundary: age == ttl is fresh (ctx_read.py: strictly greater
         // expires); age == ttl + 1 ns expires.
         int64_t obs = SNAP - 3600LL * 1000000000LL;
         o = Feed(st, Base(obs, 3600), SNAP);
@@ -143,11 +143,11 @@ int main() {
         CHECK("unknown-sorted", Reason(o) == "unknown-field:aa");
         o = Feed(st, Sub(base, ",\"effect\":\"bullish\"", ""), SNAP);
         CHECK("missing", Reason(o) == "schema-missing:effect");
-        o = Feed(st, Sub(base, "\"schema_version\":\"f2\"",
+        o = Feed(st, Sub(base, "\"schema_version\":\"1\"",
                          "\"schema_version\":\"f3\""),
                  SNAP);
         CHECK("version", Reason(o) == "schema-version");
-        o = Feed(st, Sub(base, "\"schema_version\":\"f2\"",
+        o = Feed(st, Sub(base, "\"schema_version\":\"1\"",
                          "\"schema_version\":2"),
                  SNAP);
         CHECK("version-type", Reason(o) == "schema-version");
@@ -167,7 +167,7 @@ int main() {
         o = Feed(st, Sub(base, "\"kind\":\"filing_event\"", "\"kind\":\"bogus\""),
                  SNAP);
         CHECK("enum", Reason(o) == "schema-enum");
-        // osint/sentiment/regime have no frozen emitter: never admitted
+        // osint/sentiment/regime have no fixed emitter: never admitted
         // on structure alone, even from a known source.
         o = Feed(st, Sub(base, "\"kind\":\"filing_event\"",
                          "\"kind\":\"osint_event\""),
@@ -182,7 +182,7 @@ int main() {
                              "\"source_id\":\"fed_monetary\""),
                          "\"kind\":\"filing_event\"",
                          "\"kind\":\"macro_release\""), SNAP);
-        // symbols AAPL are shape-checked here only (binding is Slice G).
+        // symbols AAPL are shape-checked here only (binding is ).
         CHECK("emitter-ok", Accepted(o));
     }
     // ---- value shapes ----
@@ -202,7 +202,7 @@ int main() {
                          "\"type\":\"bool\",\"v\":\"true\""),
                  SNAP);
         CHECK("value-str-for-bool", Reason(o) == "value-shape");
-        // Multi-defect precedence (P1.5 order: unknown type beats key
+        // Multi-defect precedence (ctx_read.py order: unknown type beats key
         // count): unknown type + extra key is schema-value, not
         // value-shape; unknown type + missing v is schema-value too.
         o = Feed(st, Sub(base, "\"type\":\"enum\",\"v\":\"8-K:item-2.02\"",
@@ -261,7 +261,7 @@ int main() {
         CHECK("observed-neg", Reason(o) == "observed-range");
         o = Feed(st, Sub(base, std::to_string(OBS), "9223372036854775808"),
                  SNAP);
-        CHECK("observed-huge", Reason(o) == "observed-type");  // deliberate: unrepresentable-as-int64 (P1.5 says range; C++ has no such value)
+        CHECK("observed-huge", Reason(o) == "observed-type");  // deliberate: unrepresentable-as-int64
         o = Feed(st, Sub(base, "\"ttl_s\":3600", "\"ttl_s\":0"), SNAP);
         CHECK("ttl-zero", Reason(o) == "ttl-type");
         o = Feed(st, Sub(base, "\"ttl_s\":3600", "\"ttl_s\":604801"), SNAP);
@@ -283,7 +283,7 @@ int main() {
         CHECK("hash-short", Reason(o) == "hash-format");
         // multi-hash combine: sha256 over sorted pair pinned at authoring.
         // (replace the hash FIELD: appending would duplicate the key and
-        // the frozen parser rejects dup keys before validation runs.)
+        // the fixed parser rejects dup keys before validation runs.)
         std::string hashfield = std::string("\"canonical_hash\":\"") + HEXA + "\"";
         std::string multi = std::string("\"canonical_hashes\":[\"") + HEXB +
             "\",\"" + HEXA +
@@ -331,7 +331,7 @@ int main() {
         o = Feed(st, Sub(base, "\"feature_id\":\"f1\"",
                          "\"feature_id\":\"f1\",\"entity_ref\":{\"cik\":\"123\"}"),
                  SNAP);
-        CHECK("entity-ref-ok", Accepted(o));  // resolution is Slice G
+        CHECK("entity-ref-ok", Accepted(o));  // resolution is
         o = Feed(st, Sub(base, "\"feature_id\":\"f1\"", "\"feature_id\":\"\""),
                  SNAP);
         CHECK("feature-id-empty", Reason(o) == "feature-id-shape");

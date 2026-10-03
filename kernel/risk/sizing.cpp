@@ -1,6 +1,6 @@
 #include "sizing.hpp"
 
-namespace jev {
+namespace kernel {
 namespace risk {
 
 Sizing ComputeSize(const SizingInput& in) {
@@ -38,4 +38,4 @@ Sizing ComputeSize(const SizingInput& in) {
 }
 
 }  // namespace risk
-}  // namespace jev
+}  // namespace kernel

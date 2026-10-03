@@ -1,4 +1,4 @@
 {
-  "sleeves": [{"id": "passive_core", "window_s": 86400}],
+  "strategies": [{"id": "passive_core", "window_s": 86400}],
   "allowlist": ["VTI", "IEF", "BIL", "SPY", "QQQ", "IWM", "VEU", "VNQ", "DBC"]
 }

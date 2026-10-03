@@ -10,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 repo="$(pwd)"
 build="$HOME/ha"
-loop_bin="$build/kernel/g0_paper_loop"
+loop_bin="$build/kernel/paper_loop"
 
 if [ "${1:-}" = stop ]; then
     pkill -f "^$loop_bin " || true
@@ -23,7 +23,7 @@ resume=0; [ "${2:-}" = --resume ] && resume=1
 
 case "$dir" in /mnt/*) echo "keep the loop directory on the Linux filesystem (for example ~/g2), not $dir" >&2; exit 2;; esac
 if pgrep -f "^$loop_bin " >/dev/null; then
-    echo "a g0_paper_loop is already running. Stop it first: bash ops/deploy/start.sh stop" >&2; exit 2
+    echo "a paper_loop is already running. Stop it first: bash ops/deploy/start.sh stop" >&2; exit 2
 fi
 if [ -f "$dir/journal.jsonl" ] && [ "$resume" = 0 ]; then
     echo "$dir already holds a journal. Use a fresh directory (bash ops/deploy/start.sh ~/g3)," >&2
@@ -72,7 +72,7 @@ if ! (cd "$build/kernel" && WITH_CURL=1 bash build.sh) >"$dir/logs/build.log" 2>
     tail -30 "$dir/logs/build.log" >&2; echo "build failed, see $dir/logs/build.log" >&2; exit 3
 fi
 tail -2 "$dir/logs/build.log"
-[ -x "$loop_bin" ] || { echo "build produced no g0_paper_loop" >&2; exit 3; }
+[ -x "$loop_bin" ] || { echo "build produced no paper_loop" >&2; exit 3; }
 
 echo "== waiting for the US session, then emitting candidates =="
 while true; do

@@ -24,6 +24,6 @@ def build(bars, held, month, emitted, now_ns):
         entry = cl[-1]
         stop = W.atr_stop(hi, lo, cl)
         lines.append(W.wire_line(STRATEGY, sym, now_ns, entry, stop,
-                                 entry * TP_MULT, family="core"))
+                                 entry * TP_MULT))
         keys.append(key)
     return lines, keys

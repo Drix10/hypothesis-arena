@@ -4,7 +4,7 @@
 
 #include "../risk/sizing.hpp"
 
-namespace jev {
+namespace kernel {
 namespace exec {
 namespace {
 
@@ -22,21 +22,18 @@ void Copy(char* dst, size_t cap, const std::string& s) {
     dst[cap - 1] = '\0';
 }
 
-// Exit profile -> protection shape (doc 06 6.0 table). Trend and the plain
-// profile use a GTC bracket (kept until the live drill settles how a resting
-// stop and a sell interact: an exit must cancel the legs first); intraday
-// and event profiles are stop-only. Unknown profiles are refused.
-bool ProtectionFor(const std::string& profile, broker::Protection* p,
-                   bool* gtc) {
+// Exit rule -> protection shape. The trend rule uses a GTC bracket (kept until
+// the live drill settles how a resting stop and a sell interact: an exit must
+// cancel the legs first); the link and event rules are stop-only. Unknown
+// rules are refused.
+bool ProtectionFor(const std::string& rule, broker::Protection* p, bool* gtc) {
     *gtc = false;
-    if (profile == "exit_profile_v1" || profile == "exit_trend_v1") {
+    if (rule == "exit_trend") {
         // Multi-day holds: day legs would expire at the close and leave the
         // position without a stop overnight.
         *p = broker::Protection::BRACKET;
         *gtc = true;
-    } else if (profile == "exit_intraday_v1") {
-        *p = broker::Protection::OTO_STOP;
-    } else if (profile == "exit_event_v1") {
+    } else if (rule == "exit_link" || rule == "exit_event") {
         *p = broker::Protection::OTO_STOP;
         *gtc = true;
     } else {
@@ -57,7 +54,6 @@ EntryDecision Decide(const DecideInput& in) {
         if (it == in.held_qty.end() || it->second <= 0)
             return Hold("exit-no-position", c.cid, c.symbol);
         risk::RiskSnapshot x = in.state;
-        x.filter = risk::FilterPolicy::NONE;
         x.intent.kind = risk::IntentKind::EXIT;
         x.intent.symbol = c.symbol;
         x.intent.side = risk::Side::SHORT;  // a sell against a long
@@ -85,7 +81,6 @@ EntryDecision Decide(const DecideInput& in) {
     }
 
     risk::RiskSnapshot s = in.state;
-    s.filter = risk::FilterPolicy::NONE;
     risk::StageScale st = risk::ScaleFor(s.stage);
     risk::SizingInput si;
     si.equity_cents = s.equity_cents;
@@ -118,13 +113,13 @@ EntryDecision Decide(const DecideInput& in) {
     risk::VetoVerdict v = risk::EvaluateVeto(s);
     if (!v.proceed) return Hold(v.reason, c.cid, c.symbol);
     // A drift-removal directive must be executed and reconciled before any
-    // new entry (veto.hpp H1 contract); until that path exists, hold.
+    // new entry (veto.hpp the router contract); until that path exists, hold.
     if (v.drift_idx >= 0) return Hold("r7-drift-directive-pending", c.cid, c.symbol);
 
     broker::Protection prot = broker::Protection::BRACKET;
     bool gtc = false;
-    if (!ProtectionFor(c.exit_profile, &prot, &gtc))
-        return Hold("cand-exit-profile", c.cid, c.symbol);
+    if (!ProtectionFor(c.exit_rule, &prot, &gtc))
+        return Hold("cand-exit-rule", c.cid, c.symbol);
 
     EntryDecision d;
     d.proceed = true;
@@ -149,4 +144,4 @@ EntryDecision Decide(const DecideInput& in) {
 }
 
 }  // namespace exec
-}  // namespace jev
+}  // namespace kernel
