@@ -56,13 +56,6 @@ variant 1). Exceeding it needs an operator-approved entry in the approvals log.
 
 ## Research track (critical path)
 
-- [ ] **Data coverage probe** (first, about a day). On a random sample of 300
-      firms that filed a 10-K in 2016-2018, measure (a) how many have Alpaca SIP
-      daily bars through their last trading day, including firms since delisted
-      or renamed, and (b) how many map from CIK to the ticker they traded under
-      at each date (`data.md`, CIK to ticker). If either falls below 95%, the
-      single-stock strategies meet the paid-data trigger now, before the link
-      graph is built.
 - [ ] **Shorts in the harness** (`research/strategy/`): the short side and margin
       ledger (Reg T, maintenance, borrow, no short rebate, short dividends,
       margin interest), the cost model's short terms (`math.md`), `constraint_set`

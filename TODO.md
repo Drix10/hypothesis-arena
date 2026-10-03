@@ -16,6 +16,11 @@ test output, or a report path).
   CPCV, PBO, DSR, MinTRL, bootstrap, HAC, spanning test), prereg validator,
   settlement simulation, benchmarks, gate reports. No short positions or margin
   ledger in the backtester, no decay monitors, no tranche portfolio.
+- Data coverage: measured (`research/strategy/coverage_probe.py`,
+  `research/reports/coverage_probe.json`). At a $500M cover public float, 97.3%
+  of 300 random 2016-2018 10-K filers map to a ticker with gap-free SIP bars; the
+  95% interval is about 94.8-98.6%, so no paid data yet. For 11% of them the
+  bars end before the filing-based end.
 - Event data: Form 4 reader with the routine-trade classifier, SUE from SEC
   statement sets, SEC financial-statement fetcher. No 10-K, 10-Q or 8-K corpus,
   no 13F parser, no point-in-time ticker map, no link graph, no event pipeline.
@@ -31,14 +36,13 @@ test output, or a report path).
 
 ## Next, in order
 
-1. Data coverage probe: it decides whether single-stock work needs paid data.
-2. Shorts in the harness: every US-set test needs it.
-3. ETF Trend test: the cheapest full pass through the harness.
-4. EDGAR corpus, then the deterministic link graph (text peers, 13F ownership).
-5. Link Momentum filings variant: prereg and backtest gate. This is the test the
+1. Shorts in the harness: every US-set test needs it.
+2. ETF Trend test: the cheapest full pass through the harness.
+3. EDGAR corpus, then the deterministic link graph (text peers, 13F ownership).
+4. Link Momentum filings variant: prereg and backtest gate. This is the test the
    fund's single-stock thesis stands on; a clear economic failure
    (`plan/validation.md`, Outcomes) stops new single-stock search.
-6. Everything else only after a deterministic test has shown signal.
+5. Everything else only after a deterministic test has shown signal.
 
 ## Codebase cleanup
 
@@ -60,11 +64,6 @@ Open:
 
 ## Research (critical path)
 
-- [ ] **Data coverage probe:** 300 firms with 10-Ks filed 2016-2018 (the free
-      feed starts in 2016); the share with Alpaca SIP bars through their last
-      trading day, and the share with a point-in-time CIK to ticker map
-      (`plan/data.md`). Below 95% on either triggers paid data now. Not started:
-      there is no probe script.
 - [ ] **Shorts in the harness:** short side and margin ledger, the cost model's
       short terms, `constraint_set` and `contamination_class` in the prereg
       validator, a whole-share book at the registered size, monthly tranches, the
@@ -92,6 +91,11 @@ Open:
       parser, a point-in-time CIK, ticker and former-name map, XBRL shares
       outstanding, a 13F holdings parser and Ken French factors. The financial
       statement sets and the Form 4 reader exist.
+  - [ ] A last-trading-day source for delisted firms (the coverage probe leaves
+        11% of eligible firms with an unverified end), so delisting returns
+        (`plan/math.md`, Point-in-time discipline) rest on a dated event.
+  - [ ] Add `test_coverage_probe` to the research gate in `ci.yml` and
+        `CONTEXT_MANIFEST.json` (protected paths; a human commits them).
 - [ ] **Link graph:** a bitemporal store; text peers and common ownership first
       (deterministic, dense); customer and supplier patterns with a precision
       audit (200 labeled filings, at least 0.9), knowing that 10-K disclosure

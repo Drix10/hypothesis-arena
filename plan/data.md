@@ -160,10 +160,16 @@ Data-quality rules:
   ticker. EDGAR's `company_tickers.json` is current only. The mapping at a
   past date comes from, in order: the XBRL cover-page `dei:TradingSymbol` of
   the latest filing before that date (reliable from 2019), the broker's
-  symbol-change corporate actions, and EDGAR former names matched to the
-  broker's asset list. A firm-date that none of them resolves is excluded and
-  counted like a missing price (the 5% rule). The data coverage probe
-  (`roadmap.md`) measures this first.
+  symbol-change corporate actions, Form 4 issuer symbols nearest that date,
+  and EDGAR former names matched to the broker's asset list. A firm-date that
+  none of them resolves is excluded and counted like a missing price (the 5%
+  rule). `research/strategy/coverage_probe.py` measures it. Of 300 random 10-K
+  filers of 2016-2018 with a cover public float of at least $500M, 97.3% map to
+  a ticker with gap-free SIP bars from the filing date (95% interval about
+  94.8-98.6%); of 300 filers of any size, 57%. The universe floor is therefore a
+  data requirement, and the single-stock paid-data trigger is not met at it.
+  For 11% of the eligible firms the bars end before the filing-based end, so a
+  last-trading-day source is needed for delisting returns.
 - **Survivorship.** The free feed may lack history for delisted symbols. Every
   run reports excluded-event counts; more than 5% excluded voids an event or
   single-stock run.
