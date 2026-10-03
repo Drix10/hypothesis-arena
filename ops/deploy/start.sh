@@ -10,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 repo="$(pwd)"
 build="$HOME/ha"
-loop_bin="$build/kernel/paper_loop"
+loop_bin="$build/kernel/build/paper_loop"
 
 if [ "${1:-}" = stop ]; then
     pkill -f "^$loop_bin " || true

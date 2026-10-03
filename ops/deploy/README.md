@@ -103,7 +103,7 @@ bash scripts/sign-stage.sh ~/g2
 Terminal 1, the loop (from `~/ha`):
 
 ```bash
-kernel/paper_loop ~/g2 ops/deploy/session_calendar.json --ticks 0 --interval-s 60
+kernel/build/paper_loop ~/g2 ops/deploy/session_calendar.json --ticks 0 --interval-s 60
 ```
 
 Terminal 2, the emitter, once per session day (US session, from the repo

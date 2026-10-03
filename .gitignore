@@ -22,17 +22,17 @@ venv/
 Thumbs.db
 *.sw?
 
-# C++ build outputs (kernel/build.sh writes binaries; sources are .cpp)
+# C++ build outputs (kernel/build.sh writes every binary under kernel/build/)
+kernel/build/
 *.exe
 *.o
 *.a
-kernel/test_*
-!kernel/test_*.cpp
-kernel/tests/test_*
-!kernel/tests/test_*.cpp
-kernel/g0_*
-kernel/smoke_paper
-kernel/live_drill
+
+# agent-flow local state (the committed runtime is .agent-flow-runtime/)
+.agent-flow/
+.worktrees/
+.agent-state.json
+AGENT_STATE.md
 
 # Lock files
 *.lock

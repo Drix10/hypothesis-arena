@@ -7,6 +7,8 @@
 set -e
 cd "$(dirname "$0")"
 MODE="${1:-normal}"
+OUT="build"
+mkdir -p "$OUT"
 # The permission-denied tests (chmod 000) cannot fail closed as root, so a
 # root run would be a false green. Refuse rather than skip.
 if [ "$(id -u)" = "0" ]; then
@@ -32,8 +34,8 @@ else
 fi
 
 # Risk veto: rule boundaries (plan/risk.md).
-g++ $FLAGS -o test_veto risk/test_veto.cpp risk/veto.cpp
-./test_veto
+g++ $FLAGS -o "$OUT/test_veto" risk/test_veto.cpp risk/veto.cpp
+"$OUT/test_veto"
 # The veto never reads model output, and EvaluateVeto allocates nothing:
 # heap vocabulary is forbidden in veto.cpp (inputs are built upstream of the
 # tick path; the verdict itself is fixed storage by static_assert in veto.hpp).
@@ -42,28 +44,28 @@ if grep -nE "std::string|std::vector|malloc|calloc|realloc|strdup|operator new" 
     exit 1
 fi
 # Ingest: rejection tests, boundaries, retention and the rate window.
-g++ $FLAGS -o test_features ingest/test_features.cpp ingest/features.cpp
-./test_features
-g++ $FLAGS -o test_candidates ingest/test_candidates.cpp ingest/candidates.cpp
-./test_candidates vectors
-g++ $FLAGS -o test_sizing risk/test_sizing.cpp risk/sizing.cpp
-./test_sizing
-g++ $FLAGS -o test_measure risk/test_measure.cpp risk/measure.cpp
-./test_measure
-g++ $FLAGS -o test_decide exec/test_decide.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp ingest/candidates.cpp
-./test_decide
-g++ $FLAGS -o test_moc_plan exec/test_moc_plan.cpp exec/moc_plan.cpp
-./test_moc_plan
-g++ $FLAGS -o test_account runner/test_account.cpp runner/account.cpp
-./test_account fixtures
-g++ $FLAGS -o test_settle runner/test_settle.cpp runner/settle.cpp runner/calendar.cpp
-./test_settle
-g++ $FLAGS -o test_calendar runner/test_calendar.cpp runner/calendar.cpp
-./test_calendar
-g++ $FLAGS -o test_bars runner/test_bars.cpp runner/bars.cpp runner/calendar.cpp
-./test_bars fixtures
-g++ $FLAGS -o test_approved runner/test_approved.cpp runner/approved.cpp runner/calendar.cpp
-./test_approved ..
+g++ $FLAGS -o "$OUT/test_features" ingest/test_features.cpp ingest/features.cpp
+"$OUT/test_features"
+g++ $FLAGS -o "$OUT/test_candidates" ingest/test_candidates.cpp ingest/candidates.cpp
+"$OUT/test_candidates" vectors
+g++ $FLAGS -o "$OUT/test_sizing" risk/test_sizing.cpp risk/sizing.cpp
+"$OUT/test_sizing"
+g++ $FLAGS -o "$OUT/test_measure" risk/test_measure.cpp risk/measure.cpp
+"$OUT/test_measure"
+g++ $FLAGS -o "$OUT/test_decide" exec/test_decide.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp ingest/candidates.cpp
+"$OUT/test_decide"
+g++ $FLAGS -o "$OUT/test_moc_plan" exec/test_moc_plan.cpp exec/moc_plan.cpp
+"$OUT/test_moc_plan"
+g++ $FLAGS -o "$OUT/test_account" runner/test_account.cpp runner/account.cpp
+"$OUT/test_account" fixtures
+g++ $FLAGS -o "$OUT/test_settle" runner/test_settle.cpp runner/settle.cpp runner/calendar.cpp
+"$OUT/test_settle"
+g++ $FLAGS -o "$OUT/test_calendar" runner/test_calendar.cpp runner/calendar.cpp
+"$OUT/test_calendar"
+g++ $FLAGS -o "$OUT/test_bars" runner/test_bars.cpp runner/bars.cpp runner/calendar.cpp
+"$OUT/test_bars" fixtures
+g++ $FLAGS -o "$OUT/test_approved" runner/test_approved.cpp runner/approved.cpp runner/calendar.cpp
+"$OUT/test_approved" ..
 # Ingest zero-malloc contract: validation and retention allocate nothing
 # (comments stripped: the discipline note names the forbidden tokens).
 # U8() and JVal::find are forbidden in the ingest path: both build key
@@ -77,63 +79,63 @@ fi
 # validation path must stay zero. Static libstdc++ so operator new resolves
 # to the wrapped malloc.
 if [ -z "${SANITIZE:-}" ]; then
-g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -o test_noalloc ingest/test_noalloc.cpp ingest/features.cpp
-./test_noalloc
+g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -o "$OUT/test_noalloc" ingest/test_noalloc.cpp ingest/features.cpp
+"$OUT/test_noalloc"
 fi
 # Kill switch: evaluation, entry gate, MEDIUM flatten state machine, HARD
 # ordered sequence and the persistence round trip.
-g++ $FLAGS -o test_kill kill/test_kill.cpp kill/switch.cpp
-./test_kill
+g++ $FLAGS -o "$OUT/test_kill" kill/test_kill.cpp kill/switch.cpp
+"$OUT/test_kill"
 # Kill zero-malloc contract: evaluation, state machine and persistence
 # allocate nothing (comments stripped: the discipline note names the tokens).
 if [ -z "${SANITIZE:-}" ]; then
-g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -o test_noalloc_kill kill/test_noalloc_kill.cpp kill/switch.cpp
-./test_noalloc_kill
+g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -o "$OUT/test_noalloc_kill" kill/test_noalloc_kill.cpp kill/switch.cpp
+"$OUT/test_noalloc_kill"
 fi
 # Router lifecycle, journal chain, broker recipe and Alpaca protected-entry
 # semantics: lifecycle-only router, journal before order.
-g++ $FLAGS -o test_router exec/test_router.cpp exec/router.cpp broker/adapter.cpp
-./test_router
-g++ $FLAGS -o test_journal log/test_journal.cpp log/journal.cpp
-./test_journal
-g++ $FLAGS -o test_broker broker/test_broker.cpp broker/adapter.cpp broker/alpaca_paper.cpp
-./test_broker
-g++ $FLAGS -o test_shapes broker/test_shapes.cpp broker/adapter.cpp broker/alpaca_paper.cpp
-./test_shapes fixtures
-g++ $FLAGS -o test_drills exec/test_drills.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
-./test_drills
+g++ $FLAGS -o "$OUT/test_router" exec/test_router.cpp exec/router.cpp broker/adapter.cpp
+"$OUT/test_router"
+g++ $FLAGS -o "$OUT/test_journal" log/test_journal.cpp log/journal.cpp
+"$OUT/test_journal"
+g++ $FLAGS -o "$OUT/test_broker" broker/test_broker.cpp broker/adapter.cpp broker/alpaca_paper.cpp
+"$OUT/test_broker"
+g++ $FLAGS -o "$OUT/test_shapes" broker/test_shapes.cpp broker/adapter.cpp broker/alpaca_paper.cpp
+"$OUT/test_shapes" fixtures
+g++ $FLAGS -o "$OUT/test_drills" exec/test_drills.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
+"$OUT/test_drills"
 # Runner integration: durable journal, snapshots, freeze file, STAGE file,
 # HALT, alerts, REST and stream reconcile, cadence, emergency buffer, kill
 # flatten and crash recovery. The runner is cycle-path (files, std::string and
 # std::vector allowed): the zero-malloc gates cover the decision core, not
 # durability. main.cpp compiles as the production entry (null transport means
 # fail closed).
-g++ $FLAGS -o test_runner runner/test_runner.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
-./test_runner
-g++ $FLAGS -o test_paper_loop runner/test_paper_loop.cpp runner/paper_loop.cpp runner/bars.cpp runner/calendar.cpp runner/account.cpp runner/settle.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp risk/measure.cpp ingest/candidates.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
-./test_paper_loop fixtures
-g++ $FLAGS -o kernel_runner runner/main.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
+g++ $FLAGS -o "$OUT/test_runner" runner/test_runner.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
+"$OUT/test_runner"
+g++ $FLAGS -o "$OUT/test_paper_loop" runner/test_paper_loop.cpp runner/paper_loop.cpp runner/bars.cpp runner/calendar.cpp runner/account.cpp runner/settle.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp risk/measure.cpp ingest/candidates.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
+"$OUT/test_paper_loop" fixtures
+g++ $FLAGS -o "$OUT/kernel_runner" runner/main.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp log/journal.cpp kill/switch.cpp
 # Live paper transport (libcurl): compiled and linked only when WITH_CURL=1;
 # the smoke tool needs ALPACA_KEY_ID and ALPACA_SECRET and is run by hand.
 if [ -n "${WITH_CURL:-}" ]; then
-g++ $FLAGS -DWITH_CURL -o kernel_runner_paper runner/main.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp broker/ws_stream.cpp log/journal.cpp kill/switch.cpp -lcurl
-g++ $FLAGS -DWITH_CURL -o paper_loop runner/paper_loop_main.cpp runner/paper_loop.cpp runner/bars.cpp runner/calendar.cpp runner/account.cpp runner/settle.cpp runner/approved.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp risk/measure.cpp ingest/candidates.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp broker/ws_stream.cpp log/journal.cpp kill/switch.cpp -lcurl
-g++ $FLAGS -o smoke_paper broker/smoke_paper.cpp broker/http_curl.cpp broker/alpaca_paper.cpp broker/adapter.cpp broker/ws_stream.cpp -lcurl
-g++ $FLAGS -o live_drill broker/live_drill.cpp broker/http_curl.cpp broker/alpaca_paper.cpp broker/adapter.cpp broker/ws_stream.cpp -lcurl
-g++ $FLAGS -DTEST_BASE -o test_ws_stream broker/test_ws_stream.cpp broker/ws_stream.cpp -lcurl
-./test_ws_stream unit
-python3 tests/ws_faults.py ./test_ws_stream
-g++ $FLAGS -DTEST_BASE -o test_transport_faults broker/test_transport_faults.cpp broker/http_curl.cpp broker/alpaca_paper.cpp broker/adapter.cpp -lcurl
-python3 tests/transport_faults.py ./test_transport_faults
-g++ $FLAGS -DWITH_CURL -DTEST_BASE -o paper_loop_mock runner/paper_loop_main.cpp runner/paper_loop.cpp runner/bars.cpp runner/calendar.cpp runner/account.cpp runner/settle.cpp runner/approved.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp risk/measure.cpp ingest/candidates.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp broker/ws_stream.cpp log/journal.cpp kill/switch.cpp -lcurl
-python3 tests/e2e_mock_venue.py ./paper_loop_mock
+g++ $FLAGS -DWITH_CURL -o "$OUT/kernel_runner_paper" runner/main.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp broker/ws_stream.cpp log/journal.cpp kill/switch.cpp -lcurl
+g++ $FLAGS -DWITH_CURL -o "$OUT/paper_loop" runner/paper_loop_main.cpp runner/paper_loop.cpp runner/bars.cpp runner/calendar.cpp runner/account.cpp runner/settle.cpp runner/approved.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp risk/measure.cpp ingest/candidates.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp broker/ws_stream.cpp log/journal.cpp kill/switch.cpp -lcurl
+g++ $FLAGS -o "$OUT/smoke_paper" broker/smoke_paper.cpp broker/http_curl.cpp broker/alpaca_paper.cpp broker/adapter.cpp broker/ws_stream.cpp -lcurl
+g++ $FLAGS -o "$OUT/live_drill" broker/live_drill.cpp broker/http_curl.cpp broker/alpaca_paper.cpp broker/adapter.cpp broker/ws_stream.cpp -lcurl
+g++ $FLAGS -DTEST_BASE -o "$OUT/test_ws_stream" broker/test_ws_stream.cpp broker/ws_stream.cpp -lcurl
+"$OUT/test_ws_stream" unit
+python3 tests/ws_faults.py "$OUT/test_ws_stream"
+g++ $FLAGS -DTEST_BASE -o "$OUT/test_transport_faults" broker/test_transport_faults.cpp broker/http_curl.cpp broker/alpaca_paper.cpp broker/adapter.cpp -lcurl
+python3 tests/transport_faults.py "$OUT/test_transport_faults"
+g++ $FLAGS -DWITH_CURL -DTEST_BASE -o "$OUT/paper_loop_mock" runner/paper_loop_main.cpp runner/paper_loop.cpp runner/bars.cpp runner/calendar.cpp runner/account.cpp runner/settle.cpp runner/approved.cpp runner/runner.cpp runner/store.cpp runner/events.cpp exec/router.cpp exec/decide.cpp risk/veto.cpp risk/sizing.cpp risk/measure.cpp ingest/candidates.cpp broker/adapter.cpp broker/alpaca_paper.cpp broker/http_curl.cpp broker/ws_stream.cpp log/journal.cpp kill/switch.cpp -lcurl
+python3 tests/e2e_mock_venue.py "$OUT/paper_loop_mock"
 fi
 # Router zero-malloc contract: the step core allocates nothing (identity
 # minting at IDLE is cycle-path and excluded; the loop covers the IDLE reject
 # path and every post-identity state and observation shape).
 if [ -z "${SANITIZE:-}" ]; then
-g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -o test_noalloc_exec exec/test_noalloc_exec.cpp exec/router.cpp broker/adapter.cpp
-./test_noalloc_exec
+g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -o "$OUT/test_noalloc_exec" exec/test_noalloc_exec.cpp exec/router.cpp broker/adapter.cpp
+"$OUT/test_noalloc_exec"
 fi
 if sed 's|//.*||' exec/router.hpp exec/router.cpp | grep -nE "std::string|std::vector|malloc|calloc|realloc|strdup|operator new"; then
     echo "GATE FAIL: heap use in router step core"
@@ -166,15 +168,15 @@ for tok in 'confidence' 'popen' 'system\(' \
     fi
 done
 # STAGE chain verification: corruption fails to the paper stage.
-g++ $FLAGS -o test_stage stage/test_stage.cpp stage/stage.cpp
-./test_stage
+g++ $FLAGS -o "$OUT/test_stage" stage/test_stage.cpp stage/stage.cpp
+"$OUT/test_stage"
 # Feed: ring, gaps, backoff and session marking (machinery only, never
 # authority).
-g++ $FLAGS -o test_feed feed/test_feed.cpp feed/feed.cpp
-./test_feed
+g++ $FLAGS -o "$OUT/test_feed" feed/test_feed.cpp feed/feed.cpp
+"$OUT/test_feed"
 if [ -z "${SANITIZE:-}" ]; then
-g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -o test_noalloc_feed feed/test_noalloc_feed.cpp feed/feed.cpp
-./test_noalloc_feed
+g++ $FLAGS -static-libstdc++ -static-libgcc -Wl,--wrap,malloc -Wl,--wrap,calloc -Wl,--wrap,realloc -o "$OUT/test_noalloc_feed" feed/test_noalloc_feed.cpp feed/feed.cpp
+"$OUT/test_noalloc_feed"
 fi
 # Feed allocation contract: heap-once lives in the TickRing constructor (a 64k
 # member array would blow the thread stack); the tick path itself allocates
@@ -186,8 +188,8 @@ if sed 's|//.*||' feed/feed.cpp | grep -nE "malloc|calloc|realloc|strdup|std::st
 fi
 # Context: snapshot validation, canonical determinism (10k identical inputs
 # give one hash), mutation sensitivity and golden bytes.
-g++ $FLAGS -o test_context ctx/test_context.cpp ctx/context.cpp
-./test_context vectors
+g++ $FLAGS -o "$OUT/test_context" ctx/test_context.cpp ctx/context.cpp
+"$OUT/test_context" vectors
 # Vocabulary: the regime, source and session sets each have exactly one
 # definition line (a second spelling anywhere trips the count), and stage
 # literals live in the stage module only.
