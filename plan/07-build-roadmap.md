@@ -206,7 +206,7 @@ Promotion sign-off template (copy per promotion; all lines required):
 ```
 PROMOTION: <G0→G1 | G1→G2 | G2→G3 | sleeve <id> to champion | AI component on <sleeve>>
 DECIDED BY: <operator, approved in chat>   DATE: <ISO8601>   WINDOW JUDGED: <dates>
-CONSTRAINT SET: <C1 | C2>
+CONSTRAINT SET: <India | US>
 CRITERIA (doc 10 §10.2 / doc 11 §11.3a-b - every box true, evidence linked):
   [ ] sleeve gate passed (A-gate + B-gate reports, trial-ledger ids)
   [ ] clean-day count  [ ] zero R-violations  [ ] determinism green
