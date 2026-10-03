@@ -1,6 +1,6 @@
 {
   "version": "2",
-  "lastScan": "2026-10-02T12:07:24.937Z",
+  "lastScan": "2026-10-03T06:38:39.346Z",
   "surfaces": [
     {
       "key": "auth:collector/jev.py",
@@ -10,36 +10,6 @@
       "lines": [
         79,
         1270
-      ],
-      "firstSeen": "2026-10-01T14:24:26.745Z"
-    },
-    {
-      "key": "auth:ops/jev_twin.py",
-      "type": "auth",
-      "path": "ops/jev_twin.py",
-      "detail": "auth pattern",
-      "lines": [
-        414
-      ],
-      "firstSeen": "2026-10-01T14:24:26.745Z"
-    },
-    {
-      "key": "auth:ops/macro_shadow.py",
-      "type": "auth",
-      "path": "ops/macro_shadow.py",
-      "detail": "auth pattern",
-      "lines": [
-        187
-      ],
-      "firstSeen": "2026-10-01T14:24:26.745Z"
-    },
-    {
-      "key": "auth:ops/forward_ledgers.py",
-      "type": "auth",
-      "path": "ops/forward_ledgers.py",
-      "detail": "auth pattern",
-      "lines": [
-        302
       ],
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
@@ -143,17 +113,6 @@
         6
       ],
       "firstSeen": "2026-10-02T12:07:24.548Z"
-    },
-    {
-      "key": "data-mutation:ops/event_shadow.py",
-      "type": "data-mutation",
-      "path": "ops/event_shadow.py",
-      "detail": "data-mutation pattern",
-      "lines": [
-        229,
-        356
-      ],
-      "firstSeen": "2026-10-01T14:24:26.745Z"
     },
     {
       "key": "data-mutation:research/engine/attribution.py",
@@ -459,30 +418,6 @@
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
     {
-      "key": "external-api:ops/event_shadow.py",
-      "type": "external-api",
-      "path": "ops/event_shadow.py",
-      "detail": "external-api pattern",
-      "lines": [
-        35,
-        90,
-        91
-      ],
-      "firstSeen": "2026-10-01T14:24:26.745Z"
-    },
-    {
-      "key": "external-api:ops/long_history_fetch.py",
-      "type": "external-api",
-      "path": "ops/long_history_fetch.py",
-      "detail": "external-api pattern",
-      "lines": [
-        20,
-        63,
-        68
-      ],
-      "firstSeen": "2026-10-01T14:24:26.745Z"
-    },
-    {
       "key": "external-api:ops/monitor.py",
       "type": "external-api",
       "path": "ops/monitor.py",
@@ -654,29 +589,8 @@
       "detail": "external-api pattern",
       "lines": [
         11,
-        64,
-        65
-      ],
-      "firstSeen": "2026-10-01T14:24:26.745Z"
-    },
-    {
-      "key": "secret:research/sandbox/langfuse/docker-compose.yml:credential assigned to a secret-named variable",
-      "type": "secret",
-      "path": "research/sandbox/langfuse/docker-compose.yml",
-      "detail": "Possible credential assigned to a secret-named variable (value redacted)",
-      "lines": [
-        64
-      ],
-      "firstSeen": "2026-10-01T14:24:26.745Z"
-    },
-    {
-      "key": "secret:research/sandbox/langfuse/docker-compose.yml:database URL with password",
-      "type": "secret",
-      "path": "research/sandbox/langfuse/docker-compose.yml",
-      "detail": "Possible database URL with password (value redacted)",
-      "lines": [
-        57,
-        58
+        73,
+        74
       ],
       "firstSeen": "2026-10-01T14:24:26.745Z"
     }
