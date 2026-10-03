@@ -9,7 +9,7 @@ Paper-trading system for US stocks and ETFs, with a deterministic C++ risk and e
 
 ## What this is
 
-A cash account, long only, 1x, allowlisted symbols. The idea is simple: a strategy only gets to place orders after it passes a backtest that was registered before it was run, then a forward test, then a human signs off. Most strategies will not get through, and that is expected.
+The fund's bet: news about one company reaches its suppliers, customers, peers and co-mentioned firms days to months late, and an engine that reads filings and global news can map those links and trade the ripple. Today the kernel runs a cash account, long only, 1x, allowlisted symbols; the research target is a US margin account that may short (see [`plan/00`](./plan/00-INDEX.md)). The process rule is simple: a strategy only gets to place orders after it passes a backtest that was registered before it was run, then a forward test, then a human signs off. Most strategies will not get through, and that is expected.
 
 The parts:
 
@@ -36,6 +36,8 @@ The plumbing works. The strategies are not good enough yet.
 | Passive core (VTI/IEF) | buy and hold | n/a | used to test the plumbing; it is a benchmark, not a strategy |
 
 No strategy is a promotion candidate. The paper run exercises the execution stack with the passive core. The other strategies run as log-only forward ledgers to see whether their failures repeat on new data, and a long-history study checks whether the published effects still exist at all.
+
+Next (2026-10-02): kernel hardening is stopped. The plan now centers on the epistemic engine ([`plan/08`](./plan/08-epistemic-engine.md)): a Market Link Graph built from SEC filings, GDELT news co-mentions and 13F ownership, an event pipeline, and an LLM that reasons about where each event ripples, checked by an independent verifier. Four sleeves ([`plan/02`](./plan/02-strategy-book.md)) are tested in order: ETF trend long-short, connected-firm momentum, filing-change, and LLM ripple events against a deterministic twin. The math is in [`plan/14`](./plan/14-market-link-mathematics.md).
 
 | Area | State |
 |---|---|
@@ -191,7 +193,7 @@ data/        local only, gitignored
 
 - No code path promotes a capital stage. Demotion is automatic; promotion is a person, in chat, with evidence.
 - Risk limits R1 to R19 are code constants. Changing one needs a doc edit, a version bump and a fresh paper window.
-- Live scope is a cash account, long only, 1x, allowlisted US stocks and ETFs.
+- The kernel enforces a cash account, long only, 1x, allowlisted US stocks and ETFs (C1). Research targets a US margin account, long and short (C2), which is not in force until the doc 05 §5.6 risk amendment is adopted.
 - A journal row is written before every order.
 - Every backtest goes through the trial ledger.
 - Version-marked identifiers pinned by hashes or ledgers (`baseline_v1`, `cost_v2`, `exit_*_v1`, and so on) are never renamed.

@@ -1,9 +1,8 @@
-# 13 - C++ deterministic kernel build (Phase 3)
+# 13 - C++ Kernel Build Contract
 
-Phase 2 is frozen (`50ea369` accepted). The JEV sidecar changes only if
-Phase-3 integration exposes a contract defect. This document is the Phase-3
-build sequence. The order matters: boundary validator first, risk and sizing
-last.
+How the kernel is built and proven: the model-answer boundary first, risk
+and sizing after, each slice gated before the next. The JEV sidecar
+(`collector/jev.py`) changes only on a contract defect.
 
 ```
 Raw AnswerSet JSON
@@ -147,15 +146,14 @@ isolation row belongs to Phase 2.5 (research-plane gate), not P3.5.
 Exit: §4.5 + §6.5 correctness/drill boxes checked (H1 closes P3.5).
 Soak/operational evidence tracked per gate class, never retro-blocking.
 
-## 13.6 Non-goals for Phase 3
+## 13.6 Non-goals
 
-- No JEV sidecar changes (frozen at `50ea369`).
-- No research-plane work (Phase 2.5 runs in parallel, feeds `features.jsonl`
-  only through the frozen f2 schema).
-- No live capital, no stage above G0_PAPER, no venue beyond Alpaca paper
-  (v3: OANDA practice BLOCKED - India ineligible; forex is not a live
-  target, doc 01 §1.2).
-- No confidence-driven decisions without closing §13.4(a).
+- No JEV sidecar changes without a contract-defect ruling.
+- No engine work inside the kernel: the engine feeds `features.jsonl` only,
+  through the pinned schema.
+- No stage above G0_PAPER and no venue beyond Alpaca paper until doc 10
+  allows it.
+- No confidence-driven decisions (confidence is quarantined, §13.1).
 
 ## 13.7 Battle-testing ladder (gap-analysis mapping, frozen ownership)
 
@@ -172,7 +170,7 @@ Research lessons mapped to existing gates. Every reliability property has exactl
 | randomized event ordering | - | order-permuted reconcile test: arrival order randomized while broker event identity/sequence metadata is preserved; reconciliation must converge to the same broker-consistent final state across permutations and duplicate deliveries. Where a venue supplies no usable sequence metadata, the H1 design freezes an explicit deterministic tie-break (e.g. broker-timestamp then event-id order) rather than assuming order irrelevance | H1 |
 | feature-bundle version skew | context snapshot vectors (f2 only) | f3-shaped research bundle → loud reject at the feature/context boundary, no silent pass | Phase 2.5 |
 | chaos restart (kernel) | - | kill -9 mid-cycle drill: journal chain verifies, epoch monotonicity holds, no duplicate order IDs | H1 (drill gate) |
-| chaos restart (research) | - | kill -9 at random node: resume, no duplicate features, no partial bundle | Phase 2.5 §8.6 |
+| chaos restart (research) | - | kill -9 at random node: resume, no duplicate features, no partial bundle | doc 08 §8.8 |
 | kill-switch levels | - | §4.5 + §6.5 kill drills (exits alive at all three) | Slice D (drill gate) |
 | outage defaults | - | every §6.2a row drilled with exits proven alive | H1 (drill gate) |
 | feed soak | - | 24 h soak, flat RSS, kill/reconnect | Slice F (soak gate) |
@@ -183,60 +181,34 @@ cited, not rebuilt. New gates attach to the listed slice
 and must be green before that slice closes (soak/operational per the §13.5
 sequencing rule).
 
-## 13.8 P3.5 remaining scope after freeze v3 (Track K, doc 07 §7.3)
+## 13.8 Remaining kernel scope
 
-Status 2026-09-30: slices A-G and H1 are built; `kernel/runner/main.cpp` is
-the read-only entry and `g0_paper_loop` places paper orders through the
-transport below. `TODO.md` boxes K1-K13 hold the state. Open: MOC fill and
-reconcile smoke with a held position (K1), stop-cancel-before-close (K5;
-Alpaca rejects MOC and market sells while an OTO stop is live), the 24 h
-soak (K9) and the §6.2a drills on live paper (K10). Scope, in order:
+Slices A-G and H1 are built: `kernel/runner/main.cpp` is the read-only
+entry and `g0_paper_loop` places paper orders through the libcurl
+transport (`broker/http_curl.cpp`, verified TLS to the paper host only,
+credentials from the process environment, bounded bodies) and the
+`trade_updates` WebSocket client (`broker/ws_stream.cpp`). Remaining, in
+order, each tracked in `TODO.md`:
 
-- P3.5-T transport (K1). Decision record comparing (a) libcurl + system TLS
-  linked behind the transport seam and (b) a minimal `mirotrade`
-  broker-gateway process speaking the shaped observation protocol over a
-  local pipe. Criteria: audited surface, fail-closed on every TLS/HTTP/WS
-  error, bounded buffers, no credential exposure to other identities, 200
-  req/min budget with 429 back-off, WS reconnect = re-subscribe + REST
-  reconcile. TLS from scratch is forbidden. Gate [correctness + drill]:
-  fault-injection suite + Alpaca paper smoke
-  (submit/protect/query/cancel/reconcile/MOC).
-  Decision (2026-09-29): (a) libcurl. The seam is a plain function
-  pointer, so (a) is one translation unit (`broker/http_curl.cpp`, ~150
-  lines) behind it; (b) adds a second process, a pipe protocol and an
-  identity to audit for no gain at this request rate. The transport
-  talks only to the paper host over verified TLS (https-only, no
-  redirects, 5 s connect / 10 s total), reads credentials from the
-  process environment and never logs them, validates path and header
-  bytes, and returns status 0 on any error or oversize body. The adapter
-  body cap is 8 KiB because a live bracket reply is ~2.6 KB. Built only
-  with `WITH_CURL=1`; the default gate needs no network library. Smoke
-  (`broker/smoke_paper.cpp`) passed against Alpaca paper on 2026-09-29:
-  account, protected bracket, query, cancel, cancel observed, 401 class.
-  The live reply carries no order-level take_profit/stop_loss objects; the
-  two typed legs are the protection proof (fixture in `kernel/fixtures`).
-  The fault-injection suite and the WS `trade_updates` client are built.
-  Open: MOC and reconcile smoke.
-- Always-take path (K2, doc 04 4b): versioned filter-policy input to
-  `BuildEngineInputs`; bit-identical verdicts to the filtered path where
-  the filter passes; compile/grep gate that `none` cannot read an
-  answer artifact. The filter table is untouched.
-- Snapshot v2 + settlement ledger + R18 (K3, K4; doc 04 5c, doc 05): new
-  committed vectors; v1 vectors unchanged and still verified.
-- R19 allowlist + approved sleeves from the stage manifest (K4, K12; doc 10).
-- OTO stop-only protection + MOC sequencing (K5; doc 06 §6.0): adapter
-  shape extension, legs proof for the 1-leg OTO case, stop-before-MOC and
-  MOC-reject drills.
-- Candidate ingest (K6; doc 04 2b): CID recompute, sleeve approval,
-  allowlist, freshness, long-only side policy - adversarial vectors.
-- Outbound-only alert adapter (K7; doc 06 §6.4).
-- Live journal growth bound (K8).
-- H1 drills on the real transport (K10; every doc 06 §6.2a row).
-- Port-on-promotion (before G1, not P3.5): champion signal in C++ with
-  committed cross-language vectors (doc 04).
+- K1: MOC fill and reconcile smoke with a held position
+  (`broker/live_drill.cpp`).
+- K5: stop-cancel-before-close. Alpaca rejects MOC and market sells while
+  an OTO stop is live, so the router cancels the stop, confirms, then
+  closes; mock drill first.
+- K9: 24 h feed soak on the real transport.
+- K10: every doc 06 §6.2a row drilled on live paper.
+- K-C2: the C2 account path: side policy for short opens and covers,
+  R1/R2 C2 limits with a versioned `EXEC_UNIVERSE_MAX`, the margin
+  account ledger (R18 C2), R20 borrow checks from the broker's asset
+  flags, buy-stop protection, BUY-to-cover flatten; new vectors, every
+  existing verdict reproduced bit-identically. `scripts/freeze-check.sh`
+  pins `execution_max` at 5 and is a protected path, so the operator
+  changes the pin and the manifest in the same commit.
+- Port-on-promotion (before G1): the champion signal in C++ with committed
+  cross-language vectors (doc 04).
 
-P3.5 closes when the first seven boxes and the real-transport drills are
-green.
+P3.5 closes when K1, K5 and K10 are green. K9 is soak evidence and never
+retro-blocks. K-C2 waits for a C2 sleeve to pass its A-gate (doc 07).
 
 ## Exit criteria (Phase 3 -> Phase 4)
 

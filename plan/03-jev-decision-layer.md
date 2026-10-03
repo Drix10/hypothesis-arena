@@ -8,7 +8,7 @@ replay (D3) and invalidates every calibration curve in doc 11.
 JEV writes no text. It answers typed questions about a `state` with calibrated
 probabilities. Our code owns the workflow and acts on the answers.
 
-## 3.0 JEV's role after freeze v3 (read first)
+## 3.0 JEV's role (read first)
 
 JEV is an optional, challenger-grade filter, not a mandatory gate, because:
 
@@ -157,7 +157,7 @@ JEV receives one already-built candidate and its market snapshot, never raw
 external text and never anything it could turn into a different trade. No
 signal texts and no thesis/critique prose cross into the payload; those live
 in the research digest (doc 08). Schema validation proves shape, not truth
-(doc 08 §8.5).
+(doc 08 §8.7).
 
 ```json
 {
@@ -272,7 +272,7 @@ provider, contract, prompt hash, decision key, response hash. Replay never
 calls the remote model.
 
 Answer authentication: the sidecar runs as a dedicated `mirojev` user (doc 08
-§8.2) and Ed25519-signs every answer artifact. The single authoritative
+§8.5) and Ed25519-signs every answer artifact. The single authoritative
 AnswerSet schema:
 `contract | model | revision | provider | cid | candidate | symbol |
 feature_snapshot_hash | snapshot_epoch | price_s | spread_bps_s | session |
@@ -441,7 +441,9 @@ nominates, the engine's independently validated conditions authorize, and the
   pre-registered paired-delta gate admits `filter = jev` (§3.0, doc 11). No
   kernel path may require an AnswerSet to exit, and no champion may require
   one to enter unless that gate passed.
-- Live candidates are long-only: `side` is BUY-to-open or SELL-to-close;
-  SELL-to-open candidates exist only in shadow research.
+- Candidate sides follow the stage's constraint set: BUY-to-open or
+  SELL-to-close under C1; C2 adds SELL-short-to-open and BUY-to-cover once
+  the kernel implements R20 (doc 07 K-C2). For a short candidate the
+  coherence check is TP < entry < stop.
 - Artifacts carry model/revision/provider metadata (signed into the
   payload), and the C++ filter gate runs in `kernel/build.sh` and CI.

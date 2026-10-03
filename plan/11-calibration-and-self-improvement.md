@@ -1,4 +1,4 @@
-# 11 - Validation, Calibration, Shadow Evaluation, and Promotion (freeze v3)
+# 11 - Validation, Calibration, Shadow Evaluation, and Promotion
 
 This doc has three jobs: show that a sleeve has edge net of all costs,
 check whether any probabilistic AI component means what it claims, and
@@ -7,7 +7,7 @@ here promotes anything by itself; every path ends at a human. §11.1-§11.3
 apply wherever a sleeve uses `filter = jev`; §11.0 and §11.3a-b apply to
 all sleeves.
 
-## 11.0 The validation standard (v3)
+## 11.0 The validation standard
 
 ### 11.0a Global trial ledger
 
@@ -34,10 +34,20 @@ the journal (doc 05 §5.5). Rows are never edited or deleted.
   score on the T-bill yield. DSR's cross-trial variance is floored at the
   sampling variance of one Sharpe estimate, because a handful of variants
   cannot estimate it.
-- Metrics: DAILY portfolio returns (as §11.3), net of `cost_v2`, with
+- Metrics: DAILY portfolio returns (as §11.3), net of the set's cost model
+  (`cost_v2` C1, `cost_v3` C2), with
   stationary-bootstrap confidence intervals; Sharpe inference with HAC
   standard errors; max drawdown; turnover; exposure.
-- Overfitting diagnostics: Deflated Sharpe Ratio with N from the ledger;
+- Effective number of trials: the raw ledger count overstates the search
+  when trials are near-duplicates (variants of one rule) and understates
+  nothing. `N_eff` = the number of clusters found by optimal-number-of-
+  clusters clustering of all ledger trials' daily return series
+  (López de Prado 2019), floored at the number of trials in the sleeve's
+  own family. Computed by the harness from the ledger, never declared.
+  Diagnostic runs (placebo graphs, source ablations, delisting
+  sensitivity) write ledger rows of kind `diagnostic`, linked to their
+  trial; they can never be selected, so they do not enter `N_eff`.
+- Overfitting diagnostics: Deflated Sharpe Ratio with `N_eff`;
   Probability of Backtest Overfitting when ≥ 2 variants; minimum
   track-record length (MinTRL) for the observed Sharpe. These are
   necessary, not sufficient: a contrived oracle has passed DSR and PBO in
@@ -48,25 +58,47 @@ the journal (doc 05 §5.5). Rows are never edited or deleted.
   published effect sizes (post-publication decay ≈ 58% on average); the
   haircut estimate must still clear 2× cost.
 
-### 11.0c Temporal-contamination control for LLM evidence
+### 11.0c Temporal-contamination control for model evidence
 
 A language model trained on data through date C "knows" outcomes before
-C. Any evaluation in which an LLM output influences a feature, a filter,
-or a candidate uses **only data timestamped after C + 30 days**, where C
-is the role pin's recorded knowledge cutoff (doc 08 §8.8); an undisclosed
-cutoff is taken as the model's public release date. Consequences: LLM
-components are judged mostly on forward shadow; pre-cutoff backtests of
-LLM components are labeled contaminated and carry zero promotion weight;
-a model upgrade restarts the clock. Deterministic sleeves are unaffected.
+C. Every pre-registration declares one contamination class for each model
+component, where C is the role pin's recorded knowledge cutoff (doc 08
+§8.10; an undisclosed cutoff is taken as the model's public release date):
+
+- **Class A - deterministic.** No model output enters the signal. History
+  is usable without restriction.
+- **Class B - extraction.** A model extracts facts that already exist in a
+  dated document, with firm identities anonymized and every fact verified
+  by a deterministic exact-span match (doc 08 §8.2a). The extracted fact is
+  checkable against the document, so the model cannot add a fact from the
+  future; what remains is selection bias (memory of what mattered). History
+  before C is usable for the A-gate, the report is labeled
+  `contamination: B`, and promotion additionally requires the B-gate on
+  live data. Selection-bias check: a random sample of at least 200
+  filings dated before C is re-extracted by a pinned model whose own
+  cutoff precedes each filing; edge-set agreement (Jaccard) is reported,
+  and agreement below 0.8 downgrades the component to class C.
+- **Class C - judgment.** A model judges direction, magnitude or outcome
+  (the L3 brain, JEV, any forecast). Only data timestamped after C + 30
+  days counts. Pre-cutoff runs are labeled contaminated and carry zero
+  promotion weight, including runs with chronologically consistent models
+  (research only).
+
+A model upgrade restarts the clock for class C and requires a fresh
+precision audit for class B. Every class B or C component is judged
+against its deterministic twin (§11.3b).
 
 ### 11.0d Transferability
 
-Promotion evidence counts only if produced under the live constraint set
-of the target stage: long only, cash account with the settlement ledger
-simulated, 1×, allowlisted instruments, `cost_v2`, the signal/data timing
-the live sleeve will have (SIP availability delays included). Evidence
-from shadow books that short, lever, or trade non-allowlisted instruments
-is research, never promotion evidence.
+Promotion evidence counts only if produced under the constraint set of
+the target stage (doc 01 §1.2) with its account ledger simulated: C1 is
+long only, cash account, settlement ledger, 1×, `cost_v2`; C2 is long and
+short in a margin account with the doc 05 C2 limits, margin, borrow and
+short-dividend ledger, `cost_v3` (doc 14 §14.10), at the registered book
+size. Both require allowlisted instruments and the signal/data timing the
+live sleeve will have (SIP availability delays included). Evidence from
+books outside the target set is research, never promotion evidence, and
+C2 evidence never promotes a C1 stage or the reverse.
 
 ## 11.1 Calibration tracking (online, automatic)
 
@@ -166,7 +198,7 @@ discretionary detector.
    and both differ from the preceding known day d-2. UNKNOWN days break
    adjacency and are never skipped over to manufacture a two-day
    transition. The two-day persistence exists because a single-day flip
-   is noise, not a change (same precedent as FROZEN_N=3 in doc 08 §8.5
+   is noise, not a change (same precedent as FROZEN_N=3 in doc 08 §8.7
    and the two-expected-bar gates in doc 05). Evaluated once per UTC day
    at 00:05 UTC from frozen daily closes using only completed
    information - never intra-day, never revised intra-day.
@@ -216,7 +248,7 @@ Everything not live runs in shadow, permanently:
 - Challengers - up to 3 concurrent variants (threshold set, feature set, model,
   prompt/question version). Each consumes the same frozen snapshots, produces
   decisions, and is scored on simulated fills using the doc 06 paper fill model (`paper_fill_v1`,
-  wrapped by `cost_v2` for v3 sleeves, doc 06 §6.0a).
+  wrapped by the set's cost model, doc 06 §6.0a).
   Challengers place no orders and hold no capital.
 - Challengers get their own `question_set_version` and their own cost tag, so
   their AI spend is visible and counts against the caps in doc 10 §10.4.
@@ -229,7 +261,7 @@ Everything not live runs in shadow, permanently:
   logged. Making money by taking more risk than permitted is not a
   result.
 
-## 11.2a Forward replication program (2026-09-30, additive to §11.2)
+## 11.2a Forward replication ledgers (additive to §11.2)
 
 When no champion exists, built sleeves that failed their A-gate may still run
 as log-only forward replication ledgers against paired benchmarks: registered
@@ -238,6 +270,15 @@ weights, kill-only sequential rules, and "eligible for review" (never
 promotion) at 504 sessions. They are research observations, not challengers,
 so the §11.2 cap of three challengers does not apply to them. Full protocol:
 `plan/appendix/10-sleeve-integration-plan.md`.
+
+The same machinery runs the B-gate and forward shadow of the doc 02
+sleeves: forward ledgers (`ops/sleeve_shadow.py`), the paired evaluator
+and checkpoints (`ops/sleeve_eval.py`), and the `--verify` fidelity
+replay (every logged row reproduced within 20 bp), extended for C2
+(shorts, margin, borrow, short dividends, `cost_v3`). Multiple-testing
+families are kept apart so dead hypotheses do not tax new ones: the
+retired C1 sleeves form one Holm family, the doc 02 program another, and
+AI-component tests (JEV twins, L1-ai, L3 vs twin, `xcorr_v1`) a third.
 
 ## 11.3 The promotion gate (the only path into the live decision path)
 
@@ -302,25 +343,45 @@ stage gates in doc 10. A promoted change does not inherit its predecessor's stag
 
 Forbidden: automatic promotion, auto-tuning of thresholds,
 online/continual learning on the live path, agent self-modification of prompts,
-tools, or skills, and any change to R1–R17 by anything other than a doc edit.
+tools, or skills, and any change to R1–R20 by anything other than a doc edit.
 
-## 11.3a Sleeve gates (v3) - how a sleeve becomes a champion candidate
+## 11.3a Sleeve gates (`val_v2`) - how a sleeve becomes a champion candidate
 
 A-gate (historical, harness): all of the following on the frozen
-pre-registration, recorded in the trial ledger:
-1. Holdout net Sharpe (daily, `cost_v2` 1×) with 95% stationary-bootstrap
-   CI lower bound > 0; point estimate > 0 at 2× cost.
+pre-registration, recorded in the trial ledger. Statistics 1-3 are
+computed on the evaluation window: every date after the last date used
+to fit anything (all of it for literature sleeves with frozen parameters).
+A 3-year holdout alone cannot detect the Sharpe ratios these sleeves can
+plausibly earn (doc 14 §14.11); the holdout is the consistency check in
+item 7.
+1. Net Sharpe (daily, the target set's cost model at 1×: `cost_v2`
+   for C1, `cost_v3` for C2) with 95% stationary-bootstrap CI lower
+   bound > 0; point estimate > 0 at 2× cost.
 2. Excess return over cash (T-bill leg) CI lower bound > 0.
-3. Versus the vol-matched passive benchmark (doc 12 §12.6): net Sharpe not
-   lower (point estimate) AND max drawdown not larger. A sleeve that
-   neither beats passive risk-adjusted nor reduces its drawdown adds
-   nothing over buy-and-hold.
-4. DSR ≥ 0.95 with ledger N; PBO ≤ 0.2 when variants exist; history
-   length ≥ MinTRL; t ≥ 3 for non-literature signals; haircut rule met.
-5. Transferability (§11.0d); participation caps respected; excluded-event
-   count ≤ 5% (event sleeves).
+3. Spanning test against the reference book: regress the sleeve's daily
+   net excess returns on the reference book's (`r_s = α + β·r_b + ε`).
+   The 95% stationary-bootstrap CI lower bound of α is > 0 at 1× cost and
+   the α point estimate is > 0 at 2× cost. The reference book is the
+   vol-matched passive benchmark (doc 12 §12.6) plus every promoted sleeve
+   at its registered risk weight. Max drawdown is within the sleeve's
+   pre-registered limit (default 2× its annual volatility target).
+   Long-short sleeves also keep |β| to VTI ≤ 0.3 on the holdout. The
+   Fama-French five-factor plus momentum alpha and the head-to-head
+   comparison with the passive benchmark are reported, not gating.
+   Reason: a sleeve improves the book's attainable Sharpe exactly when its
+   alpha against the book is positive (Huberman-Kandel 1987). The earlier
+   standalone test (Sharpe and drawdown versus passive) rewarded beta and
+   rejected diversifiers.
+4. DSR ≥ 0.95 with `N_eff` (§11.0b); PBO ≤ 0.2 when variants exist;
+   history length ≥ MinTRL; t ≥ 3 for non-literature signals; haircut
+   rule met.
+5. Transferability (§11.0d); participation caps respected; excluded
+   events or firm-months ≤ 5%.
 6. For AI-assisted sleeves: the paired no-AI variant exists and the AI
    component is judged separately under §11.3b.
+7. Holdout consistency: the last 3 years have a positive net point
+   estimate and lie inside the 5th-95th percentile band of
+   block-bootstrapped evaluation-window paths of equal length.
 
 B-gate (G0a shadow on live data): the sleeve runs forward with harness
 fills from the day it passes A-gate. Minimum window: 60 sessions and
@@ -335,21 +396,43 @@ Champion selection: among B-gate passers, the human picks the G0b
 champion using the pre-registered primary metric; ties break toward the
 simpler sleeve (fewer parameters, lower turnover).
 
-## 11.3b Filter / AI-component gate (v3) - paired delta
+## 11.3b AI-component gate - paired delta against the deterministic twin
 
-A filter (JEV, an ensemble, a reader-tier feature) enters a champion
-only if, on identical post-cutoff candidates (§11.0c), the filtered policy
-beats always-take net of the filter's own AI cost: one-sided p < 0.05 by
-day-block stationary bootstrap, pre-registered minimum effect met, ≥ 100
-resolved candidates, and (for probabilistic answers) calibration ≥ base
-rate per §11.1. S5's harness is the implementation; its economic
-acceptance is this gate.
+Every model component is judged against the same sleeve without it, on
+identical inputs, net of the component's own AI cost:
+
+- **Filters** (JEV, an ensemble): the filtered policy beats always-take on
+  identical post-cutoff candidates.
+- **Class B extraction** (e.g. L1-ai link edges): the sleeve on the
+  model-extracted graph beats the sleeve on the deterministic graph over
+  the same months; history is allowed per §11.0c, and the delta must hold
+  again in the B-gate window.
+- **Class C ripple reasoning** (L3): the brain's candidates beat the
+  deterministic twin `ripple_det_v1` on the same events after C + 30 days.
+  Both are scored by ripple resolution (doc 14 §14.5) and by sleeve
+  returns; the twin is the benchmark, not cash.
+
+Passing: one-sided p < 0.05 by day-block stationary bootstrap on the daily
+return difference, pre-registered minimum effect met, the pre-registered
+minimum sample reached, and for probabilistic answers calibration ≥ base
+rate per §11.1. A component that fails is removed, not tuned; the twin
+continues on its own merits.
+
+Minimum sample by power, not by habit: the pre-registration states the
+minimum effect and computes the sample needed for 80% power at α = 0.05.
+For ripple candidates with a 21-session CAR standard deviation near 9% and
+a minimum effect of 1 percentage point, that is on the order of 1,000
+resolved candidates per arm, i.e. about a year at the 20-event daily cap.
+Filters keep the floor of 100 resolved candidates where their power
+analysis allows it; class B extraction needs ≥ 24 months. Before the
+minimum is reached, sequential monitoring may only stop the component
+for harm (kill-only, §11.2a), never promote it.
 
 ## 11.4 Reflection → research-factory loop (bounded)
 
 Doc 06 §6.2 writes an auto-field reflection row per closed trade. On top:
 
-- Weekly, the research factory (doc 08 §8.7) reads reflection rows,
+- Weekly, the research factory (doc 08 §8.9) reads reflection rows,
   sleeve tracking reports, calibration curves (where applicable), and
   `lessons.jsonl`, and produces at most **3 hypothesis cards**.
 - Cards are queued for human review. They are not implemented, shadowed,
@@ -365,7 +448,8 @@ Doc 06 §6.2 writes an auto-field reflection row per closed trade. On top:
       MinTRL, stationary bootstrap, HAC Sharpe - each with fixture tests.
 - [ ] Contamination guard: an LLM-involved evaluation window that
       starts before cutoff + 30 d is rejected by the harness.
-- [ ] A-gate and B-gate report generators; first reports for T1/I1.
+- [ ] A-gate and B-gate report generators with the `val_v2` spanning test
+      and contamination-class labels.
 - [ ] Calibration harness scores `enter` and `latent_risk` including
       counterfactual HOLDs (needed only once a `jev` sleeve exists).
 - [ ] Reliability curves weekly, sliced by regime (same condition).
@@ -380,7 +464,8 @@ Doc 06 §6.2 writes an auto-field reflection row per closed trade. On top:
 - Promotion requires forward-only, cost-inclusive, transferable,
   search-adjusted evidence, beaten controls, and a human signature. No
   exceptions, no automation.
-- LLM evidence counts only after the model's knowledge cutoff + embargo.
+- Model evidence follows its contamination class (§11.0c): judgment
+  (class C) counts only after the model's knowledge cutoff + embargo.
 - DSR/PBO/MinTRL are necessary, never sufficient.
 - An AI component must beat the same sleeve without it (paired delta) or
   be removed rather than tuned.

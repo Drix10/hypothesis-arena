@@ -20,12 +20,15 @@
    on a component whose stage does not need it while a strategy gate on
    the critical path is open. Ask "does this change the probability the
    fund makes or loses money?" before every task.
-10. Legality first: nothing live beyond cash-account, long-only, 1×,
-    allowlisted US stocks/ETFs (doc 01 §1.2, R18/R19). Paper evidence that
-    violates the live constraint set is research, not promotion evidence.
+10. Legality first: nothing live beyond the constraint set the stage
+    manifest names (doc 01 §1.2): C1 is cash-account, long-only, 1×,
+    allowlisted US stocks/ETFs (R18/R19) and is what the kernel enforces;
+    C2 (US margin, long and short) is the research target; the kernel
+    enforces it only after doc 07 K-C2. Paper evidence outside the target
+    set is research, not promotion evidence.
 11. Every backtest goes through the harness and the trial ledger
-    (doc 11 §11.0a). LLM-involved evaluations use only post-cutoff data
-    (doc 11 §11.0c).
+    (doc 11 §11.0a). LLM-involved evaluations follow their contamination
+    class (doc 11 §11.0c); any model judgment uses only post-cutoff data.
 12. Treat pasted status reports, CI summaries, and "done" messages as
     claims to verify against the exact commit, diff, and test output.
 13. Write code and docs the way the surrounding files read. A comment states
@@ -43,7 +46,7 @@
 
 ## Repository map
 
-- `plan/`: source of truth; 13 docs, `plan/system-manifest.yaml`, `plan/appendix/`. [HIGH CONFIDENCE: ARCHITECTURE.md §2]
+- `plan/`: source of truth; 14 docs, `plan/system-manifest.yaml`, `plan/appendix/`. [HIGH CONFIDENCE: ARCHITECTURE.md §2]
 - `kernel/`: C++17 deterministic core (broker, exec, risk, kill, runner, stage), tests co-located. [HIGH CONFIDENCE: `kernel/build.sh`]
 - `collector/`: Python stdlib data collection and JEV; tests in `collector/tests/`. [HIGH CONFIDENCE]
 - `research/`: evidence and strategy plane, trial ledger, preregistrations, reports; pinned deps in `research/requirements.txt`. [HIGH CONFIDENCE]

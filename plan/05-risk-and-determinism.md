@@ -1,39 +1,60 @@
-# 05 - Risk and Determinism (hard rules, `risk_version: R1-R19+v3`)
+# 05 - Risk and Determinism (hard rules, `risk_version: R1-R20`)
 
 Violation of any numbered rule halts paper trading until human review and
 demotes a live stage (doc 10 §10.2). No auto-override exists, and no agent
 can reach any of these rules.
 
+Rules apply per constraint set (doc 01 §1.2). Where a rule has a C1 and a
+C2 value, the stage manifest's constraint set selects it. The kernel's
+implementation status of each set is tracked in doc 07 (K-C2).
+
+| Rule | C1 (cash, long only) | C2 (margin, long and short) |
+|---|---|---|
+| R1 concurrent positions | ≤ 5 (`EXEC_UNIVERSE_MAX`) | ≤ the sleeve's registered count, at most 50 |
+| R2 single position | ≤ 25% of equity | long ≤ 10%, short ≤ 5% of equity |
+| R2 total | exposure ≤ 75% of equity | gross ≤ 150%; net within the sleeve's band (default ±10% at rebalance, ±20% hard) |
+| R3 fills per day | ≤ 20 | ≤ 20, except a registered rebalance session: ≤ 3 × the sleeve's position count |
+| R4 flip-lock | inert | active |
+| R18 account rule | settled cash | margin buffer |
+| R19 allowlist | long common stock and ETFs | adds short sales of the same |
+| R20 short controls | n/a (no shorts) | active |
+
 ## 5.1 Position and exposure limits
 
-- R1. Max 5 concurrent positions (= `EXEC_UNIVERSE_MAX`). One open
-  position per symbol: a second intent on a held symbol is HOLD until the
-  first closes. A same-direction cap applies only to books that may short
-  (shadow research books); a long-only book controls concentration through
-  R2, R7, and the sleeve/portfolio risk budget. Exposure math counts filled
+- R1. Concurrent positions per the table above. One open position per
+  symbol: a second intent on a held symbol is HOLD until the first
+  closes. A long-only book controls concentration through R2, R7, and the
+  sleeve/portfolio risk budget; a C2 book also through the R2 net band.
+  Exposure math counts filled
   exposure plus pending executable exposure (unfilled entries reserve
   budget). Account inputs come from the broker adapter: equity, settled
   cash, unsettled proceeds, open-order notional, realized/unrealized PnL.
   Snapshot-time formulas (K6, frozen): `pending_notional` = sum of
   open-order notional (entry + unacked); `reserved_risk` = pending_notional
-  × per-symbol risk fraction. In a cash account `margin_requirement` = 0
-  and available buying power = settled cash − pending buy notional (the
-  margin formula applies to shadow books only). Pending exposure counts
-  toward every cap below.
-- R2. Single position ≤ 25% notional/equity. Total exposure ≤ 75%
-  notional/equity. (Notional = size × price; equity at snapshot time; both
-  frozen in the snapshot, never re-read at send. Pending counts toward
-  both.) The 75% cap also keeps a cash buffer for T+1 settlement timing.
-- R3. Max 20 trades/day. Max 3 trades/symbol/hour (anti-churn). A "trade"
-  = a broker-acknowledged fill.
+  × per-symbol risk fraction. In a C1 account `margin_requirement` = 0
+  and available buying power = settled cash − pending buy notional; in a
+  C2 account buying power and `margin_requirement` come from the broker's
+  margin data and R18 (C2). Pending exposure counts toward every cap below.
+- R2. Position and total limits per the table above. (Notional = size ×
+  price, absolute for shorts; equity at snapshot time; both frozen in the
+  snapshot, never re-read at send. Pending counts.) The C1 75% cap also
+  keeps a cash buffer for T+1 settlement timing. A C2 book drifts between
+  rebalances (stop-outs, price moves): past the hard net band, new
+  entries HOLD and the larger leg is trimmed proportionally by exits only;
+  stopped-out slots stay empty until the next rebalance.
+- R3. Fills per day per the table above (a 40-name monthly rebalance
+  needs up to 80 orders plus stop replacements, so C2 rebalance sessions
+  carry their own registered cap; partial fills count once per order).
+  Max 3 trades/symbol/hour (anti-churn). A "trade" = a broker-acknowledged
+  fill.
 - R4. Symmetric flip-lock: LONG→SHORT→LONG or SHORT→LONG→SHORT completions
   within 1 h on one symbol → force HOLD 2 h on that symbol. (Inert in a
-  long-only book; kept for shadow books.)
+  C1 book.)
 - R5. Drawdown > 10% from peak → HALT all entries (exits only) until
   review. Peak = max(daily_close_hwm, intraday_hwm), both persisted;
-  evaluated on snapshot equity each cycle. Sleeve and book volatility
-  targets (doc 02 M1) are set so a 10% drawdown is a tail event, not a
-  routine one.
+  evaluated on snapshot equity each cycle. Sleeve volatility targets
+  (doc 14 §14.9) are set so a 10% drawdown is a tail event, not a routine
+  one.
 - R6. Realized volatility > 3× 20-day baseline → halve sizes until review.
   Both sides are stdev of 1 h log returns (baseline = trailing 480 points,
   current = trailing 24). Data-age gate (frozen): the
@@ -59,31 +80,53 @@ can reach any of these rules.
   the `broker_compliance_policy` adapter table (broker, account type,
   effective date, day-trade/short/session/settlement rules; regulation
   changes are data updates). No entries outside 09:30–16:00
-  America/New_York (exchange calendar); no extended-hours orders in v1.
+  America/New_York (exchange calendar); no extended-hours orders.
   Day-trade counting: the FINRA pattern-day-trader framework was
-  eliminated by SEC approval on 2026-04-14 (effective 2026-06-04; broker
-  implementation deadline 2027-10-20). It is a table row with effective
-  dates, not a code path; cash accounts are governed by R18. Shorts: live
-  HOLD always (R19); shadow books require shortable + borrow + SSR +
-  margin checks. Corporate actions (splits, dividends, ticker changes,
+  eliminated by SEC approval on 2026-04-14 (effective 2026-06-04). Alpaca
+  has removed PDT restrictions and dropped the `daytrade_count` and
+  related account fields (by 2026-07-06) in favor of an intraday margin
+  framework. It is a table row with effective dates, not a code path; the
+  adapter must not depend on the removed fields. Shorts: HOLD under C1 (R19); under C2 they pass
+  R20. Corporate actions (splits, dividends, ticker changes,
   mergers, halts) normalize BEFORE the feature engine; until the
   adjustment layer exists, any symbol with a pending corporate event is
   untradeable. Before any live stage: the LIVE JURISDICTION GATE (doc 10
   §10.1a).
-- R18. **Settled-cash rule (cash account).** Every buy must be funded by
-  settled cash net of pending buys; a lot bought with unsettled proceeds
-  may not be sold before those proceeds settle (good-faith rule); no buy
-  whose payment depends on selling the same security (free-riding).
-  Settlement dates come from the exchange calendar (T+1 for US equities).
-  Violations HOLD the order. *Owner:* `exec/` settlement ledger.
+- R18. **Account rule.**
+  C1 (settled cash): every buy must be funded by settled cash net of
+  pending buys; a lot bought with unsettled proceeds may not be sold
+  before those proceeds settle (good-faith rule); no buy whose payment
+  depends on selling the same security (free-riding). Settlement dates
+  come from the exchange calendar (T+1 for US equities).
+  C2 (margin buffer): every order is checked against Reg T initial margin
+  (50%; 150% deposit on a short sale) and the broker's maintenance
+  requirements (`broker_compliance_policy`; Alpaca: longs 30% above $6,
+  shorts the greater of $5/share or 30% at $5 and above). After the order,
+  equity must stay above 2× the maintenance requirement. Below that
+  buffer, or on any broker margin call: MEDIUM kill, entries HOLD, gross
+  cut to half the sleeve target by closing positions. Margin interest,
+  borrow fees and short dividends are booked in the account ledger.
+  Violations HOLD the order. *Owner:* `exec/` account ledger.
   *Default:* HOLD.
 - R19. **Jurisdiction instrument allowlist.** Live orders only for
-  instruments on the signed allowlist attached to the stage manifest
-  (default: US-listed common stock and ETFs; long only; no margin, short,
-  options, futures, FX spot/CFD, leveraged/inverse products). Anything
-  else is HOLD at candidate admission and again at veto. Paper books that
-  count as promotion evidence obey the same allowlist.
+  instruments on the signed allowlist attached to the stage manifest:
+  US-listed common stock and ETFs, long only under C1, long and short under
+  C2; never options, futures, FX spot/CFD, leveraged/inverse products or
+  crypto. Anything else is HOLD at candidate admission and again at veto.
+  Paper books that count as promotion evidence obey the same allowlist.
   *Owner:* stage manifest + `broker_compliance_policy`. *Default:* HOLD.
+- R20. **Short-sale controls (C2).** A short entry requires, at order
+  time, the broker's `shortable` and `easy_to_borrow` flags; hard-to-borrow
+  names are HOLD. No short while the symbol is under the Rule 201
+  short-sale restriction, has a pending corporate event, or has a pending
+  merger or tender offer in EDGAR (8-K items 1.01/2.01, SC TO, DEFM14A):
+  a target's price can gap up through any stop. Crowding filter: no short
+  where the latest FINRA short interest exceeds 20% of float or 10 days to
+  cover (squeeze risk). Every short
+  carries a broker-native GTC buy-stop (`exit_link_v1` / `exit_event_v1`).
+  A recall, a change to hard-to-borrow, or a buy-in notice closes the
+  position (BUY-to-cover) at the next session. *Owner:* `exec/` +
+  `broker_compliance_policy`. *Default:* HOLD.
 
 ## 5.1a Measurement definitions
 
@@ -147,7 +190,7 @@ Portfolio risk is a dependency DAG:
 - L1: derived-once measurements (K6 formulas, exposure sums with pending,
   drawdown vs HWMs, vol ratio, correlations, VaR/stress, churn and flip
   state, settlement availability).
-- L2: rule predicates (R1–R19 and every threshold test; no rule reads
+- L2: rule predicates (R1–R20 and every threshold test; no rule reads
   another rule's verdict).
 - L3: one `VetoVerdict` (frozen precedence, all co-causes in reasons_all)
   + `BuildEngineInputs`.
@@ -159,14 +202,18 @@ must reproduce every existing verdict bit-identically before landing.
 
 ## 5.2 Leverage / stop table (locked)
 
-- Live (G1+): 1×, cash account, long only, every stage. No margin.
-- Shadow research books may simulate shorting or leverage only when
-  labeled non-promotable research; they never feed a promotion.
+- C1: 1×, cash account, long only. C2: margin account, gross ≤ 150%,
+  shorts under R20. No other leverage in any set.
+- Research books may simulate instruments outside the target set only
+  when labeled non-promotable research; they never feed a promotion.
+- Flatten (doc 10 §10.3) means SELL-to-close longs and, under C2,
+  BUY-to-cover shorts; exits and covers are never blocked.
 - Every order intent carries broker-native protection or it is rejected by
   `risk/veto.cpp`. Exit profiles are versioned per sleeve:
   `exit_profile_v1` (1.5×ATR(14) stop floored at 0.1%, TP 2R, calendar
   time_exit; `baseline_v1` only, diagnosed as horizon-mismatched in
-  doc 12), `exit_trend_v1`, `exit_intraday_v1`, `exit_event_v1` (doc 02).
+  doc 12), `exit_trend_v1`, `exit_intraday_v1`, `exit_event_v1`,
+  `exit_link_v1` (doc 02); short positions carry buy-stops.
   Profile variants are pre-registered and shadow-tested, never live-tuned.
 
 ## 5.3 Determinism contract
@@ -245,9 +292,11 @@ transitions are journaled):
 
 ## Locked decisions
 
-- Rules R1–R19, the stop rules, and the §5.1a definitions are code
+- Rules R1–R20, the stop rules, and the §5.1a definitions are code
   constants.
 - Agents cannot read, write, or influence any rule in this document.
 - Absent data is never treated as neutral data, anywhere in the system.
-- Live = 1×, cash account, long only, allowlisted instruments (R18/R19).
+- Live scope is the manifest's constraint set: C1 = 1×, cash, long only;
+  C2 = margin, long and short, gross ≤ 150%, easy-to-borrow shorts
+  (R18/R19/R20).
 - Any limit change = doc edit + version bump + fresh paper window.

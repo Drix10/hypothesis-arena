@@ -1,0 +1,268 @@
+# 14 - Market Link Mathematics
+
+The quantitative models behind the engine (doc 08) and the sleeves
+(doc 02). Every formula here is computed by deterministic code from
+point-in-time data. Parameters marked *registered* are frozen in a
+pre-registration; changing one is a new trial (doc 11 §11.0a).
+
+## 14.0 Notation
+
+- Firms `i, j` (CIK-keyed; tickers are mapped point in time). Trading days
+  `t`. Months `m`.
+- `r_i,t` total return; `r_m,t` market return (VTI); `rf_t` T-bill return.
+- `A_t` = information available at `t`: a datum enters `A_t` at its
+  availability time (EDGAR acceptance, GDELT publication batch, bar close
+  + 15 min SIP delay), never at the period it describes (R12).
+- `W_t` = link matrix at `t` (§14.3), `W_t[i, j] ≥ 0` = strength of the
+  link through which news about `j` reaches `i`.
+
+## 14.1 Point-in-time discipline
+
+Every object below is a function of `A_t` only. Graph edges carry the
+availability time of their evidence and are visible from the next
+computation after it. A backtest that touches any datum before its
+availability time is void (doc 11 §11.0b). Entity resolution (CIK, ticker,
+former names) uses the mapping valid at `t`.
+
+Delistings: a held name whose price series ends without a merger price is
+closed at its last price plus a delisting return of −30% for a long and
+0% for a short (Shumway 1997, applied asymmetrically so missing data never
+helps the sleeve). Firm-months in the universe with no return are counted;
+more than 5% of firm-months missing voids the run (doc 09 §9.1a).
+
+## 14.2 Shocks
+
+What propagates is the unexpected part of a firm's news, measured as:
+
+- **Abnormal return:** `e_i,t = r_i,t − rf_t − β_i (r_m,t − rf_t) − γ_i f_ind,t`,
+  with `β_i`, `γ_i` from a 252-day rolling regression ending at `t−1` and
+  `f_ind` the firm's industry ETF excess return. Standardized:
+  `z_i,t = e_i,t / σ_i` with `σ_i` the residual standard deviation.
+- **Earnings surprise (SUE):** `(EPS_q − EPS_{q−4}) / sd_k(EPS_{q−k} − EPS_{q−k−4})`
+  over the prior 8 quarters `k = 1..8` (at least 6 present, else
+  UNAVAILABLE), from XBRL actuals; available at the 10-Q/10-K or 8-K item
+  2.02 acceptance time, whichever carries the number first.
+- **Text change:** `Δ_i = 1 − cos(v_i,y, v_i,y−1)` between term-frequency
+  vectors of the same filing section in consecutive years (L2).
+- **News burst:** daily count `n_i,t` of distinct outlets in GDELT naming
+  firm `i`; burst score `b_i,t = (n_i,t − μ_i) / sqrt(μ_i)` against a
+  60-day trailing Poisson mean `μ_i` (floor 1). An event fires at
+  `b ≥ 3` with at least 3 independent outlets (*registered*).
+- **Event unit:** each event is a dated record
+  `(event_id, firm, type, t_available, magnitude, direction, evidence_ids)`;
+  the engine's Dynamic Event Unit (doc 08 §8.3).
+
+## 14.3 The link matrix
+
+One matrix per edge source `s`, each row-normalized so that `Σ_j W^s[i, j] = 1`
+(rows with no edges stay zero):
+
+- **Supply chain (`sc`):** `i` linked to `j` if a filing available at `t`
+  names `j` as a customer or supplier of `i`. Weight = disclosed revenue
+  share where given, else 1. Edges age out 18 months after their latest
+  supporting filing.
+- **Text peers (`tx`):** cosine similarity of 10-K business-description
+  embeddings or term vectors; the top `k = 10` neighbors with similarity
+  above the universe's 90th percentile; weight = similarity.
+- **News co-mention (`nw`):** `c_ij` = number of distinct articles in the
+  trailing 90 days naming both firms; edge if `c_ij ≥ 3`; weight =
+  `log(1 + c_ij)`.
+- **Common ownership (`ow`):** from 13F holdings at the latest quarter
+  available at `t`: the number of funds holding both firms, scaled by the
+  geometric mean of each firm's fund count (Anton-Polk 2014); top 10.
+
+Combined: `W = Σ_s ω_s W^s` with `ω_s = 1/S` over the sources the variant
+uses (*registered*), then row-normalized. Sources are combined by fixed
+weights, never fitted, because fitting the weights on returns is a search
+that counts as trials.
+
+## 14.4 Propagation signals
+
+- **One hop (L1):** `link_ret_i,m = Σ_j W[i, j] · R_j,m−1`, where `R_j,m−1` is
+  `j`'s return over the past month. The firm's own return is excluded by
+  construction (`W[i, i] = 0`).
+- **Neutralization:** the cross-sectional regression
+  `link_ret_i = a + b · R_i,m−1 + c · log(size_i) + d · R_ind(i),m−1 + u_i`
+  is fitted each month and the residual `u_i` is the signal. `R_ind` is the
+  firm's industry ETF return. Without this, link peers (mostly same-
+  industry) make the signal a copy of industry momentum, and a firm's own
+  past month would add the short-term reversal effect. Every report also
+  gives the alpha against UMD, industry momentum (Moskowitz-Grinblatt) and
+  short-term reversal factors.
+- **Multi-hop (research variant):** `s = Σ_{k≥1} α^(k−1) W^k x = (I − αW)^(−1) W x`
+  with `0 ≤ α < 1/ρ(W)` (Katz form). `α = 0` is one hop. A non-zero `α` is
+  a separate registered variant.
+- **Intraday/overnight split (L1 V2):** `R = R^intraday + R^overnight`
+  from open and close prices; V2 uses `R^intraday` of linked firms only
+  (Wang, JFQA 2025).
+
+## 14.5 Event propagation (L3 twin and ripple scoring)
+
+For an event at source `j` with signed magnitude `x_j` (standardized
+abnormal return, SUE, or burst-weighted tone), the deterministic twin
+predicts for each neighbor `i`:
+
+```
+pred_i = sign_table[type(i, j)] · sign(x_j)      if W[i, j] > 0
+sign_table: customer +1 | supplier +1 | text peer +1 | co-mention +1 |
+            common ownership +1 | competitor: estimated (below)
+```
+
+The competitor sign is estimated on the training window only: the
+cross-sectional slope of linked-firm abnormal returns on source shocks
+over past competitor-labeled events; if `|t| < 2` the competitor edge
+produces no trade. Targets are ranked by `W[i, j] · |x_j|` and the top 5
+become candidates, matching the brain's limit.
+
+Ripple resolution (used to score both L3 and its twin): a hypothesis
+`(i, direction d, horizon h)` resolves to the cumulative abnormal return
+`CAR_i(t+1, t+h) = Σ e_i,τ`; hit = `sign(CAR) = d`. Reported per mechanism
+and per confidence bucket: hit rate, mean signed CAR, and Brier score of
+the bucket against the hit outcome.
+
+## 14.6 Lead-lag estimation and learned networks
+
+Return-learned links are a separate, riskier edge source, kept to research
+until they pass the edge-validation test:
+
+- **Granger network** (Billio-Getmansky-Lo-Pelizzon, JFE 2012): edge
+  `j → i` if `r_j` Granger-causes `r_i` on a rolling 252-day window;
+  significance controlled by Benjamini-Hochberg FDR at 10% across all
+  tested pairs.
+- **Connectedness** (Diebold-Yilmaz 2014): forecast-error variance
+  decomposition of a sector-ETF VAR; a monitoring statistic for regime
+  and contagion, not a trading signal.
+- **Graph learning** (Pu-Roberts-Dong-Zohren 2023, network momentum):
+  sparse, interpretable graphs learned from momentum features; a research-
+  factory card, because every learned graph is a fitted object whose
+  search counts toward N.
+
+## 14.7 Edge validation (the causal check)
+
+A language model's account of cause and effect is not evidence. An edge
+source earns a place by transmitting shocks it could not have predicted:
+
+1. **Exogenous-shock test:** for source events that are plausibly
+   exogenous to the linked firm (natural disasters at a disclosed facility,
+   plant fires, sudden executive deaths; Barrot-Sauvagnat, QJE 2016),
+   the linked firms' `CAR(+1, +21)` must differ from zero in the predicted
+   direction, with event-clustered standard errors.
+2. **Placebo graph:** the same signal built on a degree-preserving random
+   rewiring of `W` (100 draws). The real graph's signal Sharpe must exceed
+   the 95th percentile of the placebo distribution.
+3. **Source ablation:** each edge source is dropped in turn and the
+   change in signal Sharpe is reported (diagnostic, not a selection step).
+
+Edge-validation results are reported with every A-gate of a graph sleeve.
+
+## 14.8 Event intensity
+
+Events cluster: one shock begets news about linked firms. The intensity of
+news events for firm `i` is modeled as a mutually exciting (Hawkes)
+process, `λ_i(t) = μ_i + Σ_j Σ_{t_k^j < t} α_ij · exp(−κ (t − t_k^j))`
+(Aït-Sahalia-Cacho-Diaz-Laeven, JFE 2015). It is used for monitoring
+(contagion spreading through the graph) and for de-duplicating events that
+are echoes of an earlier one: a burst whose excess intensity is explained
+by a linked firm's event within 2 days is tagged as an echo and does not
+trigger L3. The trigger itself is the simpler Poisson burst score of §14.2.
+
+## 14.9 Portfolio construction
+
+- **Ranks:** each month, rank the eligible universe on the signal. The
+  research measure is the full top-minus-bottom quintile portfolio; the
+  tradable book (the one the A-gate judges) holds the 20 most extreme names
+  a side at $25,000 (*registered*). Both are reported; a gap between them
+  is a concentration finding, not a choice.
+- **Share-price tilt:** at about $940 per name, a name is eligible only
+  if one share is ≤ 25% of its target, which excludes shares above about
+  $235. The report gives the signal on the excluded high-price names so a
+  price tilt cannot pass as alpha.
+- **Attention diagnostic:** spillover is stronger when the linked firm gets
+  less attention. Results are reported by tercile of trailing GDELT
+  mention count; the tercile is never used to select the tradable book
+  without a new pre-registration.
+- **Size diagnostic:** results by market-cap tercile. A $25,000 book's
+  structural advantage is that large funds cannot hold enough of the
+  smaller names for the effect to matter to them; if the edge lives only
+  in the bottom tercile, the next pre-registration targets it, with its
+  wider spreads priced in.
+- **Neutrality:** equal dollar weights within each leg; dollar-neutral at
+  rebalance (net within ±10% of equity); realized beta to VTI reported;
+  |β| ≤ 0.3 is an A-gate condition (doc 11 §11.3a).
+- **Sizing:** sleeve gross scaled so the ex-ante annual volatility (60-day
+  EWMA covariance, sector-shrunk) targets 10%, capped by the constraint
+  set's gross limit. Whole shares; a name is eligible only if one share is
+  ≤ 25% of its target position.
+- **Turnover band:** a held name is kept while it stays in the top
+  (bottom) 40%; the band is registered and reported.
+
+## 14.10 Costs and capacity (`cost_v3`)
+
+Per trade of `q` shares at price `p`:
+
+```
+cost = q·p · ( spread/2 + fee_sec31 + fee_taf + η · σ_d · sqrt(q / ADV) )
+     + borrow_rate · |short value| · days / 360          (C2 shorts)
+     + margin_rate · max(0, debit balance) · days / 360  (C2)
+     + dividends owed on shorts
+```
+
+- `spread` from SIP NBBO at the decision time; `η = 1` (square-root impact
+  law), `σ_d` daily volatility, `ADV` 20-day median volume; participation
+  ≤ 1% of ADV per order.
+- Borrow: 0 for easy-to-borrow names at Alpaca; the stress test charges
+  0.5%/year; hard-to-borrow names are excluded. Margin interest at the
+  broker's published rate. No rebate on short proceeds.
+- Stress legs 1×/1.5×/2×/3× on spread, fee and impact.
+- **Capacity:** the book size at which the expected net alpha (after the
+  50% haircut) equals expected cost; reported per sleeve. A sleeve whose
+  capacity is below 4× the stage's capital does not promote.
+- **Break-even at small size:** at $25,000, 40 names, 150% gross and
+  about 80% monthly turnover per side, round-trip spread and fees of
+  15 bp cost roughly 3-4% of equity a year. A long-short spread must earn
+  more than that after the haircut; the pre-registration states the
+  expected turnover and break-even spread, and the turnover band (§14.9)
+  is the main lever.
+
+## 14.11 Evaluation statistics
+
+Definitions are in doc 11 §11.0b and §11.3a; the quantities used:
+
+- Spanning regression `r_s,t = α + β r_b,t + ε_t` on daily net excess
+  returns of the sleeve `s` and the reference book `b`; `α` with a
+  stationary-bootstrap CI and HAC standard errors.
+- Deflated Sharpe ratio with the effective number of trials `N_eff`
+  (doc 11 §11.0b): the number of clusters of the ledger's trial return
+  series under optimal-number-of-clusters clustering on their correlation
+  matrix, never below the trials in the sleeve's own family; probability of
+  backtest overfitting via CSCV when variants exist.
+- Minimum track record length
+  `MinTRL = 1 + (1 − γ3·SR + (γ4 − 1)/4 · SR²) · (z_α / (SR − SR*))²`
+  observations (Bailey-López de Prado), per-period `SR`, skew `γ3`,
+  kurtosis `γ4`, benchmark `SR* = 0`.
+- **Power (binding on design):** the standard error of an annualized
+  Sharpe over `T` years is about `sqrt((1 + SR²/2) / T)`. Over a 3-year
+  holdout a CI lower bound above zero needs an annual Sharpe near 1.15;
+  over the 9-10 years of free SIP history it needs about 0.65. The planning
+  prior for a graph sleeve is 0.3-0.6. Therefore the A-gate is computed on
+  the whole pre-registered evaluation window (doc 11 §11.3a), the holdout
+  is a consistency check, and a sleeve with a positive but underpowered
+  estimate is a D2 candidate (doc 09 §9.1b), not a pass.
+
+## 14.12 Decay monitoring
+
+For every promoted or shadowed sleeve: rolling 24-month spanning alpha and
+its t-statistic, and a one-sided CUSUM on monthly net returns against the
+haircut expectation. These can only pause or kill a sleeve (doc 11
+§11.2a: kill-only sequential rules); they never re-tune it.
+
+## Locked decisions
+
+- Every signal is a deterministic function of point-in-time data.
+- Edge sources combine with fixed, registered weights; fitted weights or
+  learned graphs are trials.
+- An edge source is validated by the exogenous-shock and placebo-graph
+  tests, not by a model's causal narrative.
+- `cost_v3` includes borrow, margin interest and short dividends for C2;
+  capacity below 4× stage capital blocks promotion.
+- Decay monitors only pause or kill.

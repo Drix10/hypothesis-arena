@@ -1,12 +1,17 @@
 # ARCHITECTURE: codebase guide
 
-AI-assisted systematic fund: US-listed equities and ETFs, cash account, long
-only, paper only. Forex is research-only (OANDA is blocked; RBI LRS prohibits
-forex and margin trading abroad). No crypto.
+AI-assisted systematic fund that trades the slow spread of news between
+linked firms: an engine builds a point-in-time link graph from SEC filings,
+global news and ownership data, an LLM reasons about where events ripple,
+and a deterministic C++ kernel executes. US-listed equities and ETFs, paper
+only. The kernel enforces a cash account, long only (C1); research targets
+a US margin account, long and short (C2). No crypto.
 
-Status: plan frozen (alpha-first). Kernel P3.5 H1 is built with a verified
-Alpaca paper transport. Five sleeves are backtested and none passed an
-economic gate. G0b has not started.
+Status: plan freeze v4 (2026-10-02). Kernel P3.5 H1 is built with a
+verified Alpaca paper transport; further kernel hardening is parked. Five
+earlier sleeves failed their A-gates. The engine's link graph and the
+ripple sleeves are designed (plan 02, 08, 14) and not yet built. G0b has
+not started.
 
 `plan/` is the source of truth; this file describes the tree. `git ls-files`
 lists every tracked file (380 on 2026-09-30) and wins over the lists below
@@ -50,45 +55,56 @@ is git-ignored.
   `kernel-sanitizer` (ASan+UBSan), `secrets` (gitleaks over full history), `agent-flow` (doctor +
   audit-risk against the baseline).
 
-## 2. plan/ (13 docs + manifest + appendix/ + reviews/)
+## 2. plan/ (14 docs + manifest + appendix/ + reviews/)
 
-The plan covers the legal live scope, the strategy book, the validation
-standard and the shortest path to paper. Where a note here conflicts with a
-doc, the doc wins.
+The plan covers the thesis, the legal live scope, the engine, the
+strategy book, the validation standard and the path to paper. Where a note
+here conflicts with a doc, the doc wins.
 
-- `00-INDEX.md` - reading order and doc authority map. Read first.
-- `01-vision-and-scope.md` - fund scope; venue is Alpaca paper (US stocks and
-  ETFs); broker WS + 15-min REST reconcile; no FIX.
-- `02-strategy-book.md` - alpha system contract; the X-lists tail is disabled
-  in v1 (§2.6; archive in `appendix/02-x-lists-archive.md`).
+- `00-INDEX.md` - thesis in one paragraph, reading order, global locked
+  decisions. Read first.
+- `01-vision-and-scope.md` - linked-firm diffusion thesis and its evidence,
+  operator path, constraint sets C1/C2, venue (Alpaca), latency tiers.
+- `02-strategy-book.md` - sleeves L1 link momentum, L2 filing change, L3
+  LLM ripple events (with deterministic twin), L4 ETF trend long-short;
+  controls; record of retired sleeves and the X archive pointer.
 - `03-jev-decision-layer.md` - JEV: an optional filter, one candidate-bound
   contract, 4 questions, exit profile v1, case 29.
-- `04-cpp-deterministic-core.md` - kernel contract (§4.2 broker-feed
-  staleness, §4.5 ingest).
-- `05-risk-and-determinism.md` - R1-R19 (code constants) and the §5.1c DAG.
-- `06-execution-and-ops.md` - ops: §6.4 HALT friction, §6.5 paper fill model
-  (10bp drag), exits local and never source-gated. §6.1b moved to `appendix/`.
-- `07-build-roadmap.md` - phase sequencing, Phase-0 boxes and P3.5.
-- `08-agentic-research-plane.md` - research-plane contract: §8.2 OS
-  identities, §8.3a cadence, §8.4 hardening (internals in `appendix/`), §8.5
-  schema f2, §8.6 deployment exit boxes.
-- `09-osint-and-free-data.md` - source contract: §9.1 Tier-A table
-  (broker, EDGAR, FRED/ALFRED, Treasury/BLS/BEA, session calendars, earnings
-  calendar), Tier B/C/D posture; §9.4 "done" = poller + TTL + heartbeat +
-  measured p50/p99 per Tier-A source.
-- `10-capital-gates-and-spend-control.md` - G0/G1 $150, G2 $400, G3 $1000,
-  60/80/100% tiers, stage definitions, jurisdiction gate; G0_PAPER only.
-- `11-calibration-and-self-improvement.md` - promotion needs measured edge and
-  human sign-off; trial ledger, contamination control, §11.1a regime/decay.
+- `04-cpp-deterministic-core.md` - kernel contract (§4.2 modules, account
+  ledger, ingest side policy, §4.5 done boxes).
+- `05-risk-and-determinism.md` - R1-R20 per constraint set (code
+  constants) and the §5.1c DAG.
+- `06-execution-and-ops.md` - execution by sleeve, short-side rules,
+  `cost_v2`/`cost_v3`, account operations, outage playbook; §6.1b in
+  `appendix/`.
+- `07-build-roadmap.md` - critical path, A-CP1 decision rules, tracks A/P/K,
+  stages, firewall, sign-off log.
+- `08-epistemic-engine.md` - Market Link Graph, event pipeline, router /
+  retrieval / brain / verifier, isolation, feature contract f2/f3, research
+  factory, model pinning.
+- `09-osint-and-free-data.md` - source tiers (EDGAR, GDELT, quarantined
+  social), license matrix, research datasets, data phases D1/D2, ingestion
+  rules.
+- `10-capital-gates-and-spend-control.md` - stage chain, C1/C2
+  jurisdiction gates, stage table, kill switches, AI spend control, path to
+  outside capital (§10.6).
+- `11-calibration-and-self-improvement.md` - trial ledger, statistics,
+  contamination classes A/B/C, transferability, calibration, sleeve gates
+  (`val_v2` spanning test), AI paired delta.
 - `12-statistical-baseline.md` - `baseline_v1` (negative control) and the
-  benchmark set.
-- `13-cpp-kernel-build.md` - kernel build record: JEV filter, slices, §13.7
-  battle-testing ladder.
-- `system-manifest.yaml` - freeze pins (v3/f2/baseline_v1/exit_profile_v1/g1,
-  JEV revision/provider). freeze-check enforces it.
+  benchmark set with the reference book.
+- `13-cpp-kernel-build.md` - kernel build contract: JEV filter, slices,
+  §13.7 battle-testing ladder, §13.8 remaining scope (K1, K5, K9, K10,
+  K-C2).
+- `14-market-link-mathematics.md` - shocks, link matrix, propagation,
+  lead-lag networks, edge validation, Hawkes intensity, portfolio
+  construction, `cost_v3`, evaluation and decay statistics.
+- `system-manifest.yaml` - freeze pins (f2/baseline_v1/exit profiles/g1,
+  constraint sets, JEV revision/provider). freeze-check enforces it.
 - `appendix/` - binding implementation records (06b close ownership, 08
-  ledger integrity, 09 collector O7 exception, 02 X archive) and the testing
-  program (`10-sleeve-integration-plan.md`, `11-sleeve-evidence-review.md`).
+  ledger integrity, 09 collector O7 exception, 02 X archive) and the
+  retired-sleeve testing program (`10-sleeve-integration-plan.md`,
+  `11-sleeve-evidence-review.md`).
 - `reviews/` - dated status records (`2026-09-29-alpha-results.md`).
 
 ## 3. kernel/ (C++17, tests co-located)

@@ -1,216 +1,265 @@
-# 09 - OSINT, Free Data, and Source Ranking (freeze v3)
+# 09 - OSINT, Free Data, and Source Ranking
 
-Every source here is free at the tier used. Some require a free signup key
-(marked KEY). None require a paid subscription for core operation. If a
-source starts charging, the system loses that feature and keeps trading;
-no source is load-bearing except the broker feed and the session calendar.
+Every source used for core operation is free at the tier used; some need
+a free signup key (KEY). Paid data enters only on the §9.1b trigger, for
+research, never as a live dependency. If a source starts charging, the
+system loses that feature and keeps trading; nothing is load-bearing
+except the broker feed and the session calendar.
 
 ## 9.0 The prior (read before adding a source)
 
-Published evidence on LLM-driven trading is poor:
-
-- A leakage-safe, search-aware evaluation rejected every LLM-discovered
-  strategy tested (two frontier models, up to 100 candidates, 453 stocks +
-  39 ETFs, realistic costs); a contrived oracle with Sharpe 35 passed
-  conventional DSR and PBO tests - those tests do not protect alone.
-- An evidence map of 77 studies: of 19 primary empirical LLM-trading
-  studies, 2 had time-consistent splits, 1 specified costs, 0 reproducible.
-- Apparent LLM-agent alpha largely dissolves once look-ahead from the
-  model's training data is controlled (Profit Mirage 2025; Look-Ahead-Bench
-  2026; Detecting Lookahead Bias in LLM Forecasts 2025; HindsightBench
-  2026). Live benchmarks (LiveTradeBench, 50 days, 21 LLMs) find general
-  model rankings do not predict trading results; the 2026 agentic-trading
-  survey finds evidence gets less favorable moving from backtests to live.
-- Foreknowledge of news is not edge: participants given next-day *WSJ*
-  headlines hit 51.5% and 45% lost money.
-- Instruction-tuned LLMs are overconfident; post-training worsens
-  calibration (ECE +13.1%, Brier +6.5% vs base models).
-- Published anomalies decay ≈58% after publication (McLean–Pontiff);
-  new factors need t ≥ 3 (Harvey–Liu–Zhu).
-- AI demonstrably helps real funds in research throughput
-  (agentic signal proposal + coding + backtesting, then human committee),
-  not per-trade discretion.
+- Information diffusion across linked firms is documented and slow (doc 01
+  §1.1). The data the fund needs is the data that reveals links and dated
+  events: filings, ownership, news co-mentions, prices.
+- End-to-end LLM trading evidence is poor: leakage-safe evaluations reject
+  LLM-discovered strategies; most published LLM-trading studies lack
+  time-consistent splits or costs; apparent alpha largely dissolves once
+  look-ahead is controlled; live benchmarks find model rankings do not
+  predict trading results. Headline-reading signals decayed as adoption
+  rose (Lopez-Lira-Tang).
+- Social media is polluted by coordinated inauthentic behavior and
+  pump-and-dump bots; a signal built on it without corroboration trades
+  phantom events.
+- Published anomalies decay about 58% after publication (McLean-Pontiff);
+  new factors need t ≥ 3 (Harvey-Liu-Zhu).
 
 Consequences:
 1. **No source is assumed to have edge.** Every non-price source enters as
-   CONTEXT/NULL and is promoted only by incremental edge over what the
-   sleeves already know, net of cost, over a full paper window,
-   human-reviewed (doc 11). Standalone hit-rate is not evidence.
-2. **Sleeves carry the edge hypothesis** (doc 02), each with its own data
-   contract; sources serve sleeves, not the other way round.
-3. **Costs are modeled before edge is claimed** (`cost_v2`, doc 06 §6.0a).
-   A 10 bp drag turns a 113%/yr gross path into 65%.
-4. **LLM-derived evidence is time-gated** (doc 11 §11.0c).
+   CONTEXT or NULL and is promoted only by incremental edge in a sleeve
+   that pre-registered it (doc 11).
+2. **Sleeves carry the edge hypothesis** (doc 02); sources serve sleeves.
+3. **Costs are modeled before edge is claimed** (`cost_v3`, doc 14 §14.10).
+4. **Model-derived evidence is contamination-controlled** (doc 11 §11.0c).
 
-## 9.1 Ranking (locked classes; weights tuned only per doc 11)
+## 9.1 Ranking
 
-`TRIGGER` = may place a feature that can lead to an entry · `CONTEXT` =
-informs only, never triggers · `NULL` = declared null hypothesis, measured,
-never used until promoted.
+`TRIGGER` = may feed a feature a sleeve acts on · `CONTEXT` = informs only ·
+`NULL` = declared null hypothesis, measured, never used until promoted.
 
-**S6 status (released):** `event_direction_v1` is a deterministic
-interpretation/carry layer: CONTEXT-only, unknown on ambiguity or unmapped
-input, never a TRIGGER promotion; production integration only via doc 11.
+### Tier A - primary, TRIGGER-eligible (or veto-side)
 
-### Tier A - real, usable, TRIGGER-eligible (or veto-side)
-
-| Source | Gives | Latency / cadence | Cost | Class | Role | Failure default |
-|---|---|---|---|---|---|---|
-| Alpaca market data - real-time IEX | Quotes/trades/bars (IEX venue only; quotes can be wider than NBBO) | streaming | free w/ account | TRIGGER (order pricing + staleness/spread vetoes) | Order pricing, liveness | stale > 30 s → entries vetoed |
-| Alpaca market data - SIP history | Consolidated bars/trades/quotes, ≥ 15 min delayed | on request | free (Basic plan) | TRIGGER (sleeve signals) | Every sleeve signal + backtest + `cost_v2` spreads | Missing bar → signal UNAVAILABLE → HOLD |
-| Alpaca account/positions/orders | Account state, settled cash, fills | streaming + REST | free | authority for execution state | Reconcile, settlement ledger | outage → entries stop (S9) |
-| SEC EDGAR submissions + XBRL `companyfacts`/`frames` + filing index | 8-K (incl. item 2.02 + EX-99.1), 10-Q/10-K, Form 4 (XML), fundamentals | submissions < 1 s; XBRL < 1 min | free, UA required | TRIGGER (equities) | E1/E2 sleeves; corporate events; earnings calendar | Source `stale` after 15 min → features expire |
-| FRED / ALFRED KEY | Rates, curve, real yields, breakevens, credit spreads, NFCI, VIX close, FX rates, release calendar, vintages | per release | free | TRIGGER (macro) / CONTEXT (overlay research) | M1/M2 context, X1 research, calendars | Last known vintage, marked stale |
-| US Treasury FiscalData, BLS, BEA KEY(BEA) | Auctions, yields, CPI/NFP detail, GDP | per release | free | TRIGGER (macro) | Macro context, event calendar | as above |
-| Exchange + venue session/holiday calendars | `session`, early closes, settlement days | static + updates | free | TRIGGER (veto side) | R9/R18 veto input. Load-bearing. | Missing calendar = no entries. |
-| Earnings calendar (EDGAR-derived) | Scheduled event risk | daily | free | TRIGGER (veto side) | Suppress entries into known events | Unknown → event-present → no entry |
-
-**HISTORICAL / NON-PRODUCTION (not Tier A, never TRIGGER-eligible in v1):**
-
-| X-Lists tail (doc 02 history only; archive in `appendix/02-x-lists-archive.md`) | DISABLED in v1 (terms conflict, no authorized interface). | n/a | n/a | NULL in v1, no promotion path without a doc-01 scope change | Removed from production. |
-
-### Tier B - situational, event-driven, CONTEXT by default
-
-These fire rarely and are carried because their rare firings are large. Each
-is a risk-off / exposure-reduction input, never an entry input until promoted.
-
-| Source | Gives | Latency | Cost | Class | Assessment |
+| Source | Gives | Cadence | Cost | Role | Failure default |
 |---|---|---|---|---|---|
-| USGS earthquakes (GEV) | Global M≥4.5, 24 h | ~minutes | free | CONTEXT | Only a major quake in a major economy moves JPY or an insurer; a handful of relevant events per year. Cheap to carry; may block entries only. OSINT never widens, narrows, or moves stops (stops are the frozen exit profile, doc 03 §3.3; any modifier needs its own proven profile). |
-| NASA FIRMS active fires (GEV) | Fire detections, 24 h | ~3 h (satellite pass) | free KEY | CONTEXT | Utility/insurer tail risk (e.g. CA). 3 h latency means the market has already moved; this is a risk flag, never a trade trigger. |
-| Open-Meteo / NOAA weather | Temps, storms, HDD/CDD | hourly | free, no key | CONTEXT | Edge exists in nat-gas and ags, neither of which is in the instrument set. Carried only for storm-driven US utility/insurer risk-off. Low priority. |
-| Launch Library 2 (GEV) | Launch schedule/outcomes | daily | free | NULL | Relevant to a handful of space-adjacent tickers. Declared null, measured. |
-| Submarine cables (GEV, static dataset) | Cable routes | static | free | NULL | The bundled dataset is static geometry and does not report cuts; useless without an outage feed. Carried as geometry for enrichment only. |
-| Macro/geopolitical news via RSS (central banks, Treasury, exchange notices) | Official statements | seconds–minutes | free | TRIGGER (macro, official sources only) | Primary sources only. No aggregators, no news-sentiment vendors. |
+| Alpaca real-time IEX | quotes/trades/bars (IEX venue only) | streaming | free w/ account | order pricing, staleness/spread vetoes | stale > 30 s → entries vetoed |
+| Alpaca SIP history | consolidated bars/trades/quotes, ≥ 15 min delayed | on request | free (Basic) | every signal, backtest, `cost_v3` spreads | missing bar → signal UNAVAILABLE → HOLD |
+| Alpaca account/positions/orders/assets | account state, settled cash, margin, `shortable`/`easy_to_borrow` flags | streaming + REST | free | execution authority, R18/R20 inputs | outage → entries stop (S9) |
+| SEC EDGAR submissions, filing index, documents | 10-K/10-Q/8-K full text, exhibits, former names, acceptance times | < 1 s index | free, UA required | MLG `sc`/`tx` edges, events, L2 | source `stale` after 15 min → features expire |
+| SEC EDGAR XBRL (`companyfacts`, financial-statement sets) | actuals, shares outstanding | per filing | free | SUE, point-in-time market cap | last value, marked stale |
+| SEC EDGAR Form 4 / 13F | insider trades; quarterly institutional holdings | per filing / quarterly | free | MLG `ow` edges; insider events | as above |
+| FRED/ALFRED KEY, Treasury, BLS, BEA KEY | rates, curve, credit, macro releases, vintages | per release | free | macro context, event calendar | last vintage, marked stale |
+| Exchange session/holiday calendars | sessions, early closes, settlement days | static | free | R9/R18 veto input; load-bearing | missing calendar = no entries |
+| Earnings calendar (EDGAR-derived) | scheduled event risk | daily | free | suppress entries into known events | unknown → event-present → no entry |
 
-### Tier C - carried as declared nulls or excluded (verdict on God's-Eye-View)
+### Tier B - news and world events, CONTEXT by default
 
-The public sources behind God's Eye View (GEV) are integrated as structured
-features. Most have no plausible edge for forex majors and US-listed
-equities. They are ingested cheaply, emitted as `NULL`-class features,
-measured for one full paper window, and promoted only by doc 11. Expected
-promotions: approximately zero.
-
-| Source | Why it does not trade our instruments |
-|---|---|
-| AISStream vessels KEY | AIS supply-chain edge exists in commodities at satellite coverage. The free tier is terrestrial; the project's README states terrestrial AIS "goes quiet mid-ocean and satellite AIS costs real money." Port-congestion features built on coverage-gapped data are noise. NULL. |
-| OpenSky / adsb.lol flights | Corporate-jet inference is low-signal and high-legal-risk; military ADS-B is a crude geopolitical proxy, and large events are in the FX tape before the tracker resolves. NULL, and never person-linked (the upstream project refuses named-person features; that line is inherited). |
-| CelesTrak satellite catalog | No transmission mechanism to EURUSD or AAPL. Excluded. |
-| CCTV mesh, TomTom traffic, transit, bikeshare, radio, directions, basemaps | Visualization layers. No mechanism. Excluded. |
-| Mapped military installations | Incomplete by the source's own admission. Excluded. |
-
-**Locked:** no GEV-derived feature may be TRIGGER-class in v1. They enter as
-CONTEXT or NULL only. The visualization layers are excluded; only the sources
-are used.
-
-### Tier D - public AI/agentic-trading systems (lessons, not signals)
-
-A weekly agent job harvests publicly documented agentic trading systems (GitHub,
-papers, X) and writes a lessons record, never a feature or a signal.
-
-Evidence bar, applied before anything is recorded:
-- Accept only if: forward-only / time-consistent splits, stated transaction
-  costs, out-of-sample window ≥ 1 full market cycle, and reproducible artifacts.
-- Record as hype (kept as a negative example) anything reporting gross
-  returns, in-sample Sharpe, sub-1-year windows, or no cost model.
-- Both-sided extraction: every accepted item must yield a pattern and
-  a failure mode. Known failure modes seeded at Phase 0: over-trading,
-  size-on-losses, regime blindness, uncalibrated confidence, lookahead via
-  publication timestamps, episodic-memory outcome leakage ("oracle fallacy"),
-  crowding/alpha decay, and evaluating gross of costs.
-- Output: `research-home/lessons/lessons.jsonl`, in the offline
-  research/evaluation environment, not the trading tree. The research plane's
-  only trading-tree output is `features.jsonl` (R11). Reviewed weekly by a
-  human. A lesson becomes a code or threshold change only through doc 11's
-  promotion gate. Lessons never reach the live decision path automatically.
-
-### Data license matrix (locked; "free" is not a license)
-
-| Source | Access | Commercial/auto use | Redistribution | Storage/derived |
+| Source | Gives | Cadence | Cost | Role |
 |---|---|---|---|---|
-| SEC EDGAR | free, no key, 10 req/s fair-access max | public filings; automated collection within fair access | no bulk resale; derived features ours | 90-day prune of raw; derived kept |
-| FRED/ALFRED | free, key required | allowed with attribution; some series carry third-party copyright (e.g. ICE BofA indices) - check per series before use | no bulk redistribution | vintages kept for replay |
-| Treasury/BLS/BEA/Fed/ECB | free | public data, automated use allowed | link, don't mirror | same prune |
-| Alpaca market data | free with account (Basic) | per Alpaca data terms for account holders; re-verify before G1 | never | research datasets stay local, manifest-hashed; never committed |
-| Broker account data | account required | per broker terms | never | journal keeps fills, not depth |
-| USGS/FIRMS/Open-Meteo | free (FIRMS token) | allowed | attribution | same prune |
-| X | EXCLUDED v1 | n/a | n/a | history only |
+| GDELT GKG 2.0 + Events | organizations, themes, tone and locations per article, worldwide, 100+ languages | 15 min | free; cite with link | MLG `nw` co-mention edges; `news_burst` events; event corroboration |
+| Official RSS (Fed, Treasury, SEC press, exchange notices) | primary statements | minutes | free | macro and regulatory events |
+| USGS earthquakes, OpenFEMA disaster declarations, NASA FIRMS KEY | dated disasters with locations | minutes-hours | free | corroboration for `disaster` events named in news; exogenous-shock tests (doc 14 §14.7) |
+| FINRA equity short interest (twice monthly) and Reg SHO daily short volume | short interest, days to cover | per publication | free API (5 rolling years; older files downloadable) | R20 short-crowding filter; short-side diagnostics |
+| GitHub public API | repository activity (stars, releases, commits) | hourly | free (rate-limited) | NULL: developer-activity bursts for software and AI firms, measured before any use |
+| Wikipedia pageviews API | daily page views per firm | daily | free | NULL: attention measure (Focke-Ruenzi-Ungeheuer) |
 
-## 9.1a Research datasets (v3)
+A GDELT-derived feature is `derived` evidence about what the news says,
+never about what happened. Firm-moving facts are confirmed against Tier A
+before any TRIGGER use.
+
+### Tier C - social media, quarantined
+
+| Source | Access | Status |
+|---|---|---|
+| Bluesky (AT Protocol Jetstream) | free public WebSocket, ~850 MB/day of posts | NULL: cashtag and firm-name counts and buckets only |
+| Reddit | API; commercial use needs a paid agreement | excluded until terms are verified in writing |
+| X | official pay-per-use API ($0.005 per post read, $0.010 per user object, no free tier, 2026) | NULL: the `xcorr_v1` corroboration test only (§9.1c); the earlier X-lists signal system is HISTORICAL / NON-PRODUCTION (`appendix/02-x-lists-archive.md`) |
+
+Quarantine rules (locked):
+- A social signal never triggers alone. It may only attach to an existing
+  Tier A or Tier B event as corroboration, as a count or bucket.
+- Bot and manipulation filters run before counting: accounts younger than
+  90 days, posting rates above the 99th percentile, near-duplicate text
+  clusters (MinHash, Jaccard ≥ 0.8) and synchronized bursts from new
+  accounts are dropped and counted.
+- Firms below $500M market cap or $10M daily dollar volume are never
+  scored from social data (pump-and-dump territory).
+- Sentiment, where measured, comes from a pinned FinBERT model and is
+  emitted as a bucket, never a float.
+- Noise rules ported from the X-lists archive and the operator's earlier
+  scraper (`twitter-gemini-github-mvp`, `src/services/twitter.js`): the
+  off-topic pattern list (sports, fashion, celebrity, giveaway/airdrop,
+  "comment YES" engagement bait, passive-income spam), the minimum-
+  substance rule (≥ 30 words, or ≥ 15 words with an external link), and
+  dedupe by post id with a capped set (10k ids, keep the newest half on
+  overflow).
+
+### Tier D - public AI-trading systems (lessons, not signals)
+
+A weekly job harvests publicly documented AI-trading systems and papers
+and writes `lessons.jsonl`, never a feature. Accepted only with
+time-consistent splits, stated costs, an out-of-sample window of at least
+one market cycle and reproducible artifacts; anything reporting gross
+returns or in-sample Sharpe is recorded as a negative example. Every
+accepted item yields a pattern and a failure mode.
+
+### Excluded
+
+Terrestrial AIS vessels, ADS-B flights, satellite catalogs, CCTV, traffic
+and other visualization layers: no mechanism for our instruments, or
+legal risk, or coverage gaps. Never person-linked features.
+
+### Data license matrix ("free" is not a license)
+
+| Source | Commercial/automated use | Redistribution | Storage |
+|---|---|---|---|
+| SEC EDGAR | public filings; automated within fair access (10 req/s) | no bulk resale; derived features ours | raw pruned at 90 days except the research corpus (manifest-hashed, local) |
+| GDELT | free use including in products, with citation and link | cite GDELT | derived features kept; raw batches pruned at 90 days |
+| FRED/ALFRED | allowed with attribution; some series carry third-party copyright (check per series) | no bulk redistribution | vintages kept |
+| Treasury/BLS/BEA/Fed/USGS/OpenFEMA | public data | link, don't mirror | pruned at 90 days |
+| Alpaca market data | per Alpaca data terms; re-verify before G1 | never | local, manifest-hashed, never committed |
+| Ken French data library | free for research use | cite | local |
+| Bluesky | public protocol data; respect user deletions | never | counts only; raw posts not retained |
+| GitHub, Wikipedia pageviews | per API terms | cite | counts only |
+| Third-party derived sets (e.g. published text-peer files) | per license, checked before use | per license | per license |
+| X, Reddit | paid / excluded | n/a | n/a |
+
+## 9.1a Research datasets
 
 Every dataset used by a pre-registration is a manifest: source, endpoint,
-query, time range, feed (`sip`), adjustment mode, row count, content hash,
-fetch time. Runs name their manifest hashes; a run that cannot is void.
+query, time range, feed, adjustment mode, row count, content hash, fetch
+time. Runs name their manifest hashes; a run that cannot is void.
 
-- **History limit:** the free Alpaca feed serves bars from 2016-01-04 only
-  (about 10.6 years). Evidence on it covers one full cycle at most; a
-  longer sample needs a second, manifested source before any sleeve is
-  called robust.
-- **SIP daily bars** for the doc 02 ETF universes (VTI, VEU, VNQ, IEF, DBC,
-  BIL, SPY, QQQ, IWM, 9 SPDR sectors) - split-adjusted for signals,
-  raw + dividends for total-return accounting.
-- **SIP minute bars + quotes** for SPY/QQQ/IWM (I1) and for `cost_v2`
-  spreads on every traded symbol.
-- **Single-stock SIP daily bars** for E1/E2 event universes, filtered point
-  in time from the bars themselves (price, dollar volume).
-- **EDGAR Form 4 XML** (all filers, including since-delisted issuers) and
-  **8-K item 2.02 + EX-99.1** with acceptance datetimes.
-- **FRED series (initial set, research/context):** DGS3MO, DGS2, DGS10,
-  T10Y2Y, T10Y3M, DFII10, T10YIE, BAA10Y, NFCI, VIXCLS, DTWEXBGS,
-  FEDFUNDS; FX research (X1): DEXUSEU, DEXJPUS, DEXUSUK, DEXSZUS, DEXUSAL,
-  DEXCAUS, DEXUSNZ, DEXSDUS, DEXNOUS plus OECD 3-month interbank rates.
-  ALFRED vintages whenever a series is revised.
-- **Corporate actions and dividends** from the broker's corporate-actions
-  data where available, cross-checked against EDGAR 8-K; a symbol with an
-  unresolved action is excluded for the affected window.
+- **SIP daily bars** (2016-01-04 onward on the free feed) for the
+  universe, split-adjusted for signals and raw + dividends for total-return
+  accounting; **SIP minute bars and quotes** for `cost_v3` spreads and the
+  intraday/overnight split.
+- **EDGAR corpus:** 10-K/10-Q/8-K full text since 1993, section-parsed,
+  with acceptance datetimes; submissions and former names for CIK/ticker
+  mapping; XBRL financial-statement sets (2009+); Form 4; 13F (2013 Q2+
+  in XML).
+- **GDELT GKG 2.0** (2015-02 onward) organization lists, aggregated to
+  daily firm co-mention counts after entity resolution. The raw history is
+  terabytes: the backfill streams one 15-minute file at a time, keeps only
+  the firm-pair counts, and deletes the raw file; its download volume and
+  run time are measured on one month before the full run (A15). Querying
+  the BigQuery public copy instead must stay inside the free monthly
+  query allowance, chunked by month.
+- **Ken French data library:** daily FF5 + momentum factors and industry
+  portfolios.
+- **FRED series** for macro context; ALFRED vintages whenever a series is
+  revised.
+- **Corporate actions and dividends** from the broker's data, cross-checked
+  against EDGAR; a symbol with an unresolved action is excluded for the
+  affected window.
 
 Data-quality rules:
 - **Survivorship:** the free feed may lack history for delisted symbols.
-  Every run reports excluded-event counts; > 5% excluded voids an event
-  sleeve run. ETF sleeves are chosen partly because this bias is minimal.
+  Every run reports excluded-event counts; more than 5% excluded voids an
+  event or single-stock sleeve run.
 - **Point-in-time S&P-500 membership is not freely available**; no sleeve
-  may depend on it (doc 12 §12.1). Universes come from ETFs, EDGAR filer
-  lists, and point-in-time price/volume filters.
+  depends on it (doc 12 §12.1). Universes come from point-in-time
+  price/volume/market-cap filters over EDGAR filers.
 - **Signal vs execution data:** signals from SIP; IEX only for order
-  pricing (doc 04 §4.1). A backtest never uses a price the live sleeve
-  could not have had at its signal time.
-- **Timestamps:** the timestamp a sleeve acts on is the source's
-  availability time (EDGAR acceptance, FRED release time, bar close + 15
-  min delay), never the period the data describes.
+  pricing. A backtest never uses a price the live sleeve could not have had
+  at its signal time.
+- **Timestamps:** the availability time (EDGAR acceptance, GDELT batch
+  time, FRED release time, bar close + 15 min), never the period described.
+
+## 9.1b Data phases
+
+- **D1 (free, now):** everything in §9.1 Tier A/B and §9.1a.
+- **D2 (paid, research only):** bought only on a written trigger, by an
+  amendment to this section naming the trigger, dataset, license and cost:
+  - survivorship-free US daily prices with delisting returns (late 1990s+,
+    ≤ $100/month) when a sleeve's A-gate is void or underpowered for a data
+    reason (excluded events > 5%, or history shorter than MinTRL) and its
+    point estimate clears the haircut bar;
+  - X pay-per-use reads for `xcorr_v1` (§9.1c), capped at $50/month,
+    once `ripple_det_v1` candidates run forward and the test is
+    pre-registered;
+  - a news archive with entity tags only if the GDELT co-mention source
+    passes edge validation (doc 14 §14.7) and its coverage is the binding
+    limit.
+  A failure with an economic cause never triggers D2.
+- Live operation never depends on D2 data.
+
+## 9.1c X corroboration test (`xcorr_v1`)
+
+Question: does a bot-filtered burst of X posts about a firm, seen before
+the decision, make a ripple candidate more likely to resolve in its
+predicted direction? X is tested only as corroboration of an event that
+already exists (doc 08 §8.3); it never creates an event or a candidate.
+
+- **Acquisition:** the official X API only. The operator's Selenium
+  scraper is not integrated: it automates a logged-in session (against X's
+  terms and doc 01 §1.6), keeps no post archive and captures no author
+  metadata. Its filters, record shape (`id, url, text, quoted_text,
+  created_at, links`) and curated list ids are reused as specification.
+- **What is read:** for each tested event, posts from the 24 hours before
+  the decision time that mention the source firm's cashtag or resolved
+  name, at most 50 posts per event, with author objects cached by id.
+  Two strata are kept apart: open search, and the curated expert lists
+  (`appendix/02-x-lists-archive.md` §2.4), which are human-chosen and carry
+  little bot traffic.
+- **Bot filter (before anything is counted):** drop posts from accounts
+  younger than 90 days, with a default profile, with a follower/following
+  ratio below 0.1 and more than 1,000 following, or posting more than 100
+  times a day; drop near-duplicate text clusters (MinHash, Jaccard ≥ 0.8)
+  and bursts where more than half the posts come from accounts created in
+  the same 30-day window (coordination); apply the noise rules above. The
+  share of posts removed is reported per event; an event where more than
+  half were removed is tagged `manipulation_suspect` and counts as not
+  corroborated.
+- **Corroboration flag (deterministic, class A):** at least 10 surviving
+  posts from at least 5 distinct accounts, and a surviving count at least
+  3× the firm's trailing 30-day daily mean. The flag is a bool feature; no
+  model reads post text in this test.
+- **Design:** a filter test on `ripple_det_v1` candidates (and L3
+  candidates once running), forward only, because no free point-in-time X
+  history exists. Arm 1 = all candidates; arm 2 = candidates whose source
+  event is corroborated. Judged as a doc 11 §11.3b filter: the corroborated
+  arm's daily return beats all-candidates net of the X API cost, at the
+  pre-registered minimum sample from a power analysis.
+  `manipulation_suspect` events are scored as a third group: if they
+  underperform, that is evidence for the bot filter's value.
+- **Budget:** X lookups for the 3 largest events per day only, about
+  $1.65/day (50 post reads + about 30 new author objects per event), under
+  a $50/month D2 cap approved in the sign-off log. At that rate the test
+  needs on the order of a year; a larger budget is a separate decision.
+- **Storage:** raw posts are deleted after the counts are computed; only
+  per-event counts, filter tallies and post ids are kept, and deletions
+  requested through the API are honored.
+- **Kill:** the filter fails at its minimum sample, or harms returns in the
+  kill-only monitor → X is dropped and the spend stops.
 
 ## 9.2 Ingestion rules (all sources)
 
-- **Boundary law (same in README, 00, 04, 08, 09):** research feeds the hot
-  path typed, validated, bounded features only (`features.jsonl`, bundle
-  transactions). Research prose goes to `research_digest.jsonl`, outside the
-  trading boundary - never into C++, never into JEV state.
-- **Primary sources only.** If the regulator, central bank, or exchange
-  publishes it, it is read there. Aggregators are excluded (added latency and
-  an unlogged editorial layer).
-- **APIs first.** Playwright only where there is no API and the page is JS-heavy;
-  authenticated CDP only where a login is unavoidable. No Selenium anywhere
-  (doc 02, locked). Every browser-based source needs a named fallback, because
-  browser scrapers break silently.
-- **Provider limits are ceilings, not measurements.** "10 req/s" is SEC's
-  published fair-access maximum; the operating rate, p50/p99 latency, and
-  availability are measured from this deployment and recorded in §9.4.
-  Licensing
-  ("free to access" ≠ "commercial automated use permitted") is rechecked
-  per source before G1/G2, not once at freeze.
-- **Polite by construction:** declared User-Agent with contact, per-source rate
-  limiter, jittered backoff (3 retries, ~15 s base, ±20% jitter - same semantics
-  as the archived doc 02 §2.5 - `appendix/02-x-lists-archive.md`), and an on-disk cache keyed by source ETag/Last-Modified. A 429
-  halves that source's poll rate for an hour.
-- **EDGAR specifics (locked):** UA `MiroHedge/phase0 contact=<human fills
-  at build>`, hard ceiling 10 req/s (SEC limit), submissions JSON + companyfacts
-  only - no full-text crawl beyond the filing index. Zero 403s over the observed
-  ~33 h / 133-cycle soak (shortened from 7 d) or the poller does not ship (§9.4).
-- **Timestamps:** `observed_at_ns` comes from the source's own publication field
-  when it exists; when it does not, the feature is marked `observed_at_estimated`
-  and is CONTEXT-capped permanently. Publication-time vs availability-time
-  mismatch is a lookahead vector; an estimated timestamp never triggers a trade.
-- **Storage:** append-only JSONL per source per day + SQLite index, pruned at 90
-  days, atomic temp-file rename (the archived doc 02 §2.5 semantics - `appendix/02-x-lists-archive.md` - apply to every source).
+- **Boundary law:** the engine feeds the hot path typed, validated,
+  bounded features only (`features.jsonl`, bundle transactions). Prose goes
+  to `research_digest.jsonl`, outside the trading boundary.
+- **Primary sources first.** If the regulator, central bank, exchange or
+  company publishes it, it is read there. GDELT is used for what it is: a
+  machine-readable index of what the world's news says, with links back.
+- **APIs first.** Playwright only where there is no API and the page is
+  JS-heavy; no Selenium anywhere. Every browser-based source needs a named
+  fallback.
+- **Provider limits are ceilings, not measurements.** Operating rate,
+  p50/p99 latency and availability are measured from this deployment and
+  recorded in §9.4. Licensing is rechecked per source before G1/G2.
+- **Polite by construction:** declared User-Agent with contact, per-source
+  rate limiter, jittered backoff (3 retries, ~15 s base, ±20% jitter), and
+  an on-disk cache keyed by ETag/Last-Modified. A 429 halves that source's
+  poll rate for an hour.
+- **EDGAR specifics (locked):** UA `MiroHedge contact=<operator fills at
+  build>`, hard ceiling 10 req/s (SEC limit). The poller reads submissions
+  JSON, the filing index and companyfacts; filing documents are fetched
+  per accession for the forms the engine parses (10-K, 10-Q, 8-K, Form 4,
+  13F), within the same rate ceiling. Zero 403s over a soak or the fetcher
+  does not ship (§9.4).
+- **Timestamps:** `observed_at_ns` comes from the source's own publication
+  field when it exists; otherwise the feature is marked
+  `observed_at_estimated` and is CONTEXT-capped permanently.
+- **Storage:** append-only JSONL per source per day + SQLite index, pruned
+  at 90 days (research corpora excepted), atomic temp-file rename.
   DURABLE-FIRST commit ordering (frozen): the signals file is the
   commit point - fetch → parse → append+fsync → THEN persist ETag/
   Last-Modified validators → THEN advance schedule. A failed sink banks
@@ -219,16 +268,15 @@ Data-quality rules:
   metadata failures abort loudly (exit 2, audited repair) with the already
   durable signals kept valid. There is no filesystem transaction across
   three files; this ordering plus the recovery rule replaces one.
-- **Key handling:** free-tier keys (AISStream, FIRMS, FRED, TomTom) live in the
-  research-plane user's env only. The trading user never sees them; the research
-  user never sees broker credentials. Redaction verified by grep before any log
-  leaves the machine (doc 03 §3.5).
+- **Key handling:** free-tier keys live in the engine user's environment
+  only. The trading user never sees them; the engine user never sees broker
+  credentials. Redaction verified by grep before any log leaves the machine.
 
 ## 9.3 Source health and failure defaults
 
 - Each source has a declared TTL and heartbeat. Missed heartbeat > 3×
   cadence → `stale=true` → features expire → reported absent, never
-  neutral. Absent and neutral are never conflated.
+  neutral.
 - A source failing > 50% of polls for 24 h is auto-disabled and alerted;
   re-enable is manual.
 - No source outage may block an exit.
@@ -236,29 +284,32 @@ Data-quality rules:
 
 ## 9.4 What "done" means
 
-- [ ] Every Tier A source has a working poller or fetcher, a TTL, a
-      heartbeat, and a measured p50/p99 latency recorded here.
-- [ ] EDGAR poller honors the UA requirement and rate limit (observed
-      133-cycle soak, zero 403s).
+- [ ] Every Tier A source has a poller or fetcher, a TTL, a heartbeat, and
+      a measured p50/p99 latency recorded here.
+- [ ] EDGAR fetcher honors the UA requirement and rate limit (zero 403s
+      over a soak).
 - [ ] ALFRED vintage path proven: a revised series replays with the
-      original vintage for any historical decision.
-- [ ] SIP bars + quotes fetcher with manifests; the S2 rerun uses it.
-- [ ] Form 4 parser (transaction codes, reporter roles, 10b5-1 flag)
-      with fixture tests; 8-K 2.02 + EX-99.1 locator with acceptance times.
+      original vintage.
+- [ ] SIP bars + quotes fetcher with manifests.
+- [ ] EDGAR corpus: section parser for 10-K/10-Q with fixture tests;
+      8-K item locator with acceptance times; 13F holdings parser.
+- [ ] GDELT GKG daily co-mention aggregation with entity resolution and a
+      measured resolution rate.
+- [ ] Social quarantine filters proven on fixtures (bot clusters dropped,
+      no social-only event reaches the brain).
 - [ ] Every source classified TRIGGER / CONTEXT / NULL, no blanks.
-- [ ] `lessons.jsonl` ≥ 10 graded entries, each with pattern + failure mode.
 - [ ] Fail-closed calendar test: remove the calendar → zero entries, exits
       normal.
 
 ## Locked decisions
 
-- Free tiers only for core operation. Load-bearing: broker feed + session
+- Free tiers for core operation. Load-bearing: broker feed + session
   calendar.
 - Every non-price source starts CONTEXT or NULL; TRIGGER needs measured
-  incremental edge + human sign-off (doc 11). Never automatic.
-- Research datasets are manifest-hashed and never committed; SIP history
-  for signals and costs; IEX real-time for order pricing only.
-- No sleeve depends on data that is not freely available point in time.
-- No God's-Eye-View layer is TRIGGER-class. Visualization layers excluded.
-- Primary sources only; estimated timestamps permanently CONTEXT-capped.
-- Public-system "lessons" are research-factory input, never a live signal.
+  incremental edge in a pre-registered sleeve + human sign-off (doc 11).
+- Social signals never trigger alone and pass bot filters first.
+- Research datasets are manifest-hashed and never committed.
+- No live signal depends on data that is not freely available point in
+  time; D2 data only extends research history.
+- Primary sources first; estimated timestamps permanently CONTEXT-capped.
+- Public-system lessons are research-factory input, never a live signal.

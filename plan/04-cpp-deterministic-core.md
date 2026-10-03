@@ -13,7 +13,7 @@ From scratch. No TS port. One direction of trust.
 Broker feed ──→ feed/ ──→ ctx/ ──→ snapshot ──┬──→ risk/ ──→ exec/ ──→ transport ──→ broker
                                               │     ▲
 candidates.jsonl (strategy identity) ───────┤     │ (optional filter)
-features.jsonl (research plane, doc 08) ──────┤     │
+features.jsonl (engine, doc 08) ─────────────┤     │
 stage chain (human-signed, doc 10) ───────────┤     │
 jurisdiction allowlist (doc 10 §10.1a) ─────┤     │
                                               └──→ jev sidecar (async, cached) ──→ answers
@@ -27,7 +27,7 @@ jurisdiction allowlist (doc 10 §10.1a) ─────┤     │
   `candidates.jsonl` (c1 records) and nothing else. No LLM calls, no broker
   credentials, no journal/`HALT`/stage write. Replayable from logged
   inputs. It proposes; the kernel disposes.
-- `research/` (Python, `miroresearch`, doc 08): writes `features.jsonl`
+- the engine (Python, `miroresearch`, doc 08): writes `features.jsonl`
   and nothing else in this tree.
 - `collector/jev.py` (`mirojev`): optional (doc 03 §3.0). Stale/missing
   answers only matter for sleeves whose champion config is
@@ -36,9 +36,10 @@ jurisdiction allowlist (doc 10 §10.1a) ─────┤     │
   risk → exec. Nothing downstream calls upstream; nothing upstream can
   relax a downstream rule.
 - Cadence: snapshot on every feed update; decision cycles on each sleeve's
-  schedule (T1 monthly, I1 daily at fixed times, E1 on signal) plus a 60 s
+  schedule (link sleeves monthly, event sleeves on signal) plus a 60 s
   housekeeping cycle for exits/reconcile/watchdogs.
-- Execution universe ≤ 5 symbols per kernel epoch (`EXEC_UNIVERSE_MAX`).
+- Execution universe per R1 (`EXEC_UNIVERSE_MAX`: 5 under C1; the
+  sleeve's registered count, at most 50, under C2).
   The universe is minted by the kernel from the champion sleeve's
   candidates and open positions; it is the end of a funnel.
 - Boundary law: `features.jsonl` is the only research artifact that may
@@ -80,8 +81,8 @@ jurisdiction allowlist (doc 10 §10.1a) ─────┤     │
    c1 schema, recomputes the CID (mismatch = reject), checks the sleeve
    id against the stage manifest's approved-sleeve list, symbol against the
    jurisdiction allowlist (R19), freshness (created within the sleeve's
-   declared window of the snapshot), and live side policy (BUY-to-open or
-   SELL-to-close only). Candidates are low-rate and validated off the tick
+   declared window of the snapshot), and side policy (C1: BUY-to-open or
+   SELL-to-close; C2 adds SELL-short-to-open and BUY-to-cover, K-C2). Candidates are low-rate and validated off the tick
    path, so this gate may allocate (std::string/vector); the caller bounds each line to 4 KiB and
    the tick-path zero-allocation gate is unchanged.
    c1 wire record (K6, frozen with the code): one JSON object per line,
@@ -95,8 +96,10 @@ jurisdiction allowlist (doc 10 §10.1a) ─────┤     │
    failure wins: shape/unknown-key → schema → CID (`sha256("|".join(12))`
    equals `cid`) → sleeve approved → symbol on the R19 allowlist →
    `snapshot_ts_ns` ≤ now and now − snapshot_ts_ns ≤ `window_s` (a future
-   stamp is rejected) → side policy (`BUY` = open; `SELL` only when the
-   symbol is currently held; anything else rejected). `created_ns` is
+   stamp is rejected) → side policy (C1: `BUY` = open; `SELL` only when
+   the symbol is currently held; anything else rejected. C2, K-C2: a
+   `SELL` on a symbol not held is a short open and must pass R20; a `BUY`
+   on a held short is a cover). `created_ns` is
    informational and must parse as a non-negative int64. Every reject is
    counted per reason and never partially applied.
 3. `ctx/context.cpp` - builds the frozen `Snapshot`: marks, spread,
@@ -152,14 +155,16 @@ jurisdiction allowlist (doc 10 §10.1a) ─────┤     │
    rate-limit aware (200/min). Writing TLS from scratch is forbidden. An
    alternative gateway process under the same `mirotrade` identity was
    considered and not chosen.
-5c. Settlement ledger - per-lot trade date, settlement date (T+1
-   by the exchange calendar), funding source (settled vs unsettled),
-   supports R18: no buy with unsettled funds whose position could be sold
+5c. Account ledger - C1: per-lot trade date, settlement date (T+1 by
+   the exchange calendar), funding source (settled vs unsettled),
+   supporting R18: no buy with unsettled funds whose position could be sold
    before settlement; no sale of a lot bought with unsettled funds before
-   that funding settles. Rebuilt from the journal + broker account on
+   that funding settles. C2 (K-C2): margin requirement, maintenance buffer,
+   borrow status, accrued margin interest and short dividends, supporting
+   R18 (C2) and R20. Rebuilt from the journal + broker account on
    recovery; disagreement = HOLD + reconcile.
 5d. Universe service - deterministic eligibility/liquidity/spread/
-   allowlist filters → the ≤ 5 executable symbols per epoch. Kernel-owned:
+   allowlist filters → the executable symbols per epoch (R1). Kernel-owned:
    the universe and `snapshot_epoch` are minted by the kernel only.
 6. `log/journal.cpp` - append-only per-decision row + hash chain. Nothing
    trades without a journal row (emergency-exit exception: doc 06).
@@ -168,10 +173,13 @@ Port-on-promotion rule: a sleeve may drive G0b paper through the
 Python sleeve engine. Before G1 (real capital), the champion sleeve's
 signal logic is re-implemented in C++ inside the kernel and proven
 bit-identical to the Python reference on the full backtest history via
-committed cross-language vectors (the `jev_vectors/` precedent). At G1+ the
-kernel recomputes the champion's candidates itself; `candidates.jsonl` becomes a
-cross-check (mismatch = HOLD + alert). Direction for real money is then
-decided by C++.
+committed cross-language vectors (the `jev_vectors/` precedent). The port
+covers the sleeve's deterministic rule, not the engine: its inputs stay
+engine features (`link_signal` buckets or the link-matrix snapshot hash,
+`ripple_hypothesis` records) plus prices. At G1+ the kernel recomputes the
+champion's candidates from those inputs itself; `candidates.jsonl` becomes
+a cross-check (mismatch = HOLD + alert). For L3 the direction originates in
+a verified hypothesis; the kernel decides whether and how much to trade.
 
 ## 4.3 Data rules
 
@@ -233,8 +241,9 @@ protect positions even if the host is gone.
 - Research features and strategy candidates are validated, bounded,
   TTL'd, and hashed into the decision record. Absent ≠ neutral.
 - Always-take is a first-class path; JEV is optional (doc 03 §3.0).
-- Real-money direction is computed by C++ (port-on-promotion before G1).
+- Real-money candidates are recomputed by C++ from engine features and
+  prices (port-on-promotion before G1); no model output reaches sizing.
 - Signals from SIP data; IEX real-time only for order pricing and vetoes.
 - Cached-JEV (when used) + local risk. Network never gates an exit.
-- Integer money, hashed snapshots, journal-before-order, settled-cash
-  accounting before every buy.
+- Integer money, hashed snapshots, journal-before-order, the R18 account
+  rule checked before every order.

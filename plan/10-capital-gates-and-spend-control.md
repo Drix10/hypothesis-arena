@@ -1,4 +1,4 @@
-# 10 - Capital Gates, Kill Switches, and Spend Control (freeze v3)
+# 10 - Capital Gates, Kill Switches, Spend Control, and the Path to Outside Capital
 
 This doc defines the limits the system runs inside: which stage it is in,
 what that stage permits, what the operator may legally trade, who may
@@ -8,7 +8,7 @@ may spend on AI.
 The system is autonomous in research, decision, and execution. It is
 never autonomous in capital escalation.
 
-## 10.1 The stage chain (the box): signed manifests (locked 2026-09-18, text repaired v3)
+## 10.1 The stage chain (the box): signed manifests (locked)
 
 A hash is not a signature - anyone holding a file can recompute it. The
 human act and the runtime state are therefore separate objects:
@@ -18,7 +18,8 @@ human act and the runtime state are therefore separate objects:
   `intended_capital_usd`, `allocated_capital_usd`, `policy_version`,
   `plan_hash`, `approved_at`, `evidence_hash`, `signer_id`,
   `approved_sleeves` (sleeve id + version + filter policy),
-  `instrument_allowlist` (R19), `jurisdiction_evidence_hash`
+  `constraint_set` (C1 | C2), `instrument_allowlist` (R19),
+  `jurisdiction_evidence_hash`
   (§10.1a, G1+), plus an Ed25519 `signature` over all of it. The process
   verifies (valid signature, known signer key, correct plan version,
   correct prior stage, sane capital) and only then advances. The runtime
@@ -57,66 +58,85 @@ attest_hash:  <sha256 of "stage|approved_by|approved_at|capital_usd|prev_attest"
 - **R17:** no code path raises a stage. Promotion is a human signing a
   manifest while the system is down.
 
-## 10.1a LIVE JURISDICTION GATE (v3 expansion; required before G1)
+## 10.1a LIVE JURISDICTION GATE (required before G1)
 
-A broker API does not make a deployment legal. Before any G1
-promotion the operator attaches, as `jurisdiction_evidence_hash`, a signed
-evidence bundle containing at least:
+A broker API does not make a deployment legal. Before any G1 promotion the
+operator attaches, as `jurisdiction_evidence_hash`, a signed evidence
+bundle for the constraint set the manifest names (doc 01 §1.2).
 
+**C1 (India-resident):**
 1. Operator residency and the funding route (RBI LRS, USD 250,000 per
    financial year), with bank confirmation that the remittance purpose
    code is overseas portfolio investment.
 2. Written confirmation from a qualified professional (Indian chartered
-   accountant or FEMA counsel) that the instrument allowlist is
-   permissible: US-listed common stock and ETFs, long only, cash
-   account, no margin, no short selling, no forex spot/CFD/margin FX, no
-   options/futures, no leveraged or inverse products (LRS prohibits
-   remitting for margin trading and for trading foreign exchange abroad).
-   Currency ETFs and any product beyond the default list need their own
-   explicit line in that confirmation before they may enter the allowlist.
+   accountant or FEMA counsel) that the allowlist is permissible: US-listed
+   common stock and ETFs, long only, cash account, no margin, no short
+   selling, no forex, no options/futures, no leveraged or inverse products
+   (LRS prohibits remitting for margin trading and for trading foreign
+   exchange abroad).
 3. Broker account evidence: Alpaca international account opened for the
    operator's country, cash account type confirmed, USD funding route.
-4. Tax/reporting treatment recorded: US dividend withholding (W-8BEN on
-   file), Indian TCS on LRS remittances and its credit, foreign-asset and
-   foreign-income reporting in the Indian return, record-keeping for
-   capital gains in INR.
-5. The `broker_compliance_policy` table rows for the account (settlement,
-   good-faith/free-riding, day-trade rules at their effective dates,
-   including the 2026 PDT repeal) reviewed and signed.
+4. Tax/reporting treatment: US dividend withholding (W-8BEN), Indian TCS
+   on LRS remittances and its credit, foreign-asset and foreign-income
+   reporting in the Indian return, capital-gains records in INR.
+5. The `broker_compliance_policy` rows for the account (settlement,
+   good-faith/free-riding, day-trade rules at their effective dates)
+   reviewed and signed.
+
+**C2 (US-resident):**
+1. Operator US residency and tax status (resident alien or citizen; W-9
+   with the broker), and any visa or employer trading restriction,
+   confirmed in writing by a qualified US tax or securities professional.
+2. Indian residency status after the move (FEMA and income tax) and the
+   treatment of assets held abroad, confirmed by an Indian chartered
+   accountant or FEMA counsel.
+3. Broker account evidence: US margin account approved for short selling,
+   margin agreement and the broker's maintenance requirements on file.
+4. The `broker_compliance_policy` rows (Reg T, maintenance, Rule 201,
+   borrow and buy-in handling, day-trade rules at their effective dates)
+   reviewed and signed.
+5. Written professional confirmation of the C2 allowlist (doc 05 R19).
 
 The gate is re-checked before every promotion and whenever a rule's
 effective date passes. This plan summarizes public sources; it is not
 legal advice.
 
-## 10.2 Stage table (locked, v3)
+## 10.2 Stage table (locked)
 
 `R-multiplier` scales only stage exposure/position/sizing/trade-count
 limits; it never scales safety thresholds (correlation > .9, drawdown >
 10%, vol > 3×, flip lock, R15 limits, freshness windows, security bounds)
-and never scales the rules - R1–R19 always apply.
+and never scales the rules - R1–R20 always apply.
 
 | | G0_PAPER | G1_TINY | G2_SCALED | G3_FULL |
 |---|---|---|---|---|
-| Capital | paper only | ≤ 2% of intended capital | ≤ 25% | 100% |
+| Capital (C1) | paper only | ≤ 2% of intended capital | ≤ 25% | 100% |
+| Capital (C2) | paper only | first funded account | full account | full account |
+| Gross (C2) | per R2 | 50% of the sleeve's target gross, half the names | 75% | 100% |
 | Sleeves in kernel | 1 champion (+ all others in G0a shadow) | 1 promoted sleeve | ≤ 2 (after universe-cap change) | per G3 manifest |
-| Symbols | ≤ 5 (kernel cap) | 1 liquid US ETF | ≤ 3 | ≤ 5 |
+| Symbols | per R1 | C1: 1 liquid US ETF; C2: the sleeve's universe | C1: ≤ 3; C2: per R1 | per R1 |
 | R-multiplier | 1.0 | 0.25 | 0.5 | 1.0 |
 | Max daily loss | n/a | 1% of stage capital | 1.5% | 2% |
 | Max position | per R2 | R2 × 0.25 | R2 × 0.5 | R2 |
-| Leverage / account | cash-account constraint set, 1× | 1×, cash, long only | 1×, cash, long only | 1×, cash, long only |
 | Human review | weekly | daily | weekly | weekly |
-| Research plane | full | full | full | full |
+| Engine | full | full | full | full |
 
 Day-boundary rule (locked): every "daily" limit uses the UTC calendar day;
 settlement dates use the exchange calendar (R18).
 
-**G1 symbol choice:** the single G1 symbol is a highly liquid US ETF
-(SPY/QQQ/IWM-class spreads and volume) traded by the promoted sleeve.
-Forex is not a legal live target for the operator (§10.1a), and the PDT
-framework was eliminated (SEC approval 2026-04-14; cash accounts were
-never governed by it). A sleeve whose champion
-universe has several symbols goes live at G1 on its single most liquid
-symbol, with the promotion evidence recomputed for that restriction.
+**G1 under C1:** the single G1 symbol is a highly liquid US ETF
+(SPY/QQQ/IWM-class) traded by the promoted sleeve; a sleeve with several
+symbols goes live on its most liquid one, with the evidence recomputed for
+that restriction.
+
+**G1 under C2:** at a first capital under $25,000, 2% of capital cannot
+hold a cross-sectional book and one ETF cannot express a long-short
+sleeve, so C2 scales risk by gross exposure instead of capital. Scaling
+gross alone would shrink each name below a tradable whole-share size
+(25% of target gross at $25,000 is about $235 a name), so G1 runs at 50%
+of target gross with half the registered names a side (the most extreme
+signals), keeping the per-name size of the full book. The promotion
+evidence is recomputed for that restricted book before G1 is signed.
 
 ### Promotion criteria (necessary, never sufficient)
 
@@ -124,7 +144,7 @@ Every criterion must be met and a human must then sign. Meeting the
 criteria grants the right to ask, nothing more.
 
 **G0 → G1** - the champion sleeve passed A-gate and B-gate (doc 11
-§11.3a) and its evidence is transferable (produced under the live
+§11.3a) and its evidence is transferable (produced under the manifest's
 constraint set); 30 consecutive clean G0b days; zero R-rule violations;
 replay determinism green every week (D1); tracking within the sleeve's
 pre-registered band; AI spend within the G0 cap; kill-switch, reconcile,
@@ -133,7 +153,7 @@ settlement, and isolation drills passed; port-on-promotion vectors green
 `filter = jev`, JEV calibration ≥ base rate over ≥ 200 decisions.
 
 **G1 → G2** - 30 consecutive live days at G1; zero R-rule violations;
-realized implementation shortfall within 1.5× `cost_v2`; live-vs-shadow
+realized implementation shortfall within 1.5× the modeled cost (`cost_v2` C1, `cost_v3` C2); live-vs-shadow
 divergence within the S3 band; AI-spend ratio computed daily in SHADOW
 (G1 has no ratio cap to enforce) with 30 days of computed-passing
 readings; calibration still ≥ baseline where applicable.
@@ -152,7 +172,9 @@ drawdown < 5% over the window; ≥ 100 closed trades.
 | Determinism/replay failure (D1) | Demote to G0_PAPER immediately |
 | Journal hash-chain break | Demote to G0_PAPER, HARD kill, forensics before restart |
 | Spend circuit breaker at tier 3 (§10.4) | Entries halted, demote one stage |
-| Broker-reported good-faith / free-riding violation (R18) | HARD-class compliance incident, demote to G0_PAPER, human review |
+| Broker-reported good-faith / free-riding violation (R18, C1) | HARD-class compliance incident, demote to G0_PAPER, human review |
+| Broker margin call or margin buffer breach (R18, C2) | MEDIUM kill, gross cut to half the sleeve target, demote one stage |
+| Short position the broker marks hard-to-borrow, recalled or bought in (R20) | Close next session, entries for that symbol HOLD, alert |
 | Live order outside the instrument allowlist reaching the broker (R19) | HARD kill, demote to G0_PAPER, forensics |
 
 Demotion is written to `STAGE_STATE` by the process, chained, journaled,
@@ -430,10 +452,11 @@ selects only currently authorized pricing entries. Historical spend
 stays in the trailing-30d ledger (history is never rewritten on
 retirement). No caps change here: the stage table above is untouched.
 
-### 10.4.4 Research-factory and reader spend (v3, within the same caps)
+### 10.4.4 Engine and research-factory spend (within the same caps)
 
-No separate budget. The factory's model calls are category `experiment`, the
-reader tier's are category `research`; both pass through the same
+No separate budget. The factory's model calls are category `experiment`;
+the engine's reader, router, brain and verifier calls are category
+`research`; both pass through the same
 governor, reservation, and tier logic as every other research call, and
 both stop at Tier 3. The factory additionally carries a per-card budget
 declared in its pre-registration; a card that exhausts it stops, and the
@@ -457,7 +480,8 @@ file exists and verifies, nothing starts - there is no default stage.
 - [ ] Demotion drill: forced R-rule violation in paper → automatic
       demotion, journaled, alerted (outbound adapter).
 - [ ] SOFT / MEDIUM / HARD drills pass, exits alive under all three;
-      long-only MEDIUM flatten = SELL-to-close only.
+      MEDIUM flatten = SELL-to-close longs and, under C2, BUY-to-cover
+      shorts.
 - [ ] Spend counter survives restart; tier transitions journaled.
 - [ ] A forced spend spike walks tier 0 → 1 → 2 → 3 with the documented
       effects.
@@ -467,14 +491,56 @@ file exists and verifies, nothing starts - there is no default stage.
 - [ ] Jurisdiction evidence bundle template exists and is signed
       before G1.
 
+## 10.6 Path to outside capital (not authorized)
+
+The goal of offering the strategy to ordinary investors is a legal
+undertaking with its own gates. Nothing here is built until the operator's
+own C2 account has a live record, and every step needs US counsel. This
+section records the public rules that shape the path; it is not legal
+advice.
+
+1. **Own capital (C2, G1-G3).** The track record is the operator's own
+   account. Backtests and paper results are "hypothetical performance"
+   under the SEC Marketing Rule (Rule 206(4)-1) and cannot be advertised to
+   a general retail audience.
+2. **Registered investment adviser offering separately managed accounts.**
+   The retail route that avoids pooling: each client owns a brokerage
+   account the adviser trades. Registration is with the state below $100M
+   of regulatory assets and with the SEC above it (Form ADV Parts 1-3,
+   including Form CRS; the individual adviser representative typically
+   needs the Series 65). Fees are asset-based; performance fees are
+   allowed only for "qualified clients" (from 2026-06-29: $1.4M under
+   management with the adviser or $2.7M net worth, Rule 205-3). The
+   adviser is a fiduciary, owes a written compliance program and code of
+   ethics, and is responsible for the system's decisions. Alpaca's Broker
+   API supports registered advisers; its order allocation and fee
+   features must be confirmed at that time.
+3. **Pooled private fund.** Section 3(c)(1) (≤ 100 beneficial owners) or
+   3(c)(7) (qualified purchasers: $5M of investments for individuals),
+   raised under Regulation D Rule 506(b) (no general solicitation; up to 35
+   non-accredited but sophisticated purchasers) or Rule 506(c) (general
+   solicitation allowed; every purchaser verified accredited). Not a
+   retail product.
+4. **Registered fund (mutual fund or ETF).** The only pooled vehicle open
+   to all retail investors; Investment Company Act limits on leverage,
+   borrowing, derivatives (Rule 18f-4) and fees apply. A multi-year,
+   multi-million-dollar undertaking.
+
+Disclosure rule from day one: every claim about the system's use of AI is
+true, specific and documented. The SEC settled "AI washing" charges with
+two advisers in March 2024 (Delphia, $225,000; Global Predictions,
+$175,000) for claiming AI capabilities they did not have.
+
 ## Locked decisions
 
 - Four stages, human-signed manifests, chained. No code path promotes.
   Demotion is automatic and cannot be vetoed.
 - Corruption, doubt, and failure resolve toward paper.
 - Three kill levels; none reachable by an agent; exits never blocked.
-- Live = 1×, cash account, long only, allowlisted instruments, one
-  liquid ETF at G1; jurisdiction evidence signed before G1.
+- Live scope is the manifest's constraint set (C1: 1×, cash, long only,
+  one liquid ETF at G1; C2: margin, long and short, half the names at 50%
+  of target gross at G1). Jurisdiction evidence for that set is signed before G1.
+- Outside capital only through §10.6, never by a stage promotion.
 - Only manifest-approved sleeves may reach the kernel.
 - AI spend: absolute cap always; ratio cap from G2. Both apply. Throttling
   reduces research, never exits or reconcile. Absolute MEANS absolute
@@ -483,5 +549,5 @@ file exists and verifies, nothing starts - there is no default stage.
   an unknowable bill (unknown-cost) or an ambiguous transport outcome
   (may-have-been-billed) is UNKNOWN_SPEND → HOLD with no answer admitted.
 - Spend caps, tier thresholds (60/80/100%), hourly cadence, 6-hour
-  anti-flap, the three-distinct-failed-days ratio rule, and R2 are as
-  frozen in v2.
+  anti-flap, the three-distinct-failed-days ratio rule, and R2 are
+  frozen.
