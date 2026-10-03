@@ -7,19 +7,13 @@ the ledger).
 Appends ONE `open` trial row per forward shadow ledger to
 research/ledger/trials.jsonl through research.strategy.ledger.TrialLedger
 (hash chain verified first, and against research/ledger/checkpoint.json when it
-exists; the checkpoint is rewritten after an append, as a_run does):
+exists; the checkpoint is rewritten after an append). Today that is
+core_passive_v1; a sleeve that passes its A-gate adds its entry in entries().
 
-  core_passive_v1, trend_etf_v1 (T1), sector_mom_v1 (T2), the three E1 insider
-  variants, the two I1 intraday variants, macro_lite_v1, and the JEV paired
-  twins (`<core|T1|T2 ledger>__jev`, family `jev_filter`).
-
-Benchmarks (60/40, equal-weight buy and hold, cash) are comparators and are
-NOT trials. Every row: hypothesis_card_id = experiment id
-`forward_shadow_2026q4`, cost_v2, window start 2026-09-30 (forward, open end),
-split scheme `forward_only`, dataset = SIP daily adjusted bars (macro also FRED
-DGS2). prereg_hash is the hash of the sleeve's existing pre-registration
-(macro: research/prereg/m1_macro_lite_v1.json; E1/I1/T1/T2 their own files),
-of the fixed core spec string, or of the JEV twin contract/spec string below.
+Benchmarks (cash, SPY) are comparators and are NOT trials. Every row:
+hypothesis_card_id = experiment id `forward_shadow_2026q4`, cost_v2, window
+start 2026-09-30 (forward, open end), split scheme `forward_only`, dataset =
+SIP daily adjusted bars, prereg_hash = hash of the sleeve's spec.
 
 Idempotent per (ledger id, spec hash): the trial id embeds both, an existing
 open row is never re-appended, so a second run appends nothing. Changing a
@@ -32,8 +26,8 @@ read, to flag a ledger whose forward rows already exist when it is
 registered, and to hold the informational receipt <dir>/forward_register.json
 (the trial ledger, not the receipt, is the source of truth).
 
-Refuses (exit 2, nothing appended) on a broken chain, a checkpoint mismatch
-or an invalid pre-registration."""
+Refuses (exit 2, nothing appended) on a broken chain or a checkpoint
+mismatch."""
 import hashlib
 import json
 import os
@@ -41,7 +35,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from research.strategy import ledger, prereg
+from research.strategy import ledger
 
 EXPERIMENT = "forward_shadow_2026q4"
 WINDOW = {"start": "2026-09-30", "end": "open", "forward_only": True}
@@ -51,13 +45,10 @@ RUNNER = "ops.forward_register"
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 LEDGER = os.path.join(ROOT, "research", "ledger", "trials.jsonl")
 CHECKPOINT = os.path.join(ROOT, "research", "ledger", "checkpoint.json")
-PREREG = os.path.join(ROOT, "research", "prereg")
 CORE_SPEC = ("core_passive_v1: 60/40 VTI/IEF buy and hold, no rebalance; "
              "SIP daily adjusted; cost_v2; forward from 2026-09-30")
 SIP_DATASET = "alpaca_sip:bars:1Day:adjustment=all:forward"
-FRED_DATASET = "fred:DGS2:no-vintage"
-CODE = ("ops/sleeve_shadow.py", "ops/event_shadow.py", "ops/macro_shadow.py",
-        "ops/jev_twin.py", "research/strategy/portfolio.py",
+CODE = ("ops/sleeve_shadow.py", "research/strategy/portfolio.py",
         "research/strategy/costs_v2.py", "research/strategy/settlement.py")
 RECEIPT = "forward_register.json"
 
@@ -74,63 +65,13 @@ def code_hash():
     return h.hexdigest()
 
 
-def _load_prereg(name):
-    with open(os.path.join(PREREG, name)) as f:
-        p = json.load(f)
-    return p, prereg.require_valid(p)   # PreregError if invalid
-
-
-def twin_spec(base_spec):
-    """The JEV twin contract/spec string (ops/jev_twin.py + the pinned jev
-    contract). A change to any element is a new trial."""
-    from collector import jev
-    from ops import jev_shadow, jev_twin
-    return json.dumps({
-        "twin": "ops/jev_twin.py", "contract": jev.CONTRACT,
-        "model": jev.MODEL, "revision": jev.REVISION,
-        "engine": jev_shadow.ENGINE, "salt": jev_twin.SALT,
-        "filter_family": jev_twin.FAMILY,
-        "horizon_sessions": jev_twin.HORIZON_SESSIONS,
-        "time_exit_days": jev_twin.TIME_EXIT_DAYS,
-        "risk": [jev_twin.RISK_MULT, jev_twin.RISK_MIN, jev_twin.RISK_MAX,
-                 jev_twin.TP_R],
-        "veto_reasons": sorted(jev_twin.VETO_REASONS),
-        "base": base_spec + "+jev"}, sort_keys=True)
-
-
 def entries():
     """Every forward ledger as a dict: ledger_id, family, variant, spec_hash,
-    datasets. Raises on anything that cannot be built completely."""
-    from ops import event_shadow, jev_twin
-    from ops import sleeve_shadow as S
+    datasets, trial_id."""
     sip = [_sha(SIP_DATASET)]
-    out = []
-
-    def add(lid, family, variant, spec_hash, datasets=sip):
-        out.append({"ledger_id": lid, "family": family, "variant": variant,
-                    "spec_hash": spec_hash, "datasets": list(datasets)})
-
-    specs = S.sleeve_specs()
-    add("core_passive_v1", "core_passive", "buy_and_hold", _sha(CORE_SPEC))
-    for lid, name in (("trend_etf_v1", "t1_trend_etf_v1.json"),
-                      ("sector_mom_v1", "t2_sector_mom_v1.json")):
-        p, h = _load_prereg(name)
-        add(lid, p["family"], p["variants"][0], h)
-    p, h = _load_prereg("e1_insider_buy_v1.json")
-    for v, lid in event_shadow.E1_IDS.items():
-        add(lid, p["family"], v, h)
-    p, h = _load_prereg("i1_intraday_mom_v1.json")
-    for v, lid in event_shadow.I1_IDS.items():
-        add(lid, p["family"], v, h)
-    p, h = _load_prereg("m1_macro_lite_v1.json")
-    add(p["sleeve"], p["family"], p["variants"][0], h,
-        sip + [_sha(FRED_DATASET)])
-    for lid in ("core_passive_v1", "trend_etf_v1", "sector_mom_v1"):
-        add(lid + jev_twin.SUFFIX, "jev_filter", "jev_veto_twin",
-            _sha(twin_spec(specs[lid][2])))
-    ids = [e["ledger_id"] for e in out]
-    if len(set(ids)) != len(ids):
-        raise ValueError("duplicate-ledger-id")
+    out = [{"ledger_id": "core_passive_v1", "family": "core_passive",
+            "variant": "buy_and_hold", "spec_hash": _sha(CORE_SPEC),
+            "datasets": sip}]
     for e in out:
         e["trial_id"] = "%s:%s:%s" % (EXPERIMENT, e["ledger_id"],
                                       e["spec_hash"][:12])
@@ -153,7 +94,7 @@ def _late(d, lids):
 def register(d, ledger_path=None, checkpoint_path=None):
     """Append the missing open rows. Returns
     {"registered": [trial ids], "already": n, "rows": n, "late": [ids]}.
-    Raises ledger.LedgerError / prereg.PreregError; appends nothing then."""
+    Raises ledger.LedgerError; appends nothing then."""
     ledger_path = ledger_path or LEDGER          # resolved late: patchable
     checkpoint_path = checkpoint_path or CHECKPOINT
     led = ledger.TrialLedger(ledger_path)
@@ -216,8 +157,7 @@ def main(argv):
         raise SystemExit("usage: forward_register.py <dir>")
     try:
         res = register(argv[1])
-    except (ledger.LedgerError, prereg.PreregError, ValueError, OSError,
-            ImportError, KeyError) as e:
+    except (ledger.LedgerError, ValueError, OSError) as e:
         print(json.dumps({"forward_register": "refused: %s: %s"
                           % (type(e).__name__, str(e)[:300])}),
               file=sys.stderr)

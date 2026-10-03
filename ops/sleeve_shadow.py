@@ -12,14 +12,10 @@ warm up the signal only.
     python3 ops/sleeve_shadow.py <dir>            # append missing sessions
     python3 ops/sleeve_shadow.py <dir> --verify   # replay must equal the log
     python3 ops/sleeve_shadow.py <dir> --loop     # re-run every hour
-    ... --no-events                               # core/T1/T2 only
 
 Benchmark ledgers (BENCHMARKS) ride along in sleeve_specs; ops/sleeve_eval.py
 judges every other ledger against them (read-only, writes sleeves/eval.json).
-
-Event sleeves (E1 insider, I1 intraday) come from ops/event_shadow.py; one
-that cannot be computed completely is skipped and logged, never partial.
-E2-det (PEAD) is not wired: see event_shadow.py for why.
+A new sleeve joins by adding its entry to sleeve_specs after its A-gate.
 
 --verify is the fidelity gate: a logged row that a fresh replay cannot
 reproduce means look-ahead or revised data, and exits 1.
@@ -35,9 +31,7 @@ import urllib.error
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from ops import event_shadow
 from research.strategy import portfolio, sip_fetch
-from research.strategy.sleeves import sector_mom, trend
 
 FORWARD_START = "2026-09-30"   # first session recorded (after every holdout)
 HISTORY_START = "2016-01-01T00:00:00Z"
@@ -49,15 +43,11 @@ PREREG = os.path.join(ROOT, "research", "prereg")
 
 CORE_WEIGHTS = {"VTI": 0.6, "IEF": 0.4}
 
-# Benchmark / control ledgers (same engine, schema and chain as the sleeves).
-# All five sleeves failed their A-gates, so the forward ledgers are replication
-# and observation ledgers judged against these, not promotion candidates
-# (plan/12 section 12.6). They are buy-and-hold: one allocation, no rebalance.
+# Benchmark / control ledgers (same engine, schema and chain as the sleeves,
+# plan/12 section 12.6). Buy-and-hold: one allocation, no rebalance.
 BENCH_CASH = "bench_cash_bil_v1"
-BENCH_EW_TREND = "bench_ew_trend_v1"
-BENCH_EW_SECTOR = "bench_ew_sector_v1"
 BENCH_SPY = "bench_spy_v1"
-BENCHMARKS = (BENCH_CASH, BENCH_EW_TREND, BENCH_EW_SECTOR, BENCH_SPY)
+BENCHMARKS = (BENCH_CASH, BENCH_SPY)
 
 
 def hold_fn(weights):
@@ -81,38 +71,13 @@ def core_fn():
     return hold_fn(CORE_WEIGHTS)
 
 
-def _prereg(name):
-    with open(os.path.join(PREREG, name)) as f:
-        return json.load(f)
-
-
-def _equal(universe):
-    return {s: 1.0 / len(universe) for s in universe}
-
-
 def sleeve_specs():
     """id -> (universe incl. cash leg, factory(sessions) -> target_fn, spec)."""
-    t1, t2 = _prereg("t1_trend_etf_v1.json"), _prereg("t2_sector_mom_v1.json")
-    v1, v2 = t1["variants"][0], t2["variants"][0]
     return {
         "core_passive_v1": (list(CORE_WEIGHTS), lambda s: core_fn(),
                             "60/40 buy and hold"),
-        "trend_etf_v1": (t1["universe"] + [trend.CASH_LEG],
-                         lambda s: trend.make_target_fn(
-                             s, t1["universe"], variant=v1),
-                         f"t1:{v1}"),
-        "sector_mom_v1": (t2["universe"] + [sector_mom.CASH_LEG],
-                          lambda s: sector_mom.make_target_fn(
-                              s, t2["universe"], variant=v2),
-                          f"t2:{v2}"),
         BENCH_CASH: (["BIL"], lambda s: hold_fn({"BIL": 1.0}),
                      "benchmark: 100% BIL buy and hold"),
-        BENCH_EW_TREND: (list(t1["universe"]),
-                         lambda s: hold_fn(_equal(t1["universe"])),
-                         "benchmark: equal-weight buy and hold of the T1 universe"),
-        BENCH_EW_SECTOR: (list(t2["universe"]),
-                          lambda s: hold_fn(_equal(t2["universe"])),
-                          "benchmark: equal-weight buy and hold of the T2 universe"),
         BENCH_SPY: (["SPY"], lambda s: hold_fn({"SPY": 1.0}),
                     "benchmark: SPY buy and hold"),
     }
@@ -213,16 +178,13 @@ def append_rows(path, rows, new):
     return n
 
 
-def _settle(d, sid, fresh, spec, verify, bad, summary, lenient=False):
+def _settle(d, sid, fresh, spec, verify, bad, summary):
     """Fidelity-check the log against `fresh`, append what is missing."""
     path = os.path.join(d, "sleeves", sid + ".jsonl")
     rows, _ = read_log(path)
     by_date = {r["date"]: r for r in fresh}
-    last = fresh[-1]["date"] if fresh else ""
     for r in rows:  # fidelity: the log must equal what a replay gives now
         f = by_date.get(r["date"])
-        if f is None and lenient and r["date"] > last:
-            continue  # event sleeves may lag; a shorter replay is not a mismatch
         if f is None or abs(f["equity"] / r["equity"] - 1) > TOL:
             bad.append((sid, r["date"]))
     if not verify:
@@ -232,8 +194,7 @@ def _settle(d, sid, fresh, spec, verify, bad, summary, lenient=False):
                     "equity": rows[-1]["equity"] if rows else None}
 
 
-def run(d, now, verify=False, http_get=sip_fetch.default_http_get,
-        event_sleeves=True, edgar_get=None, sleep=time.sleep, extras=True):
+def run(d, now, verify=False, http_get=sip_fetch.default_http_get):
     specs = sleeve_specs()
     symbols = sorted({s for u, _, _ in specs.values() for s in u})
     prices = fetch_prices(symbols, now, http_get)
@@ -242,13 +203,6 @@ def run(d, now, verify=False, http_get=sip_fetch.default_http_get,
     for sid, (universe, factory, spec) in specs.items():
         fresh = replay(sid, prices, factory, universe)
         _settle(d, sid, fresh, spec, verify, bad, summary)
-    if event_sleeves:
-        extra = event_shadow.produce(d, now, FORWARD_START, CASH0,
-                                     retrying(http_get), edgar_get, sleep)
-        for sid, (fresh, spec) in extra.items():
-            _settle(d, sid, fresh, spec, verify, bad, summary, lenient=True)
-        if extras:
-            _extras(d, now, prices, verify, bad, summary, http_get)
     write_status(d)
     return bad, summary
 
@@ -287,27 +241,6 @@ def write_status(d):
     return out
 
 
-def _extras(d, now, prices, verify, bad, summary, http_get):
-    """Macro-lite ledger and the JEV paired twins. Each is isolated: a failure
-    logs one line and never stops the other sleeves."""
-    try:
-        from ops import macro_shadow
-        for sid, (fresh, spec) in macro_shadow.produce(d, now, prices).items():
-            _settle(d, sid, fresh, spec, verify, bad, summary)
-    except Exception as e:  # noqa: BLE001
-        print(json.dumps({"macro_sleeve": "error: %r" % (e,)}), file=sys.stderr)
-    try:
-        from collector import jev
-        from ops import jev_twin
-        key = jev.api_key()
-        if key:
-            b, _ = jev_twin.run(d, now, key, prices=prices, verify=verify,
-                                http_get=http_get)
-            bad.extend(b)
-    except Exception as e:  # noqa: BLE001
-        print(json.dumps({"jev_twin": "error: %r" % (e,)}), file=sys.stderr)
-
-
 def _evaluate(d):
     """Refresh sleeves/eval.json after write_status. Read-only w.r.t. the
     ledgers; any failure is logged and can never stop the loop."""
@@ -337,15 +270,13 @@ def main(argv, now=None):
     args = [a for a in argv[1:] if not a.startswith("--")]
     if len(args) != 1:
         raise SystemExit("usage: sleeve_shadow.py <dir> [--verify|--loop]")
-    from research.strategy import a_run
-    a_run._load_env()
+    sip_fetch.load_alpaca_env()
     if "--verify" not in argv:
         _register_forward(args[0])
     while True:
         n = now or datetime.datetime.now(datetime.timezone.utc)
         try:
-            bad, summary = run(args[0], n, verify="--verify" in argv,
-                               event_sleeves="--no-events" not in argv)
+            bad, summary = run(args[0], n, verify="--verify" in argv)
         except (ValueError, OSError, sip_fetch.SipError) as e:
             print(json.dumps({"error": str(e)}), file=sys.stderr)
             if "--loop" not in argv:

@@ -9,8 +9,7 @@ from `~/ha` (next section).
 ## Quick path (the exact steps)
 
 From the repo root in WSL, one terminal. Needs the packages in
-Requirements and `ALPACA_KEY_ID` / `ALPACA_SECRET` in the repo `.env`
-(`OPENROUTER_API_KEY` is optional and enables the log-only JEV shadow).
+Requirements and `ALPACA_KEY_ID` / `ALPACA_SECRET` in the repo `.env`.
 
 1. `git pull`
 2. In the Alpaca paper dashboard, close any open positions and cancel open
@@ -28,7 +27,7 @@ Requirements and `ALPACA_KEY_ID` / `ALPACA_SECRET` in the repo `.env`
      month's candidates. The loop drops a candidate that arrives while the
      market is closed, so the emitter refuses to run outside the session
    - starts the loop in the background (`~/g2/loop.pid`, log in
-     `~/g2/logs/loop.log`), then runs the JEV shadow once
+     `~/g2/logs/loop.log`) and the forward ledgers
 4. Watch it: `python3 ops/monitor.py ~/g2` (Ctrl+C closes the view only). A
    position with no resting sell order shows `NO STOP` in red. The Alpaca paper
    dashboard shows the same orders and positions.
@@ -115,34 +114,14 @@ It writes at most one candidate per symbol per month. The loop consumes a
 line on its next tick and holds it if the market is closed, so emit during
 the session only.
 
-Optional JEV shadow (needs `OPENROUTER_API_KEY`; logs only, blocks nothing):
-
-```bash
-python3 ops/jev_shadow.py ~/g2
-```
-
-One pass over new candidates; writes `~/g2/jev_shadow.jsonl` with what JEV
-answered and the filter verdict it would have given (PASS or HOLD plus
-reason). It never touches the journal, candidates or STAGE. Spend caps still
-apply. With only the passive sleeve this shows the plumbing works, not
-whether JEV helps.
-
 Forward ledgers (`start.sh` starts these; they are log-only and place no
 orders). Each is a virtual $100k book with one hash-chained row per session,
 written to `~/g2/sleeves/` and shown in the monitor:
 
-- the 60/40 core, trend (T1) and sector momentum (T2);
-- insider (E1) and intraday (I1) ledgers in the same run. The first E1 pass
-  downloads SEC quarterly insider data sets into `~/g2/event_cache` (up to 3
-  per hourly pass), so E1 rows start after about two passes. `--no-events`
-  skips them;
-- the macro-lite ledger (needs `FRED_API_KEY`);
-- the JEV paired twins (need `OPENROUTER_API_KEY`; real spend under the
-  existing cap). `python3 ops/jev_twin.py ~/g2 --report` prints the paired
-  comparison.
+- the 60/40 core (`core_passive_v1`);
+- the cash (BIL) and SPY benchmarks.
 
-PEAD is not wired: its registered signal has no forward data source.
-`~/g2/sleeves/status.json` flags a ledger at -15% drawdown (soft) and -20%
+A sleeve joins after it passes its A-gate (plan/07). `~/g2/sleeves/status.json` flags a ledger at -15% drawdown (soft) and -20%
 (hard).
 
 Check that history reproduces (the fidelity gate) at any time. Exit 1 means a
@@ -153,26 +132,23 @@ data:
 python3 ops/sleeve_shadow.py ~/g2 --verify
 ```
 
-Every strategy is scored only against benchmark ledgers (`bench_*`, the 60/40
-core) as a paired daily difference. `python3 ops/sleeve_eval.py ~/g2` prints the
+Every ledger is scored against a benchmark ledger (`bench_*`) as a paired
+daily difference. `python3 ops/sleeve_eval.py ~/g2` prints the
 table and writes `~/g2/sleeves/eval.json`, which the monitor shows. The states
 are WARMUP under 60 sessions; KILL-FUTILE from 126 sessions when even the best
 case is below the benchmark; ELIGIBLE-FOR-REVIEW only after 504 sessions with a
 corrected p under 0.05. That last state never means promote.
 
-On first start the loop registers the whole forward program in the trial ledger
+On first start the loop registers the forward ledgers in the trial ledger
 (`python3 ops/forward_register.py ~/g2` does the same by hand). Commit
 `research/ledger/trials.jsonl` and `checkpoint.json` afterwards.
 
-Long-history check of the canonical rules (run once, on a machine with
-internet): `python3 ops/long_history_fetch.py && python3 ops/long_history_run.py`.
-
 Optional macro and filing collector (nothing reads its output yet):
 `WITH_COLLECTOR=1 bash ops/deploy/start.sh ~/g2`. Plan and promotion rules are
-in `plan/appendix/10-sleeve-integration-plan.md`.
+in `plan/07-build-roadmap.md` and `plan/11-calibration-and-self-improvement.md`.
 
 On a Linux-native checkout, `bash ops/deploy/start.sh` automates the same
-steps (build, first-run STAGE sign-off, loop, emitter, shadow);
+steps (build, first-run STAGE sign-off, loop, emitter, forward ledgers);
 `bash ops/deploy/start.sh stop` stops them.
 
 ## Live view
@@ -192,7 +168,7 @@ One screen shows: loop liveness, seconds since the last tick, tick totals
 and any error lines; incoming candidates with entry, stop, take-profit and
 risk per share; kernel decisions with proceed/hold, veto reason, quantity
 and size limiter; the order journal with its hash-chain check, row counts
-and latest rows; JEV shadow verdicts, marked log-only; and the Alpaca paper
+and latest rows; the forward ledgers; and the Alpaca paper
 account (market state, equity, cash, buying power, positions with P/L,
 recent orders). The broker panel reads keys from the environment or the repo
 `.env`.

@@ -287,7 +287,7 @@
     },
     {
       "name": "research",
-      "command": "for t in test_a_run test_alert_relay test_baseline test_bea test_bls test_costs_v2 test_edgar test_event_shadow test_forward_register test_fred test_gates test_insider_data test_insider_sleeve test_intraday_mom test_isolation test_jev_filter test_jev_shadow test_jev_twin test_ledger test_long_history test_macro_shadow test_pead_data test_pead_sleeve test_portfolio test_prereg test_s5 test_sector_mom test_settlement test_sip_fetch test_sleeve_eval test_sleeve_shadow test_source_seam test_stats test_tier_a test_treasury test_trend; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
+      "command": "for t in test_alert_relay test_baseline test_bea test_bls test_costs_v2 test_edgar test_forward_register test_fred test_gates test_insider_data test_isolation test_jev_filter test_ledger test_pead_data test_portfolio test_prereg test_settlement test_sip_fetch test_sleeve_eval test_sleeve_shadow test_source_seam test_stats test_tier_a test_treasury; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
       "timeout_seconds": 1800
     },
     {

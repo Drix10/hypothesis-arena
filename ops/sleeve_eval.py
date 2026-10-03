@@ -2,11 +2,10 @@
 
     python3 ops/sleeve_eval.py <dir> [--json]
 
-All five sleeves (T1, T2, I1, E1, E2-det) FAILED their A-gates. The forward
-ledgers are therefore replication / observation ledgers judged against the
-benchmark ledgers of ops/sleeve_shadow.py (BENCHMARKS), NOT promotion
-candidates. This tool never places orders, never fetches prices and never
-touches a ledger; its only write is <dir>/sleeves/eval.json (atomic).
+Every forward ledger is judged against a benchmark ledger of
+ops/sleeve_shadow.py (BENCHMARKS); the result is evidence, never a promotion.
+This tool never places orders, never fetches prices and never touches a
+ledger; its only write is <dir>/sleeves/eval.json (atomic).
 
 Per non-benchmark ledger, from its daily rows (the first row is the rebase
 row with ret 0.0 by construction and is not a return observation):
@@ -17,12 +16,12 @@ row with ret 0.0 by construction and is not a return observation):
   return (stats.bootstrap_ci), tracking error, information ratio. One-sided
   p-values (H1: active mean > 0) come from the HAC t-stat.
 
-Multiplicity (plan/11 section 11.0b: Holm): ONE pooled Holm (stats.holm) over
-every non-benchmark, non-twin ledger present in the directory, and a SEPARATE
-Holm over the JEV twins. The family is the ledger set, not "the ledgers that
-have matured", so it cannot shrink by ignoring a young or broken ledger: a
-ledger whose p-value cannot be computed (too few observations, zero variance,
-no benchmark, broken chain) enters the family with p = 1.0.
+Multiplicity (plan/11 section 11.0b: Holm): one Holm (stats.holm) over every
+non-benchmark ledger present in the directory. The family is the ledger set,
+not "the ledgers that have matured", so it cannot shrink by ignoring a young
+or broken ledger: a ledger whose p-value cannot be computed (too few
+observations, zero variance, no benchmark, broken chain) enters the family
+with p = 1.0.
 
 Checkpoint decision (pre-set, from the plan; constants below, never tuned):
   sessions < WARMUP_SESSIONS (60)          WARMUP: plumbing / fidelity only,
@@ -34,8 +33,7 @@ Checkpoint decision (pre-set, from the plan; constants below, never tuned):
   REVIEW_SESSIONS (504, two years).
   ELIGIBLE-FOR-REVIEW only when sessions >= 504 AND Holm-adjusted p < 0.05
   AND the CI lower bound > 0 AND the ledger's max drawdown is not larger than
-  its benchmark's over the same dates (twins: also >= 100 resolved JEV
-  decisions, doc 11 section 11.3b). ELIGIBLE-FOR-REVIEW only means that a
+  its benchmark's over the same dates. ELIGIBLE-FOR-REVIEW only means that a
   human MAY review the ledger. It is never a promotion, an approval or a
   trading signal.
 
@@ -62,52 +60,25 @@ REVIEW_SESSIONS = 504
 ALPHA = 0.05
 CI_LEVEL = 0.95
 Z_ONE_SIDED_95 = 1.645
-TWIN_MIN_RESOLVED = 100       # doc 11 section 11.3b
-TWIN_HORIZON_SESSIONS = 20    # = ops/jev_twin.HORIZON_SESSIONS (outcome window)
-TWIN_SUFFIX = "__jev"         # = ops/jev_twin.SUFFIX
 BOOT_B = 2000
 SEED = 20260930
 CASH_BENCH = S.BENCH_CASH
 
 NOTICE = ("ELIGIBLE-FOR-REVIEW only means a human may review the ledger; it is "
-          "never a promotion. All five sleeves failed their A-gates: these are "
-          "replication/observation ledgers judged against benchmarks.")
+          "never a promotion.")
 
 # Ledger id prefix -> (benchmark ledger id, reason). Longest matching prefix
-# wins; a "<sleeve>__jev" twin is compared with its base sleeve (below).
+# wins. A sleeve that passes its A-gate adds its mapping here.
 MAPPING = {
-    "trend_etf": (S.BENCH_EW_TREND,
-                  "plan/12 s12.6: T1's passive counterpart is the equal-weight "
-                  "buy-and-hold of its own five-ETF universe"),
-    "sector_mom": (S.BENCH_EW_SECTOR,
-                   "plan/12 s12.6: T2's passive counterpart is the equal-weight "
-                   "buy-and-hold of its own sector universe"),
-    "intraday_mom": (S.BENCH_SPY,
-                     "plan/12 s12.6: equity sleeves are scored against SPY "
-                     "buy-and-hold (I1 A-gate also reported buy_hold_spy)"),
-    "insider": (S.BENCH_SPY,
-                "plan/12 s12.6: equity event sleeve (E1), SPY buy-and-hold"),
-    "pead": (S.BENCH_SPY,
-             "plan/12 s12.6: equity event sleeve (E2-det), SPY buy-and-hold"),
-    "e2det": (S.BENCH_SPY,
-              "plan/12 s12.6: equity event sleeve (E2-det), SPY buy-and-hold"),
-    "macro_lite": ("core_passive_v1",
-                   "macro_lite is the 60/40 core with a +/-10pp tilt, so the "
-                   "core 60/40 buy-and-hold isolates the tilt (plan/12 s12.6 "
-                   "'same sleeve without its component')"),
     "core_passive": (S.BENCH_SPY,
                      "core is the 60/40 sanity reference (plan/12 s12.6 item 3); "
                      "scored against SPY buy-and-hold to show what the passive "
                      "equity alternative did"),
 }
-TWIN_REASON = ("doc 11 s11.3b: a JEV twin is judged against its own base "
-               "sleeve on identical candidates (paired difference twin - base)")
 
 
 def benchmark_for(sid):
     """(benchmark id, reason) or (None, None) when the ledger has no mapping."""
-    if sid.endswith(TWIN_SUFFIX):
-        return sid[:-len(TWIN_SUFFIX)], TWIN_REASON
     hit = [k for k in MAPPING if sid.startswith(k)]
     if not hit:
         return None, None
@@ -131,25 +102,6 @@ def _read_ledger(path):
 def _rets(rows):
     """{date: ret} of the return observations (row 0 is the rebase row)."""
     return {r["date"]: float(r["ret"]) for r in rows[1:]}
-
-
-def read_decisions(path):
-    """Chain-checked twin decision journal: (rows, None) / ([], 'absent') /
-    (None, 'why'). Same scheme as ops/jev_twin.read_decisions."""
-    if not os.path.exists(path):
-        return [], "absent"
-    try:
-        with open(path) as f:
-            rows = [json.loads(ln) for ln in f if ln.strip()]
-        prev = "GENESIS"
-        for r in rows:
-            body = {k: v for k, v in r.items() if k not in ("prev", "hash")}
-            if r["prev"] != prev or r["hash"] != S._digest(prev, body):
-                raise ValueError("chain-broken:" + str(r.get("cid", "?")))
-            prev = r["hash"]
-    except (ValueError, KeyError, TypeError, OSError) as e:
-        return None, str(e) or repr(e)
-    return rows, None
 
 
 # ------------------------------------------------------------------ maths
@@ -233,7 +185,7 @@ def power_line(ir_ann, n_returns):
             "more_needed": max(0, need - n_returns)}
 
 
-def decide(sessions, ci, adj_p, dd_ok, twin_resolved=None, is_twin=False):
+def decide(sessions, ci, adj_p, dd_ok):
     """(state, evidence, reasons) from the pre-set rules (module docstring)."""
     if sessions < WARMUP_SESSIONS:
         return ("WARMUP", "n/a (warmup)",
@@ -255,35 +207,10 @@ def decide(sessions, ci, adj_p, dd_ok, twin_resolved=None, is_twin=False):
         missing.append("CI lower bound not > 0")
     if not dd_ok:
         missing.append("max drawdown larger than benchmark's")
-    if is_twin and not (twin_resolved is not None
-                        and twin_resolved >= TWIN_MIN_RESOLVED):
-        missing.append("resolved JEV decisions < %d" % TWIN_MIN_RESOLVED)
     if missing:
         return "CONTINUE", "EVIDENCE-INSUFFICIENT", missing
     return ("ELIGIBLE-FOR-REVIEW", "REVIEW-CRITERIA-MET",
             ["criteria met: a human MAY review; this is not a promotion"])
-
-
-# ------------------------------------------------------------------ twins
-
-def twin_decisions(base, twin_rows, decisions, derr):
-    """doc 11 s11.3b counts for one twin: `decided` = model-driven (approve /
-    veto) pre-outcome decisions; `resolved` = those whose 20-session outcome
-    window has elapsed in the twin ledger (the >= 100 requirement)."""
-    out = {"decisions_chain": derr or "ok", "decided": None, "resolved": None,
-           "invalid": None, "vetoed": None, "min_resolved": TWIN_MIN_RESOLVED}
-    if decisions is None:
-        return out
-    mine = [r for r in decisions if r.get("sleeve") == base]
-    dec = [r for r in mine if r.get("class") in ("approve", "veto")
-           and r.get("pre_outcome")]
-    dates = [r["date"] for r in twin_rows]
-    resolved = [r for r in dec
-                if sum(1 for x in dates if x > r["date"]) >= TWIN_HORIZON_SESSIONS]
-    out.update(decided=len(dec), resolved=len(resolved),
-               invalid=sum(1 for r in mine if r.get("class") == "invalid"),
-               vetoed=sum(1 for r in dec if r.get("class") == "veto"))
-    return out
 
 
 # ------------------------------------------------------------------ driver
@@ -299,8 +226,6 @@ def evaluate(d, boot_b=BOOT_B, seed=SEED):
             broken[sid] = why
         else:
             ledgers[sid] = rows
-    decisions, derr = read_decisions(os.path.join(d, "jev_twin",
-                                                  "decisions.jsonl"))
     cash = _rets(ledgers[CASH_BENCH]) if CASH_BENCH in ledgers else None
 
     def cash_for(dates):
@@ -314,12 +239,10 @@ def evaluate(d, boot_b=BOOT_B, seed=SEED):
            "rules": {"warmup_sessions": WARMUP_SESSIONS,
                      "futility_sessions": FUTILITY_SESSIONS,
                      "review_sessions": REVIEW_SESSIONS, "alpha": ALPHA,
-                     "twin_min_resolved": TWIN_MIN_RESOLVED,
                      "bootstrap_b": boot_b, "seed": seed},
            "fidelity": {
-               "ok": (not broken) and decisions is not None,
+               "ok": not broken,
                "chain_failures": dict(broken),
-               "decisions_chain": derr or "ok",
                "note": "hash chain only; replay-vs-log fidelity needs prices: "
                        "run ops/sleeve_shadow.py --verify"},
            "mapping": {k: {"benchmark": v[0], "reason": v[1]}
@@ -344,10 +267,9 @@ def evaluate(d, boot_b=BOOT_B, seed=SEED):
     ev_ids = [s for s in names if s not in S.BENCHMARKS]
     for sid in ev_ids:
         bid, reason = benchmark_for(sid)
-        e = {"kind": "twin" if sid.endswith(TWIN_SUFFIX) else "sleeve",
-             "benchmark": bid, "mapping_reason": reason, "sessions": None,
+        e = {"benchmark": bid, "mapping_reason": reason, "sessions": None,
              "last_date": None, "fidelity": "chain-ok", "returns": None,
-             "paired": None, "power": None, "twin": None, "checkpoint": None}
+             "paired": None, "power": None, "checkpoint": None}
         res["ledgers"][sid] = e
         if sid in broken:
             e["fidelity"] = "CHAIN-BROKEN: " + broken[sid]
@@ -381,23 +303,19 @@ def evaluate(d, boot_b=BOOT_B, seed=SEED):
                       and p["ledger_max_dd_paired"] <= p["bench_max_dd_paired"])
         e["paired"] = p
         e["power"] = power_line(p["ir_ann"], p["n"])
-        if e["kind"] == "twin":
-            e["twin"] = twin_decisions(sid[:-len(TWIN_SUFFIX)], rows,
-                                       decisions, derr)
 
-    # Holm: pooled (non-benchmark, non-twin) and twins; family = ledger set.
-    for fam, kind in (("pooled", "sleeve"), ("twins", "twin")):
-        ids = [s for s in ev_ids if res["ledgers"][s]["kind"] == kind]
-        ps = [res["ledgers"][s]["paired"]["p_one_sided"]
-              if res["ledgers"][s]["paired"] else 1.0 for s in ids]
-        adj = holm_adjusted(ps)
-        rej = stats.holm(ps, ALPHA) if ps else []
-        res["holm"][fam] = {"alpha": ALPHA, "m": len(ids), "ledgers": ids,
-                            "p": ps, "adjusted": adj, "reject": rej}
-        for s, a, rj in zip(ids, adj, rej):
-            pr = res["ledgers"][s]["paired"]
-            if pr is not None:
-                pr["holm_p"], pr["holm_reject"] = a, bool(rj)
+    # Holm over the non-benchmark ledgers; family = ledger set.
+    ps = [res["ledgers"][s]["paired"]["p_one_sided"]
+          if res["ledgers"][s]["paired"] else 1.0 for s in ev_ids]
+    adj = holm_adjusted(ps)
+    rej = stats.holm(ps, ALPHA) if ps else []
+    res["holm"]["pooled"] = {"alpha": ALPHA, "m": len(ev_ids),
+                             "ledgers": ev_ids, "p": ps, "adjusted": adj,
+                             "reject": rej}
+    for s, a, rj in zip(ev_ids, adj, rej):
+        pr = res["ledgers"][s]["paired"]
+        if pr is not None:
+            pr["holm_p"], pr["holm_reject"] = a, bool(rj)
 
     for sid in ev_ids:
         e = res["ledgers"][sid]
@@ -405,9 +323,7 @@ def evaluate(d, boot_b=BOOT_B, seed=SEED):
             continue
         pr = e["paired"]
         st, ev, why = decide(e["sessions"], pr["ci95_active_ann"],
-                             pr.get("holm_p"), pr["dd_ok"],
-                             e["twin"]["resolved"] if e["twin"] else None,
-                             e["kind"] == "twin")
+                             pr.get("holm_p"), pr["dd_ok"])
         e["checkpoint"] = {"state": st, "evidence": ev, "reasons": why}
     return _clean(res)
 
@@ -456,8 +372,6 @@ def format_table(res):
                    "from every statistic")
         for k, v in fid["chain_failures"].items():
             out.append("!!!   %s: %s" % (k, v))
-        if fid["decisions_chain"] not in ("ok", "absent"):
-            out.append("!!!   jev_twin/decisions.jsonl: " + fid["decisions_chain"])
         out.append("!" * 72)
     else:
         out.append("fidelity: hash chains OK (replay check: "
@@ -497,12 +411,6 @@ def format_table(res):
                               pw["more_needed"]), c["evidence"]))
         else:
             out.append("    " + "; ".join(c["reasons"]))
-        if e["twin"]:
-            t = e["twin"]
-            out.append("    jev s11.3b: resolved %s / need %d (decided %s, "
-                       "vetoed %s, invalid %s); paired twin-base diff above"
-                       % (t["resolved"], t["min_resolved"], t["decided"],
-                          t["vetoed"], t["invalid"]))
     return "\n".join(out)
 
 

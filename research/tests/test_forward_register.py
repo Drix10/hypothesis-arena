@@ -13,12 +13,9 @@ from contextlib import redirect_stderr, redirect_stdout
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from ops import event_shadow
 from ops import forward_register as F
-from ops import macro_shadow
 from ops import sleeve_shadow as S
 from research.strategy import ledger as L
-from research.strategy import prereg
 
 REAL = os.path.join(os.path.dirname(__file__), "..", "ledger")
 REAL_FILES = [os.path.join(REAL, n) for n in ("trials.jsonl", "checkpoint.json")]
@@ -36,11 +33,7 @@ def _read(path):
 
 REAL_BEFORE = [_sha(p) for p in REAL_FILES]
 
-EXPECTED = (["core_passive_v1", "trend_etf_v1", "sector_mom_v1"]
-            + sorted(event_shadow.E1_IDS.values())
-            + sorted(event_shadow.I1_IDS.values())
-            + ["macro_lite_v1", "core_passive_v1__jev", "trend_etf_v1__jev",
-               "sector_mom_v1__jev"])
+EXPECTED = ["core_passive_v1"]
 
 
 class Base(unittest.TestCase):
@@ -89,24 +82,9 @@ class Register(Base):
             self.assertEqual(r["split_scheme"], "forward_only")
             self.assertEqual(r["window"]["start"], "2026-09-30")
             self.assertEqual(r["runner"], "ops.forward_register")
-        for lid in ("core_passive_v1__jev", "trend_etf_v1__jev",
-                    "sector_mom_v1__jev"):
-            self.assertEqual(by[lid]["family"], "jev_filter")
-        with open(os.path.join(F.PREREG, "m1_macro_lite_v1.json")) as f:
-            macro = json.load(f)
-        self.assertEqual(by["macro_lite_v1"]["prereg_hash"],
-                         prereg.require_valid(macro))
-        self.assertEqual(by["macro_lite_v1"]["family"], "macro")
+        self.assertEqual(by["core_passive_v1"]["family"], "core_passive")
         self.assertEqual(by["core_passive_v1"]["prereg_hash"],
                          hashlib.sha256(F.CORE_SPEC.encode()).hexdigest())
-        with open(os.path.join(F.PREREG, "t2_sector_mom_v1.json")) as f:
-            t2 = json.load(f)
-        self.assertEqual(by["sector_mom_v1"]["prereg_hash"],
-                         prereg.prereg_hash(t2))
-        self.assertEqual(len({by[v]["prereg_hash"]
-                              for v in event_shadow.E1_IDS.values()}), 1)
-        self.assertEqual(len({by[v]["trial_id"]
-                              for v in event_shadow.E1_IDS.values()}), 3)
 
     def test_idempotent_second_run_appends_nothing(self):
         self.reg()
@@ -144,17 +122,25 @@ class Register(Base):
 
     def test_late_registration_is_flagged(self):
         os.makedirs(os.path.join(self.dir, "sleeves"))
-        with open(os.path.join(self.dir, "sleeves", "macro_lite_v1.jsonl"),
+        with open(os.path.join(self.dir, "sleeves", "core_passive_v1.jsonl"),
                   "w") as f:
             f.write("{}\n")
-        self.assertEqual(self.reg()["late"], ["macro_lite_v1"])
+        self.assertEqual(self.reg()["late"], ["core_passive_v1"])
 
 
 class Refusal(Base):
-    def test_broken_chain_refused_and_nothing_appended(self):
+    def _two_trials(self):
         self.reg()
+        old = F.CORE_SPEC
+        F.CORE_SPEC = old + " v2"
+        self.addCleanup(setattr, F, "CORE_SPEC", old)
+        self.reg()
+        F.CORE_SPEC = old
+
+    def test_broken_chain_refused_and_nothing_appended(self):
+        self._two_trials()
         rows = _read(self.lp).split("\n")
-        rows[3] = rows[3].replace("forward_only", "forward_ONLY")
+        rows[0] = rows[0].replace("forward_only", "forward_ONLY")
         with open(self.lp, "w") as f:
             f.write("\n".join(rows))
         before = _sha(self.lp)
@@ -163,13 +149,13 @@ class Refusal(Base):
         self.assertEqual(_sha(self.lp), before)
 
     def test_truncated_vs_checkpoint_refused(self):
-        self.reg()
+        self._two_trials()
         rows = _read(self.lp).split("\n")
         with open(self.lp, "w") as f:
-            f.write("\n".join(rows[:5]) + "\n")
+            f.write(rows[0] + "\n")
         with self.assertRaises(L.LedgerError):
             self.reg()
-        self.assertEqual(len(_read(self.lp).splitlines()), 5)
+        self.assertEqual(len(_read(self.lp).splitlines()), 1)
 
     def test_torn_tail_refused(self):
         self.reg()
@@ -199,38 +185,6 @@ class Refusal(Base):
         self.assertIn("refused", err.getvalue())
         with self.assertRaises(SystemExit):
             F.main(["forward_register.py"])
-
-
-class Prereg(unittest.TestCase):
-    def setUp(self):
-        with open(os.path.join(F.PREREG, "m1_macro_lite_v1.json")) as f:
-            self.p = json.load(f)
-
-    def test_valid_forward_only_new_signal(self):
-        self.assertEqual(prereg.validate(self.p), [])
-        self.assertEqual(self.p["family"], "macro")
-        self.assertNotIn("llm", self.p)
-        self.assertEqual(self.p["decision"]["new_signal_tstat_min"], 3.0)
-        self.assertEqual(self.p["split"]["scheme"], "forward_only")
-        self.assertEqual(self.p["holdout"]["start"], "2026-09-30")
-        self.assertGreaterEqual(self.p["holdout"]["start"], S.FORWARD_START)
-        self.assertEqual(len(self.p["variants"]), 1)
-        self.assertEqual(self.p["sleeve"], macro_shadow.SLEEVE_ID)
-        for k in ("FORWARD", "no historical holdout", "3.0"):
-            self.assertIn(k, self.p["hypothesis"] + self.p["holdout"]["rule"])
-
-    def test_matches_macro_shadow_signal(self):
-        sig = self.p["signal"]
-        self.assertEqual(macro_shadow.TILT, 0.10)
-        self.assertIn("TILT = 10 percentage points", sig)
-        self.assertIn(macro_shadow.SERIES, sig)
-        self.assertIn("FRED:" + macro_shadow.SERIES, self.p["universe"])
-        for s in macro_shadow.BASE:
-            self.assertIn(s, self.p["universe"])
-        self.assertIn("more than %d days old" % macro_shadow.MAX_ANCHOR_AGE_DAYS,
-                      sig)
-        self.assertIn("more than %d days before" % macro_shadow.MAX_PRIOR_GAP_DAYS,
-                      sig)
 
 
 class Hook(unittest.TestCase):
