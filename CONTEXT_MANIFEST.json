@@ -287,7 +287,7 @@
     },
     {
       "name": "research",
-      "command": "for t in test_alert_relay test_baseline test_bea test_bls test_costs_v2 test_edgar test_forward_register test_fred test_gates test_form4 test_isolation test_jev_filter test_ledger test_earnings_surprise test_portfolio test_prereg test_settlement test_sip_fetch test_forward_eval test_forward_ledgers test_source_seam test_stats test_tier_a test_treasury; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
+      "command": "for t in test_alert_relay test_baseline test_bea test_bls test_costs_v2 test_costs_v3 test_edgar test_forward_register test_fred test_gates test_form4 test_isolation test_jev_filter test_ledger test_earnings_surprise test_portfolio test_prereg test_settlement test_sip_fetch test_forward_eval test_forward_ledgers test_source_seam test_stats test_tier_a test_treasury; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
       "timeout_seconds": 1800
     },
     {

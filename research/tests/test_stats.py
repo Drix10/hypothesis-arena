@@ -159,6 +159,47 @@ class PboTest(unittest.TestCase):
             S.pbo([[0.0, 0.1]] * 4, n_slices=8)
 
 
+class SpanningTest(unittest.TestCase):
+    def _series(self, n, alpha, beta, seed):
+        import random
+        rng = random.Random(seed)
+        rb = [0.0003 + rng.gauss(0, 0.01) for _ in range(n)]
+        rs = [alpha + beta * b + rng.gauss(0, 0.004) for b in rb]
+        return rs, rb
+
+    def test_recovers_alpha_and_beta(self):
+        rs, rb = self._series(1500, 0.0006, 0.4, 7)
+        r = S.spanning_alpha(rs, rb, b=400)
+        self.assertAlmostEqual(r["beta"], 0.4, delta=0.03)
+        self.assertAlmostEqual(r["alpha"], 0.0006, delta=0.0003)
+        self.assertGreater(r["t_alpha"], 3)
+        self.assertGreater(r["ci"][0], 0)
+        self.assertEqual(r["n"], 1500)
+
+    def test_pure_beta_has_no_alpha(self):
+        rs, rb = self._series(1500, 0.0, 1.5, 8)
+        r = S.spanning_alpha(rs, rb, b=400)
+        self.assertLess(abs(r["t_alpha"]), 3)
+        self.assertLess(r["ci"][0], 0)
+        self.assertGreater(r["ci"][1], 0)
+
+    def test_matches_ols_closed_form(self):
+        rb = [0.01, -0.02, 0.03, 0.0, 0.015, -0.005]
+        rs = [0.001 + 0.5 * b for b in rb]
+        r = S.spanning_alpha(rs, rb, b=50)
+        self.assertAlmostEqual(r["alpha"], 0.001)
+        self.assertAlmostEqual(r["beta"], 0.5)
+
+    def test_deterministic_and_refuses_bad_input(self):
+        rs, rb = self._series(300, 0.0004, 0.3, 9)
+        self.assertEqual(S.spanning_alpha(rs, rb, b=200, seed=3),
+                         S.spanning_alpha(rs, rb, b=200, seed=3))
+        for a, b in ((rs[:10], rb[:9]), ([0.1, 0.2, 0.3], [0.1, 0.2, 0.3]),
+                     ([0.1] * 5, [0.0] * 5), ([0.1, float("nan"), 0, 0, 0], [0.1, 0.2, 0.3, 0.1, 0.0])):
+            with self.assertRaises(S.StatsError):
+                S.spanning_alpha(a, b, b=20)
+
+
 if __name__ == "__main__":
     r = unittest.main(exit=False, verbosity=0).result
     if r.wasSuccessful():

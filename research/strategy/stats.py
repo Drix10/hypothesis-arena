@@ -125,6 +125,57 @@ def bootstrap_ci(xs, stat, level=0.95, **kw):
     return lo, hi
 
 
+def _ols(ys, xs):
+    """(alpha, beta, residuals) of ys = alpha + beta * xs."""
+    mx, my = mean(xs), mean(ys)
+    sxx = sum((x - mx) ** 2 for x in xs)
+    if sxx <= 0.0:
+        raise StatsError("zero-variance-regressor")
+    beta = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
+    alpha = my - beta * mx
+    return alpha, beta, [y - alpha - beta * x for x, y in zip(xs, ys)]
+
+
+def spanning_alpha(rs, rb, level=0.95, b=2000, seed=0, lag=None):
+    """Spanning test (plan/11 11.3a item 3): regress the sleeve's periodic
+    excess returns rs on the reference book's rb, paired by period.
+    Returns dict(alpha, beta, t_alpha, ci, n): the Newey-West t-stat of
+    alpha and a stationary-bootstrap CI of alpha over resampled pairs."""
+    rs, rb = list(rs), list(rb)
+    if len(rs) != len(rb):
+        raise StatsError("unpaired")
+    if len(rs) < 4 or any(not math.isfinite(v) for v in rs + rb):
+        raise StatsError("spanning-input")
+    alpha, beta, resid = _ols(rs, rb)
+    n = len(rs)
+    if lag is None:
+        lag = int(4 * (n / 100.0) ** (2.0 / 9.0))
+    mx = mean(rb)
+    sxx = sum((x - mx) ** 2 for x in rb)
+    # Newey-West variance of alpha: the alpha influence term per period is
+    # resid_t * (1 - n * mx * (x_t - mx) / sxx) / n.
+    u = [e * (1.0 - n * mx * (x - mx) / sxx) for e, x in zip(resid, rb)]
+    var = sum(v * v for v in u) / n
+    for k in range(1, min(lag, n - 1) + 1):
+        gk = sum(u[i] * u[i - k] for i in range(k, n)) / n
+        var += 2.0 * (1.0 - k / (lag + 1.0)) * gk
+    t = alpha / math.sqrt(var / n) if var > 0.0 else None
+    rng = random.Random(seed)
+    mean_block = max(2.0, n ** (1.0 / 3.0))
+    dist = []
+    for _ in range(b):
+        idx = stationary_bootstrap_indices(n, mean_block, rng)
+        try:
+            dist.append(_ols([rs[i] for i in idx], [rb[i] for i in idx])[0])
+        except StatsError:
+            continue
+    dist.sort()
+    a = (1.0 - level) / 2.0
+    ci = (dist[int(math.floor(a * (len(dist) - 1)))],
+          dist[int(math.ceil((1.0 - a) * (len(dist) - 1)))]) if dist else None
+    return {"alpha": alpha, "beta": beta, "t_alpha": t, "ci": ci, "n": n}
+
+
 def psr(sr, n_obs, skew, kurt, sr_star=0.0):
     """Probabilistic Sharpe Ratio (Bailey & Lopez de Prado), per-period."""
     if n_obs < 3:

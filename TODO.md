@@ -41,6 +41,12 @@ with evidence (commit and test output, or a report path).
       `constraint_set` and `contamination_class` in the prereg validator,
       $25,000 whole-share book, spanning test + FF5/momentum diagnostics,
       placebo-graph tool.
+  - [x] `cost_v3` (`research/strategy/costs_v3.py`: square-root impact,
+        borrow, margin interest, short dividends) and the spanning test
+        (`stats.spanning_alpha`), tested in `test_costs_v3` and `test_stats`.
+  - [ ] Short positions and the margin ledger in the backtester;
+        `constraint_set` / `contamination_class` in the prereg validator;
+        whole-share $25,000 book; placebo-graph tool.
   - [ ] Verify on Alpaca docs and the paper account: shorting on paper,
         `shortable`/`easy_to_borrow` flags, fractional shorts, paper balance
         setting.
