@@ -11,3 +11,7 @@
 /kernel/broker/  @Drix10
 /kernel/kill/  @Drix10
 /kernel/risk/  @Drix10
+
+# agent-flow: protected_paths from CONTEXT_MANIFEST.json, and the files that hold the rules
+/CONTEXT_MANIFEST.json  @Drix10
+/.risk-baseline.json  @Drix10

@@ -1,5 +1,5 @@
 {
-  "version": "1.2.1",
+  "version": "1.2.2",
   "harness": "claude",
   "files": {
     ".claude/skills/bootstrap": "22ea5bef067f07668f6a6a6918fd7fe46d1d90e950045aacc1165ca6a35e84b0",
@@ -9,6 +9,6 @@
     ".claude/skills/qa": "c1499e88e879eadfeb6fc64342a0148bc6bd6c2b7f63fe9de8430fab3106a843",
     ".claude/skills/reviewer": "1c75d58ebd061207da773e11c84cf901aba30c25bfe535dbbc213590b621de17",
     ".claude/agents/reviewer.md": "ee90ce2b23892bfb0bf44b019018e140d9ef369408a9a88473ef9f421c125899",
-    ".agent-flow-runtime": "de2281d152c1c2edae69932600a463c126796038f2e360494c48478294782550"
+    ".agent-flow-runtime": "760f703fe04d5ddfd515abfed77fc573b0b8a01fcb05bb2655508b17b79fa6fb"
   }
 }

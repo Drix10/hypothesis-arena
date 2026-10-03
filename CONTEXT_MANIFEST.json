@@ -465,7 +465,7 @@
   ],
   "pipeline": {
     "max_review_rounds": 2,
-    "auto_merge_low_risk": true,
+    "auto_merge_low_risk": false,
     "models": {
       "high_reasoning": "claude-opus-5-5"
     },
