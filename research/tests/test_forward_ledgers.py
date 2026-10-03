@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from ops import sleeve_shadow as S
+from ops import forward_ledgers as S
 
 NOW = datetime.datetime(2026, 12, 2, 21, 0, tzinfo=datetime.timezone.utc)
 

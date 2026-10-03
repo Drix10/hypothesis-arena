@@ -10,8 +10,8 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from ops import sleeve_eval as E
-from ops import sleeve_shadow as S
+from ops import forward_eval as E
+from ops import forward_ledgers as S
 from research.strategy import stats
 
 STRONG, MID, WEAK = "alpha_v1", "beta_v1", "gamma_v1"
@@ -328,7 +328,7 @@ class Eval(unittest.TestCase):
             buf = io.StringIO()
             with contextlib.redirect_stderr(buf):
                 S._evaluate(self.d)          # must not raise
-            self.assertIn("sleeve_eval", buf.getvalue())
+            self.assertIn("forward_eval", buf.getvalue())
         finally:
             E.write_eval = old
         n = 70

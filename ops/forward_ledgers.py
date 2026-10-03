@@ -9,11 +9,11 @@ Only sessions on or after FORWARD_START are recorded, so the frozen
 pre-registered holdouts (all end before it) are never reported. Earlier bars
 warm up the signal only.
 
-    python3 ops/sleeve_shadow.py <dir>            # append missing sessions
-    python3 ops/sleeve_shadow.py <dir> --verify   # replay must equal the log
-    python3 ops/sleeve_shadow.py <dir> --loop     # re-run every hour
+    python3 ops/forward_ledgers.py <dir>            # append missing sessions
+    python3 ops/forward_ledgers.py <dir> --verify   # replay must equal the log
+    python3 ops/forward_ledgers.py <dir> --loop     # re-run every hour
 
-Benchmark ledgers (BENCHMARKS) ride along in sleeve_specs; ops/sleeve_eval.py
+Benchmark ledgers (BENCHMARKS) ride along in sleeve_specs; ops/forward_eval.py
 judges every other ledger against them (read-only, writes sleeves/eval.json).
 A new sleeve joins by adding its entry to sleeve_specs after its A-gate.
 
@@ -245,10 +245,10 @@ def _evaluate(d):
     """Refresh sleeves/eval.json after write_status. Read-only w.r.t. the
     ledgers; any failure is logged and can never stop the loop."""
     try:
-        from ops import sleeve_eval
-        sleeve_eval.write_eval(d)
+        from ops import forward_eval
+        forward_eval.write_eval(d)
     except Exception as e:  # noqa: BLE001
-        print(json.dumps({"sleeve_eval": "error: %r" % (e,)}), file=sys.stderr)
+        print(json.dumps({"forward_eval": "error: %r" % (e,)}), file=sys.stderr)
 
 
 def _register_forward(d):
@@ -269,7 +269,7 @@ def _register_forward(d):
 def main(argv, now=None):
     args = [a for a in argv[1:] if not a.startswith("--")]
     if len(args) != 1:
-        raise SystemExit("usage: sleeve_shadow.py <dir> [--verify|--loop]")
+        raise SystemExit("usage: forward_ledgers.py <dir> [--verify|--loop]")
     sip_fetch.load_alpaca_env()
     if "--verify" not in argv:
         _register_forward(args[0])

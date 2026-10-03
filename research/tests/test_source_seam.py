@@ -23,9 +23,9 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.abspath(os.path.join(ROOT, "..")))
 
 from collector import classify, ctx_read
-from plane import publish, resolver, schema
-from plane import source_seam
-from plane.source_seam import to_canonical
+from engine import publish, resolver, schema
+from engine import source_seam
+from engine.source_seam import to_canonical
 
 TODAY = "2026-09-24"
 NOW = float(calendar.timegm((2026, 9, 24, 14, 0, 0, 0, 0, 0)))
@@ -572,7 +572,7 @@ class TestSourceSeam(unittest.TestCase):
         # Orphans (no manifest row), sha-corrupted committed files,
         # missing-file rows, and forged hashes contribute NOTHING;
         # the one verified committed generation recovers exactly.
-        from plane import emit as emit_mod
+        from engine import emit as emit_mod
         seam, _db = make_seam()
         recs, _st, _h = seam.harvest(["SPY"], 3)
         real = [r for r in recs

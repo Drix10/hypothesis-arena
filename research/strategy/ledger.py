@@ -8,7 +8,7 @@ import json
 import os
 import time
 
-from research.plane import locks
+from research.engine import locks
 
 GENESIS = "0" * 64
 OPEN_FIELDS = ("trial_id", "hypothesis_card_id", "prereg_hash", "family",

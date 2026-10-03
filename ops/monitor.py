@@ -236,7 +236,7 @@ def panel_sleeves(d, out):
     names = sorted(f for f in os.listdir(sd) if f.endswith(".jsonl")) if os.path.isdir(sd) else []
     if not names:
         out.append("  " + col("none yet (runs after each close)", DIM))
-    try:  # written by ops/sleeve_eval.py (shadow --loop); absent is fine
+    try:  # written by ops/forward_eval.py (shadow --loop); absent is fine
         with open(os.path.join(sd, "eval.json")) as f:
             ev = json.load(f)
     except (OSError, ValueError):

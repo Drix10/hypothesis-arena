@@ -19,13 +19,13 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.abspath(os.path.join(ROOT, "..")))
 
 try:
-    import test_plane as T
+    import test_engine as T
     import test_source_seam as SEAM_T
 except ImportError:  # unittest module-style invocation
-    from tests import test_plane as T
+    from tests import test_engine as T
     from tests import test_source_seam as SEAM_T
 from collector import classify, ctx_read
-from plane import runner
+from engine import runner
 
 MAP_PATH = SEAM_T.MAP_PATH
 NOW = SEAM_T.NOW

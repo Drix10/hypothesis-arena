@@ -279,7 +279,7 @@ and are binding.
 `emit` writes one bundle: `research_epoch` + `bundle_id` + `watermarks` +
 feature list + `BUNDLE_COMMIT`, staged as temp + fsync + atomic rename with
 a manifest row (bundle_id, research_epoch, feature count, map sha, commit).
-The writer is `research/plane/emit.py`; the reader is
+The writer is `research/engine/emit.py`; the reader is
 `collector/ctx_read.py`, which enforces the bundle-internal `commit is
 True` flag plus the strict envelope/lineage/kind checks. Partial emit +
 crash + restart never exposes half a bundle. Watermarks are replay-critical:

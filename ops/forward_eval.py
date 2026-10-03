@@ -1,9 +1,9 @@
 """Read-only evaluator for the forward shadow ledgers (<dir>/sleeves/*.jsonl).
 
-    python3 ops/sleeve_eval.py <dir> [--json]
+    python3 ops/forward_eval.py <dir> [--json]
 
 Every forward ledger is judged against a benchmark ledger of
-ops/sleeve_shadow.py (BENCHMARKS); the result is evidence, never a promotion.
+ops/forward_ledgers.py (BENCHMARKS); the result is evidence, never a promotion.
 This tool never places orders, never fetches prices and never touches a
 ledger; its only write is <dir>/sleeves/eval.json (atomic).
 
@@ -37,10 +37,10 @@ Checkpoint decision (pre-set, from the plan; constants below, never tuned):
   human MAY review the ledger. It is never a promotion, an approval or a
   trading signal.
 
-Fidelity: every ledger goes through sleeve_shadow.read_log (hash chain). A
+Fidelity: every ledger goes through forward_ledgers.read_log (hash chain). A
 broken chain is reported loudly, excludes that ledger from the statistics and
 makes the CLI exit 3. Replay-vs-log fidelity needs prices and is checked by
-`ops/sleeve_shadow.py --verify`, not here.
+`ops/forward_ledgers.py --verify`, not here.
 """
 import json
 import math
@@ -50,7 +50,7 @@ from statistics import NormalDist
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from ops import sleeve_shadow as S
+from ops import forward_ledgers as S
 from research.strategy import stats
 
 ANNUAL = 252
@@ -244,7 +244,7 @@ def evaluate(d, boot_b=BOOT_B, seed=SEED):
                "ok": not broken,
                "chain_failures": dict(broken),
                "note": "hash chain only; replay-vs-log fidelity needs prices: "
-                       "run ops/sleeve_shadow.py --verify"},
+                       "run ops/forward_ledgers.py --verify"},
            "mapping": {k: {"benchmark": v[0], "reason": v[1]}
                        for k, v in MAPPING.items()},
            "benchmarks": {}, "ledgers": {}, "holm": {}}
@@ -375,7 +375,7 @@ def format_table(res):
         out.append("!" * 72)
     else:
         out.append("fidelity: hash chains OK (replay check: "
-                   "ops/sleeve_shadow.py --verify)")
+                   "ops/forward_ledgers.py --verify)")
     out.append("asof %s | %s" % (res["asof"], res["notice"]))
     hdr = "%-30s %5s %8s %8s %7s %6s %7s | %8s %6s %6s %6s  %s"
     out.append(hdr % ("ledger", "n", "cum%", "ann%", "vol%", "shrp", "mdd%",
@@ -417,7 +417,7 @@ def format_table(res):
 def main(argv):
     args = [a for a in argv[1:] if not a.startswith("--")]
     if len(args) != 1:
-        print("usage: sleeve_eval.py <dir> [--json]", file=sys.stderr)
+        print("usage: forward_eval.py <dir> [--json]", file=sys.stderr)
         return 2
     res = write_eval(args[0])
     print(json.dumps(res, sort_keys=True) if "--json" in argv

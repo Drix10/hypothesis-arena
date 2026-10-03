@@ -17,8 +17,8 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from plane import spend as spend_mod
-from plane import workers as workers_mod
+from engine import spend as spend_mod
+from engine import workers as workers_mod
 
 PASS, FAIL = 0, 0
 

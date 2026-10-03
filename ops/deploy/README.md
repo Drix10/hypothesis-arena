@@ -129,11 +129,11 @@ logged row can no longer be reproduced, which points to look-ahead or revised
 data:
 
 ```bash
-python3 ops/sleeve_shadow.py ~/g2 --verify
+python3 ops/forward_ledgers.py ~/g2 --verify
 ```
 
 Every ledger is scored against a benchmark ledger (`bench_*`) as a paired
-daily difference. `python3 ops/sleeve_eval.py ~/g2` prints the
+daily difference. `python3 ops/forward_eval.py ~/g2` prints the
 table and writes `~/g2/sleeves/eval.json`, which the monitor shows. The states
 are WARMUP under 60 sessions; KILL-FUTILE from 126 sessions when even the best
 case is below the benchmark; ELIGIBLE-FOR-REVIEW only after 504 sessions with a

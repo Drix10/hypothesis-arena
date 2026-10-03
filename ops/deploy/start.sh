@@ -14,7 +14,7 @@ loop_bin="$build/kernel/g0_paper_loop"
 
 if [ "${1:-}" = stop ]; then
     pkill -f "^$loop_bin " || true
-    pkill -f "ops/sleeve_shadow.py" || true
+    pkill -f "ops/forward_ledgers.py" || true
     pkill -f "collector/soak.py" || true
     echo stopped; exit 0
 fi
@@ -90,7 +90,7 @@ sleep 5
 kill -0 "$(cat "$dir/loop.pid")" 2>/dev/null || { tail -5 "$dir/logs/loop.log" >&2; echo "the loop exited at once" >&2; exit 5; }
 echo "loop running (pid $(cat "$dir/loop.pid")). live view: python3 ops/monitor.py $dir"
 # Forward shadow ledgers for the non-routed sleeves (log-only, no orders).
-setsid nohup python3 ops/sleeve_shadow.py "$dir" --loop </dev/null >>"$dir/logs/sleeves.log" 2>&1 &
+setsid nohup python3 ops/forward_ledgers.py "$dir" --loop </dev/null >>"$dir/logs/sleeves.log" 2>&1 &
 echo "sleeve shadow ledgers running (log: $dir/logs/sleeves.log, data: $dir/sleeves/)"
 # Optional: macro/filing collector (frozen code, writes only repo data/, nothing reads it yet).
 if [ "${WITH_COLLECTOR:-0}" = "1" ]; then

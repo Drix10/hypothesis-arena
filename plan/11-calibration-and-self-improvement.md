@@ -272,7 +272,7 @@ return is below zero (kill-only sequential rule), and "eligible for review"
 (never promotion) at 504 sessions. They are research observations, not
 challengers, so the §11.2 cap of three challengers does not apply.
 
-The machinery is `ops/sleeve_shadow.py` (ledgers), `ops/sleeve_eval.py`
+The machinery is `ops/forward_ledgers.py` (ledgers), `ops/forward_eval.py`
 (paired evaluator and checkpoints), `ops/forward_register.py` (trial
 registration) and the `--verify` fidelity replay (every logged row
 reproduced within 20 bp); it is extended for the US set (shorts, margin,

@@ -14,7 +14,7 @@ from contextlib import redirect_stderr, redirect_stdout
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from ops import forward_register as F
-from ops import sleeve_shadow as S
+from ops import forward_ledgers as S
 from research.strategy import ledger as L
 
 REAL = os.path.join(os.path.dirname(__file__), "..", "ledger")

@@ -21,7 +21,7 @@ sleeve's spec changes its hash and opens a NEW trial (N counts it). Rows are
 left open; the evaluator closes them at checkpoints, this module never
 closes a trial or invents a verdict.
 
-<dir> is the shadow data dir (the one ops/sleeve_shadow.py uses). It is only
+<dir> is the shadow data dir (the one ops/forward_ledgers.py uses). It is only
 read, to flag a ledger whose forward rows already exist when it is
 registered, and to hold the informational receipt <dir>/forward_register.json
 (the trial ledger, not the receipt, is the source of truth).
@@ -48,7 +48,7 @@ CHECKPOINT = os.path.join(ROOT, "research", "ledger", "checkpoint.json")
 CORE_SPEC = ("core_passive_v1: 60/40 VTI/IEF buy and hold, no rebalance; "
              "SIP daily adjusted; cost_v2; forward from 2026-09-30")
 SIP_DATASET = "alpaca_sip:bars:1Day:adjustment=all:forward"
-CODE = ("ops/sleeve_shadow.py", "research/strategy/portfolio.py",
+CODE = ("ops/forward_ledgers.py", "research/strategy/portfolio.py",
         "research/strategy/costs_v2.py", "research/strategy/settlement.py")
 RECEIPT = "forward_register.json"
 

@@ -15,11 +15,11 @@ import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, ".."))  # repo root: collector/
-sys.path.insert(0, ROOT)  # research/: plane/
+sys.path.insert(0, ROOT)  # research/: engine/
 
 from collector import ctx_read
-from plane import emit as emit_mod
-from plane import publish, resolver, schema
+from engine import emit as emit_mod
+from engine import publish, resolver, schema
 
 # Fixed Monday 2026-01-05 15:00 UTC = 10:00 America/New_York (in session).
 OBS_S = 1767625200
