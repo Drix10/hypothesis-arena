@@ -7,23 +7,38 @@ test output, or a report path).
 
 ## Current state
 
-- Plan: rewritten with plain names (`plan/README.md`). Four strategies, the
-  engine, the India and US constraint sets.
+- Plan: four strategies (ETF Trend, Link Momentum, Filing Change, Event Ripple),
+  two research cards, the engine, the India and US constraint sets. Book size and
+  data tier are stage settings: paper is a $100,000 book on free data.
+- Evidence: none. No preregistration, no backtest report, an empty trial ledger.
+  No strategy has passed a gate.
+- Harness: trial ledger, cost model with short terms, statistics (walk-forward,
+  CPCV, PBO, DSR, MinTRL, bootstrap, HAC, spanning test), prereg validator,
+  settlement simulation, benchmarks, gate reports. No short positions or margin
+  ledger in the backtester, no decay monitors, no tranche portfolio.
+- Event data: Form 4 reader with the routine-trade classifier, SUE from SEC
+  statement sets, SEC financial-statement fetcher. No 10-K, 10-Q or 8-K corpus,
+  no 13F parser, no point-in-time ticker map, no link graph, no event pipeline.
+- Engine: collector, six-node research graph, five Tier A adapters and the source
+  seam. No reader tier, router, brain or verifier.
 - Kernel: built through the router and journal (libcurl paper transport,
   WebSocket stream, India-set account rule and allowlist, candidate ingest,
-  `paper_loop`, kill inputs, high-water marks, early-close calendar, torn-journal
-  recovery). Live smoke passed on Alpaca paper. The remaining kernel steps are
-  parked.
-- Engine: collector, six-node research graph, five Tier A adapters and the
-  source seam built. Link graph, events and ripple reasoning not built.
-- Harness: India set only (trial ledger, cost model, statistics, prereg
-  validator, benchmarks, report generators).
-- Strategies: the earlier ones are retired. The forward ledger runs the passive
-  core with the cash and SPY benchmarks. Paper trading through the kernel has not
-  started; live ordering is not authorized.
-- The paper loop is a plumbing test of the order path with the passive core. It
-  is not a strategy run and is not ready to produce evidence; most of the
-  critical path below has to exist first.
+  `paper_loop`, kill inputs, early-close calendar, torn-journal recovery). Live
+  smoke passed on Alpaca paper. The remaining kernel steps are parked.
+- Paper: the loop runs the passive core as a plumbing test of the order path.
+  It is not a strategy run and produces no evidence. Live ordering is not
+  authorized.
+
+## Next, in order
+
+1. Data coverage probe: it decides whether single-stock work needs paid data.
+2. Shorts in the harness: every US-set test needs it.
+3. ETF Trend test: the cheapest full pass through the harness.
+4. EDGAR corpus, then the deterministic link graph (text peers, 13F ownership).
+5. Link Momentum filings variant: prereg and backtest gate. This is the test the
+   fund's single-stock thesis stands on; a clear economic failure
+   (`plan/validation.md`, Outcomes) stops new single-stock search.
+6. Everything else only after a deterministic test has shown signal.
 
 ## Codebase cleanup
 
@@ -45,32 +60,49 @@ Open:
 
 ## Research (critical path)
 
-- [ ] **Data coverage probe:** 300 firms with 10-Ks filed 2016-2018; the share
-      with Alpaca SIP bars through their last trading day, and the share with a
-      point-in-time CIK to ticker map (`plan/data.md`). Below 95% on either
-      triggers paid data now.
+- [ ] **Data coverage probe:** 300 firms with 10-Ks filed 2016-2018 (the free
+      feed starts in 2016); the share with Alpaca SIP bars through their last
+      trading day, and the share with a point-in-time CIK to ticker map
+      (`plan/data.md`). Below 95% on either triggers paid data now. Not started:
+      there is no probe script.
 - [ ] **Shorts in the harness:** short side and margin ledger, the cost model's
       short terms, `constraint_set` and `contamination_class` in the prereg
-      validator, a $25,000 whole-share book, the spanning test with Fama-French
-      and momentum diagnostics, and the placebo-graph tool.
+      validator, a whole-share book at the registered size, monthly tranches, the
+      spanning test with Fama-French, momentum and per-decade diagnostics, the
+      borrow stress grid and the placebo-graph tool.
   - [x] The cost model's short terms (`research/strategy/costs.py`: square-root
         impact, borrow, margin interest, short dividends) and the spanning test
         (`stats.spanning_alpha`), tested in `test_costs` and `test_stats`.
-  - [ ] Short positions and the margin ledger in the backtester;
-        `constraint_set` and `contamination_class` in the prereg validator;
-        the whole-share $25,000 book; the placebo-graph tool.
+  - [ ] Short positions and the margin ledger in the backtester
+        (`research/strategy/portfolio.py` is long-only).
+  - [ ] `constraint_set` and `contamination_class` in the prereg validator.
+  - [ ] The whole-share book at the registered size ($100,000 for paper) and the
+        monthly-tranche portfolio (a 3-month hold, one third re-ranked a month).
+  - [ ] Borrow stress grid of 0.5%, 2% and 5% a year in the cost model (the code
+        has one flat stress rate).
+  - [ ] Gate report additions: net alpha per decade, the Fama-French plus
+        momentum alpha, the correlation with each promoted strategy and the
+        effective number of independent signals (`plan/strategies.md`, Breadth).
+  - [ ] The placebo-graph tool (`plan/math.md`, Edge validation).
   - [ ] Verify on Alpaca's docs and the paper account: shorting on paper, the
         `shortable` and `easy_to_borrow` flags, fractional shorts, the paper
         balance setting.
 - [ ] **ETF Trend test** (`etf_trend`): prereg (`seen-window`) and backtest gate.
 - [ ] **EDGAR corpus:** 10-K, 10-Q and 8-K full text with manifests, a section
       parser, a point-in-time CIK, ticker and former-name map, XBRL shares
-      outstanding, 13F holdings and Ken French factors.
-- [ ] **Link graph:** a bitemporal store; customer and supplier patterns with a
-      precision audit (200 labeled filings, at least 0.9); text peers; common
-      ownership.
-- [ ] **Link Momentum test, filings variant** (`link_momentum`): prereg and
-      backtest gate with edge validation.
+      outstanding, a 13F holdings parser and Ken French factors. The financial
+      statement sets and the Form 4 reader exist.
+- [ ] **Link graph:** a bitemporal store; text peers and common ownership first
+      (deterministic, dense); customer and supplier patterns with a precision
+      audit (200 labeled filings, at least 0.9), knowing that 10-K disclosure
+      covers only large customers.
+- [ ] **Link Momentum test, filings variant** (`link_momentum`): prereg (3-month
+      hold in monthly tranches, at least 15 names a side at 150% gross, window
+      from 2007) and backtest gate with edge validation. The free feed gives
+      about ten years, so expect the paid-data trigger for pre-2016 prices.
+- [ ] **Insider opportunistic buys card:** write the prereg for operator approval
+      (entry from day 2, deterministic class); `research/strategy/form4.py`
+      already classifies routine trades.
 - [ ] **News co-mentions:** the GDELT GKG pipeline with a measured resolution
       rate; news and intraday variant preregs and backtest gates.
 - [ ] **Filing Change test** (`filing_change`): prereg and backtest gate.
@@ -90,6 +122,8 @@ Open:
 - [ ] **Paid research dataset** (only on the paid-data trigger).
 
 ## Engine plumbing
+
+Starts only for a deterministic test that has shown signal.
 
 - [ ] **Reader tier:** capability-free calls, capped JSON, span verifier,
       anonymization; the research graph gains the reader nodes.
@@ -125,6 +159,8 @@ The paper run starts with `bash ops/deploy/start.sh ~/g2` (see
 
 - [ ] Shadow testing for every backtest-gate passer under its constraint set;
       the shadow gate per strategy.
+- [ ] Decay monitors: rolling 24-month spanning alpha and a one-sided CUSUM on
+      monthly net returns (`plan/math.md`), kill-only.
 - [ ] Netting router, built with the stop-before-close fix once two strategies
       share an account.
 - [ ] Paper orders: one champion through the kernel (needs the kernel build, a
