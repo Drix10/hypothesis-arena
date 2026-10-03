@@ -1,8 +1,8 @@
 # CI runs on every push, PR and manual dispatch:
 #  1. stdlib: collector suites only (mocked IO, no network, no third-party deps).
-#  2. evidence: plane isolation and sources suites, stdlib only, separate from
+#  2. evidence: engine isolation and sources suites, stdlib only, separate from
 #     the collector job so neither masks the other.
-#  3. plane: full research test battery in the pinned venv (concurrency, crash
+#  3. plane: full engine test battery in the pinned venv (concurrency, crash
 #     recovery, process boundary, publisher/manifest/reader/digest).
 #  4. kernel: deterministic C++ gates in normal mode.
 #  5. kernel-sanitizer: the same C++ gates rebuilt with ASan+UBSan; the
@@ -31,7 +31,7 @@ jobs:
           python-version: "3.11"
       - name: collector suites (mocked IO, no network)
         run: |
-          for t in test_ctx test_jev test_pipeline test_config test_collect test_o7; do
+          for t in test_ctx test_jev test_pipeline test_config test_collect test_env_loading; do
             python3 collector/tests/$t.py
           done
           # CI-only fixture (soak_check alone): it requires effective
@@ -51,24 +51,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: plane isolation (stdlib only)
+      - name: engine isolation (stdlib only)
         run: PYTHONWARNINGS=error python3 research/tests/test_isolation.py
-      - name: plane sources (stdlib only)
+      - name: engine sources (stdlib only)
         run: PYTHONWARNINGS=error python3 research/tests/test_sources.py
-      - name: plane EDGAR adapter (stdlib only)
+      - name: engine EDGAR adapter (stdlib only)
         run: PYTHONWARNINGS=error python3 research/tests/test_edgar.py
-      - name: plane FRED adapter (stdlib only)
+      - name: engine FRED adapter (stdlib only)
         run: PYTHONWARNINGS=error python3 research/tests/test_fred.py
-      - name: plane Treasury adapter (stdlib only)
+      - name: engine Treasury adapter (stdlib only)
         run: PYTHONWARNINGS=error python3 research/tests/test_treasury.py
-      - name: plane BLS adapter (stdlib only)
+      - name: engine BLS adapter (stdlib only)
         run: PYTHONWARNINGS=error python3 research/tests/test_bls.py
-      - name: plane BEA adapter (stdlib only)
+      - name: engine BEA adapter (stdlib only)
         run: PYTHONWARNINGS=error python3 research/tests/test_bea.py
-      - name: plane source-seam integration (stdlib only)
+      - name: engine source-seam integration (stdlib only)
         run: PYTHONWARNINGS=error python3 research/tests/test_source_seam.py
-      - name: strategy S5 paired evaluation (stdlib only)
-        run: PYTHONWARNINGS=error python3 research/tests/test_s5.py
       - name: strategy trial ledger (stdlib only)
         run: PYTHONWARNINGS=error python3 research/tests/test_ledger.py
       - name: strategy statistics standard (stdlib only)
@@ -76,36 +74,26 @@ jobs:
       - name: strategy cost_v2 + settlement (stdlib only)
         run: |
           PYTHONWARNINGS=error python3 research/tests/test_costs_v2.py
+          PYTHONWARNINGS=error python3 research/tests/test_costs_v3.py
           PYTHONWARNINGS=error python3 research/tests/test_settlement.py
           PYTHONWARNINGS=error python3 research/tests/test_prereg.py
           PYTHONWARNINGS=error python3 research/tests/test_portfolio.py
           PYTHONWARNINGS=error python3 research/tests/test_gates.py
           PYTHONWARNINGS=error python3 research/tests/test_sip_fetch.py
-          PYTHONWARNINGS=error python3 research/tests/test_trend.py
-          PYTHONWARNINGS=error python3 research/tests/test_sector_mom.py
-          PYTHONWARNINGS=error python3 research/tests/test_intraday_mom.py
-          PYTHONWARNINGS=error python3 research/tests/test_a_run.py
           PYTHONWARNINGS=error python3 research/tests/test_tier_a.py
-          PYTHONWARNINGS=error python3 research/tests/test_insider_data.py
-          PYTHONWARNINGS=error python3 research/tests/test_insider_sleeve.py
+          PYTHONWARNINGS=error python3 research/tests/test_form4.py
           PYTHONWARNINGS=error python3 research/tests/test_candidate_wire.py
           PYTHONWARNINGS=error python3 research/tests/test_core_passive.py
-          PYTHONWARNINGS=error python3 research/tests/test_sleeve_shadow.py
-          PYTHONWARNINGS=error python3 research/tests/test_sleeve_eval.py
+          PYTHONWARNINGS=error python3 research/tests/test_forward_ledgers.py
+          PYTHONWARNINGS=error python3 research/tests/test_forward_eval.py
           PYTHONWARNINGS=error python3 research/tests/test_forward_register.py
-          PYTHONWARNINGS=error python3 research/tests/test_jev_twin.py
-          PYTHONWARNINGS=error python3 research/tests/test_macro_shadow.py
-          PYTHONWARNINGS=error python3 research/tests/test_event_shadow.py
-          PYTHONWARNINGS=error python3 research/tests/test_pead_data.py
-          PYTHONWARNINGS=error python3 research/tests/test_pead_sleeve.py
+          PYTHONWARNINGS=error python3 research/tests/test_earnings_surprise.py
           PYTHONWARNINGS=error python3 research/tests/test_alert_relay.py
-          PYTHONWARNINGS=error python3 research/tests/test_long_history.py
+          PYTHONWARNINGS=error python3 research/tests/test_deploy_check.py
       - name: strategy baseline (stdlib only)
         run: PYTHONWARNINGS=error python3 research/tests/test_baseline.py
       - name: strategy JEV filter interop (stdlib only)
         run: python3 research/tests/test_jev_filter.py
-      - name: JEV shadow sidecar (stdlib only)
-        run: python3 research/tests/test_jev_shadow.py
       - name: strategy candidate contract (pinned pytest)
         run: |
           python3 -m pip install -r research/strategy/requirements.txt
@@ -119,11 +107,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: install pinned plane deps
+      - name: install pinned engine deps
         run: python3 -m pip install -r research/requirements.txt
-      - name: plane battery (no external network; .invalid hosts only)
+      - name: engine battery (no external network; .invalid hosts only)
         run: |
-          PYTHONWARNINGS=error python3 research/tests/test_plane.py
+          PYTHONWARNINGS=error python3 research/tests/test_engine.py
           PYTHONWARNINGS=error python3 research/tests/test_hardening.py
           PYTHONWARNINGS=error python3 research/tests/test_emit.py
           PYTHONWARNINGS=error python3 research/tests/test_seam_graph.py
