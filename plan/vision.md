@@ -72,12 +72,18 @@ promotes the stage (`validation.md`, Transferability).
 | Shorts | none | easy-to-borrow names only |
 | Instruments | US common stock, US ETFs | US common stock, US ETFs |
 | Excluded | margin, shorts, options, futures, FX, leveraged or inverse ETFs, crypto | options, futures, FX, leveraged or inverse ETFs, crypto |
-| First capital | paper | expected under $25,000 |
+| First capital | paper | set by the operator at promotion |
 
 - The India set binds because LRS prohibits remittances for margin trading
   and for foreign-exchange trading abroad. It governs any live funding made
   while India-resident.
-- Research books and shadow testing run under the US set at $25,000.
+- Research books and shadow testing run under the US set at the registered
+  paper book size ($100,000).
+- Book size and data tier are stage settings, not design constants. Paper runs
+  a $100,000 book on free data; live size and any paid data are the operator's
+  decision at promotion, recorded in the approvals log. Strategy specs state
+  sizes as functions of the book size, and promotion evidence is recomputed at
+  the book size of the stage it promotes.
 - Tax and reporting items are evidence for the jurisdiction check
   (`stages.md`), not code.
 - This section summarizes public sources for planning. It is not legal or

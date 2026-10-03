@@ -170,18 +170,21 @@ The trigger itself is the simpler Poisson burst score above.
 
 - **Ranks:** each month, rank the eligible universe on the signal. The research
   measure is the full top-minus-bottom quintile portfolio; the tradable book,
-  the one the backtest gate judges, holds the 20 most extreme names a side at
-  $25,000 (*registered*). Both are reported; a gap between them is a
-  concentration finding, not a choice.
-- **Share-price tilt:** at about $940 per name, a name is eligible only if one
-  share is at most 25% of its target, which excludes shares above about $235.
-  The report gives the signal on the excluded high-price names so a price tilt
+  the one the backtest gate judges, holds the registered number `N` of most
+  extreme names a side at the registered book size `B` (*registered*). `N` is
+  at least `G / (2 · 5%)` for gross `G`, so no short exceeds the 5% position
+  cap (`risk.md`); at 150% gross that is 15. Both are reported; a gap between
+  them is a concentration finding, not a choice.
+- **Share-price tilt:** the target per name is `T = G · B / (2N)`, and a name is
+  eligible only if one share is at most 25% of `T`. At `B` = $100,000, 150%
+  gross and 20 names a side, `T` is $3,750 and the cap about $940 a share. The
+  report gives the signal on the excluded high-price names so a price tilt
   cannot pass as alpha.
 - **Attention diagnostic:** spillover is stronger when the linked firm gets
   less attention. Results are reported by tercile of trailing GDELT mention
   count; the tercile is never used to select the tradable book without a new
   pre-registration.
-- **Size diagnostic:** results by market-cap tercile. A $25,000 book's
+- **Size diagnostic:** results by market-cap tercile. A small book's
   structural advantage is that large funds cannot hold enough of the smaller
   names for the effect to matter to them. If the edge lives only in the bottom
   tercile, the next pre-registration targets it, with its wider spreads priced
@@ -195,6 +198,10 @@ The trigger itself is the simpler Poisson burst score above.
   25% of its target position.
 - **Turnover band:** a held name is kept while it stays in the top (bottom)
   40%; the band is registered and reported.
+- **Tranches:** a name is held for the registered horizon (3 months for Link
+  Momentum) through monthly tranches: each month one third of the book is
+  re-ranked and re-opened, so no single month's liquidity or timing decides the
+  book. The horizon is fixed in the pre-registration.
 
 ## Costs and capacity
 
@@ -215,15 +222,16 @@ cost = q·p · ( spread/2 + fee_sec31 + fee_taf + η · σ_d · sqrt(q / ADV) )
   partials, flagged `simulated`. SEC Section 31 and FINRA TAF fees apply on
   sells. Dividends are credited from the corporate-action layer, because paper
   trading does not simulate them.
-- Borrow is 0 for easy-to-borrow names at Alpaca; the stress test charges
-  0.5% a year; hard-to-borrow names are excluded. Margin interest is the
+- Borrow is 0 for easy-to-borrow names at Alpaca; the stress legs charge
+  0.5%, 2% and 5% a year, since borrow on smaller names costs more;
+  hard-to-borrow names are excluded. Margin interest is the
   broker's published rate. There is no rebate on short proceeds. The India set
   has no short or margin terms.
 - Stress legs 1×, 1.5×, 2× and 3× on spread, fee and impact.
 - **Capacity:** the book size at which the expected net alpha, after the 50%
   haircut, equals expected cost, reported per strategy. A strategy whose
   capacity is below 4× the stage's capital does not promote.
-- **Break-even at small size:** at $25,000, 40 names, 150% gross and about 80%
+- **Break-even at small size:** at 40 names, 150% gross and about 80%
   monthly turnover per side, round-trip spread and fees of 15 bp cost roughly
   3-4% of equity a year. A long-short spread must earn more than that after the
   haircut. The pre-registration states the expected turnover and break-even
@@ -248,7 +256,8 @@ Definitions are in `validation.md`; the quantities used:
 - **Power, binding on design:** the standard error of an annualized Sharpe
   over `T` years is about `sqrt((1 + SR²/2) / T)`. Over a 3-year holdout a CI
   lower bound above zero needs an annual Sharpe near 1.15; over the 9-10 years
-  of free SIP history it needs about 0.65. The planning prior for a graph
+  of free SIP history it needs about 0.65, and over 19 years (2007 onward)
+  about 0.5. The planning prior for a graph
   strategy is 0.3-0.6. Therefore the backtest gate is computed on the whole
   pre-registered evaluation window, the holdout is a consistency check, and a
   strategy with a positive but underpowered estimate is a paid-data candidate

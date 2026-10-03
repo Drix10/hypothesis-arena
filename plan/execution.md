@@ -10,7 +10,7 @@ binding.
 
 | Strategy | Signal time | Entry order | Protection | Normal exit |
 |---|---|---|---|---|
-| Link Momentum and Filing Change (monthly) | month-end official close (SIP) | next session: closes first (MOC), then opens; under the India set buys wait for settled proceeds | OTO stop-only, GTC catastrophe stop at 3 × the 20-day ATR; sell-stop for longs, buy-stop for shorts (`exit_link`) | MOC at the rebalance when the name leaves its band |
+| Link Momentum and Filing Change (monthly) | month-end official close (SIP) | next session: closes first (MOC), then opens; under the India set buys wait for settled proceeds | OTO stop-only, GTC catastrophe stop at 3 × the 20-day ATR; sell-stop for longs, buy-stop for shorts (`exit_link`) | MOC at the rebalance (its tranche, for Link Momentum) when the name leaves its band |
 | Event Ripple (events) | `ripple_hypothesis` availability | next session 10:00 ET marketable limit, unless already priced (`strategies.md`) | OTO stop-only, GTC (`exit_event`) | MOC on the horizon day |
 | ETF Trend, long-short (monthly) | month-end official close | next session: closes first, then opens | OTO stop-only, GTC (`exit_trend`) | MOC at the rebalance when the signal flips |
 
@@ -90,8 +90,8 @@ India set (cash account):
 US set (margin account, after kernel short selling is built):
 
 - The US-set paper run uses its own Alpaca paper account (Alpaca allows up to
-  three per owner), started at $25,000, apart from the India-set plumbing run,
-  so the two books never net or share buying power.
+  three per owner), started at the paper book size, apart from the India-set
+  plumbing run, so the two books never net or share buying power.
 - Alpaca paper does not simulate dividends. The account ledger books them from
   the corporate-action data: credited on longs, charged on shorts. Without
   this, paper shorts look cheaper than live ones.

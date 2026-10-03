@@ -178,11 +178,15 @@ Data-quality rules:
 
 ## Paid data
 
-- **Free data (now):** everything in Tiers A and B and the research datasets.
+- **Free data while the fund has no income:** everything in Tiers A and B and
+  the research datasets. Once the fund earns or raises capital, data spend is
+  the operator's decision, recorded in the approvals log; the triggers below
+  stay the rule until then.
 - **Paid research data** is bought only on a written trigger, by an amendment
   to this section naming the trigger, dataset, license and cost:
-  - survivorship-free US daily prices with delisting returns (late 1990s
-    onward, at most $100 a month) when a strategy's backtest gate is void or
+  - survivorship-free US daily prices with delisting returns (2007 onward,
+    after decimalization and Reg NMS, at a price the operator approves) when a
+    strategy's backtest gate is void or
     underpowered for a data reason (excluded events above 5%, or history
     shorter than the minimum track record) and its point estimate clears the
     haircut bar;

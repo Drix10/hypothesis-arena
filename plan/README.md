@@ -80,7 +80,8 @@ Also: `system-manifest.yaml` (the fingerprint the code verifies against) and
   Untrusted text is read only by a reader tier with no code execution and no
   network (`engine.md`).
 - No code path promotes a stage. Demotion is automatic and unvetoable.
-- Free data for core operation; paid data only on the trigger in `data.md`.
+- Free data while the fund has no income; paid data on the trigger in
+  `data.md`, and by the operator's decision once the fund earns.
   Every non-price source starts as CONTEXT or NULL. Social signals never trigger
   alone. Absent data is never neutral data.
 - Controls are permanent: every strategy is scored against cash, a

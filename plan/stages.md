@@ -132,11 +132,12 @@ exchange calendar.
 symbols goes live on its most liquid one, with the evidence recomputed for that
 restriction.
 
-**Tiny stage, US set:** at a first capital under $25,000, 2% of capital cannot
+**Tiny stage, US set:** at a small first capital, 2% of capital cannot
 hold a cross-sectional book and one ETF cannot express a long-short strategy, so
 the US set scales risk by gross exposure instead of capital. Scaling gross alone
-would shrink each name below a tradable whole-share size (25% of target gross at
-$25,000 is about $235 a name), so the tiny stage runs at 50% of target gross
+would shrink each name below a tradable whole-share size (one share must stay at
+most 25% of the per-name target, `math.md`), so the tiny stage runs at 50% of
+target gross
 with half the registered names a side (the most extreme signals), keeping the
 per-name size of the full book. The promotion evidence is recomputed for that
 restricted book before the stage is signed.

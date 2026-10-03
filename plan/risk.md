@@ -43,9 +43,9 @@ implements the India set; the US-set rows land with kernel short selling
   US-set book drifts between rebalances (stop-outs, price moves): past the hard
   net band, new entries HOLD and the larger leg is trimmed proportionally by
   exits only; stopped-out slots stay empty until the next rebalance.
-- **`daily_fills`.** Fills per day per the table (a 40-name monthly rebalance
-  needs up to 80 orders plus stop replacements, so US-set rebalance sessions
-  carry their own registered cap; partial fills count once per order). At most
+- **`daily_fills`.** Fills per day per the table (a full 40-name rebalance
+  needs up to 80 orders plus stop replacements, about a third of that for a
+  monthly tranche, so US-set rebalance sessions carry their own registered cap; partial fills count once per order). At most
   3 trades per symbol per hour (anti-churn). A trade is a broker-acknowledged
   fill.
 - **`flip_lock`.** LONG to SHORT to LONG, or SHORT to LONG to SHORT, completed

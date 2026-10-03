@@ -34,15 +34,16 @@ After the ETF Trend, Link Momentum, Filing Change and Event Ripple rules backtes
 gates:
 
 1. **One or more passes.** The best passer (by the pre-registered primary metric;
-   ties go to the simpler strategy) starts its shadow gate at $25,000 under the
-   US set. Kernel short selling unblocks.
+   ties go to the simpler strategy) starts its shadow gate at the registered
+   paper book size under the US set. Kernel short selling unblocks.
 2. **None passes, and a strategy meets the paid-data trigger**
    (`data.md`, Paid data). Buy the paid dataset for that strategy only, run its
    fixed spec once on the extended history, then apply rule 1 or 3.
-3. **None passes and the failures are economic.** Record a negative result. The
-   book stays the passive core. Event Ripple continues in forward shadow on its
-   own clock, and further search comes only from research-factory cards that name
-   a new information set.
+3. **None passes and the failures are economic** (`validation.md`, Strategy
+   gates; an underpowered result follows rule 2). Record a negative result. The
+   book stays the passive core, plus ETF Trend if it passed. Event Ripple
+   continues in forward shadow on its own clock, and further search comes only
+   from research-factory cards that name a new information set.
 
 Event Ripple is judged separately, at its own power-based minimum
 (`validation.md`, Model component gate): on the order of 1,000 resolved
@@ -65,10 +66,11 @@ variant 1). Exceeding it needs an operator-approved entry in the approvals log.
 - [ ] **Shorts in the harness** (`research/strategy/`): the short side and margin
       ledger (Reg T, maintenance, borrow, no short rebate, short dividends,
       margin interest), the cost model's short terms (`math.md`), `constraint_set`
-      and `contamination_class` in the pre-registration validator, a $25,000 book
-      with whole-share rounding, the spanning test and Fama-French plus momentum
-      diagnostics in the backtest gate report, and the placebo-graph tool
-      (`math.md`). Verify against Alpaca's docs and the paper account: shorting
+      and `contamination_class` in the pre-registration validator, a whole-share
+      book at the registered size, monthly tranches, a borrow stress grid, the
+      spanning test and Fama-French plus momentum diagnostics and per-decade
+      alpha in the backtest gate report, and the placebo-graph tool (`math.md`).
+      Verify against Alpaca's docs and the paper account: shorting
       on paper, the `shortable` and `easy_to_borrow` flags, fractional shorts and
       the paper balance setting.
 - [ ] **ETF Trend test** (`etf_trend`): pre-registration (`seen-window` label) and
@@ -250,3 +252,12 @@ MANIFEST HASH: <sha256>
 - Rewrite the plan and the code with plain names and no version or freeze history;
   drop the optional model filter and the retired control; reset the trial ledger;
   clean up all comments. Full authority given in chat, 2026-10-03.
+- Book size and data tier are stage settings: the paper book is $100,000 and data
+  is free until the fund earns or raises; later sizes and data spend are the
+  operator's decision. Approved in chat, 2026-10-03.
+- Design changes from an outside review, decided by the agent under delegation
+  ("you decide the best"): Link Momentum holds 3 months through monthly tranches
+  with at least 15 names a side at 150% gross; evaluation window from 2007; a
+  stop rule that separates economic failure from underpowered; decade stability
+  reported; a borrow stress grid; insider opportunistic buys and forced-seller
+  liquidity provision recorded as research cards. Approved in chat, 2026-10-03.

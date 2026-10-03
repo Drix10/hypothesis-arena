@@ -215,8 +215,9 @@ item 7.
    registered risk weight. Maximum drawdown is within the strategy's
    pre-registered limit (default 2× its annual volatility target). Long-short
    strategies also keep |β| to VTI at most 0.3 on the holdout. The Fama-French
-   five-factor plus momentum alpha and the head-to-head comparison with the
-   passive benchmark are reported, not gating. A strategy improves the book's
+   five-factor plus momentum alpha, the head-to-head comparison with the
+   passive benchmark and the sign and size of net alpha in each decade of the
+   window are reported, not gating. A strategy improves the book's
    attainable Sharpe exactly when its alpha against the book is positive
    (Huberman-Kandel 1987); a standalone test of Sharpe and drawdown against
    passive would reward beta and reject diversifiers.
@@ -230,6 +231,14 @@ item 7.
 7. Holdout consistency: the last 3 years have a positive net point estimate and
    lie inside the 5th-95th percentile band of block-bootstrapped
    evaluation-window paths of equal length.
+
+**Outcomes.** A backtest gate that fails is one of two kinds. *Economic
+failure*: the net point estimate at 1× cost is below zero, or the upper bound
+of its CI is below the haircut expectation. The idea is dead at this
+information set and the result is recorded. *Underpowered*: neither holds, so
+the data cannot tell no edge from a real one at the planning Sharpe; the
+strategy routes to a longer window or the paid-data trigger (`data.md`), never
+to a pass and never to a loosened gate.
 
 **Shadow gate** (live data): the strategy runs forward with harness fills from
 the day it passes the backtest gate. Minimum window: 60 sessions and 30 trades

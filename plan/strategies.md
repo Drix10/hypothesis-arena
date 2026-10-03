@@ -67,8 +67,9 @@ Connected-firm momentum on the link graph.
   (`math.md`, The link matrix).
 - **Signal:** the edge-weighted mean of linked firms' past-month returns,
   neutralized for the firm's own return, size and industry return
-  (`math.md`, Propagation signals). The tradable book is the 20 most extreme
-  names a side; the full quintile spread is reported as the research measure.
+  (`math.md`, Propagation signals). The tradable book is the registered number
+  of most extreme names a side (at least 15 at 150% gross, 20 planned); the
+  full quintile spread is reported as the research measure.
 - **Universe:** US common stock, price at least $5, 60-day median dollar
   volume at least $10M, market cap at least $500M, at least one link from two
   different edge sources. The short side also needs market cap of at least
@@ -77,18 +78,24 @@ Connected-firm momentum on the link graph.
 - **Expected economics (planning only):** the free-data proxies are weaker
   than the papers' analyst links and the haircut halves what remains, so a
   spread of 0.4-0.6% a month before costs is the planning case, against about
-  0.3% a month of costs at $25,000 (`math.md`, Costs and capacity). The
+  0.3% a month of costs at a small book (`math.md`, Costs and capacity). The
   margin is thin and the strategy can fail on costs alone.
 - **Registered variants (3 trials):** `filings` uses edges (a), (b) and (d),
-  deterministic, 2016 onward. `news` adds (c). `intraday` is `news` with the
-  peer return measured intraday only (Wang 2025: peer intraday returns
-  continue, peer overnight returns reverse).
+  deterministic, evaluated from 2007 where history exists (the free feed starts
+  in 2016; earlier history is a paid-data trigger, `data.md`). `news` adds (c).
+  `intraday` is `news` with the peer return measured intraday only (Wang 2025:
+  peer intraday returns continue, peer overnight returns reverse).
 - **Model twin:** `link_momentum_llm` replaces the regex customer extractor
   with the reader-tier extractor (anonymized, span-verified, extraction
   class). It is judged by the paired test against the `news` variant
   (`validation.md`, Model component gate).
 - **Schedule:** signal from the month-end close; trades the next session;
-  monthly rebalance; 20 names a side at $25,000.
+  monthly tranches with a 3-month hold (one third of the book re-ranked each
+  month); the registered number of names a side at the registered book size.
+  A 1-month skip between formation and holding and a 1-month hold are
+  diagnostic runs, not selectable variants (`validation.md`, Effective number
+  of trials). Shocks to less visible text peers transmit over up to 12 months
+  (Hoberg-Phillips 2018), so a longer hold lowers turnover cost.
 - **Exit (`exit_link`):** signal exit at the rebalance; a broker-native GTC
   catastrophe stop at 3 × the 20-day ATR (sell-stop for longs, buy-stop for
   shorts).
@@ -181,6 +188,27 @@ Time-series momentum on ETFs, long and short.
   trend test, so the report is labeled `seen-window` and the shadow gate
   minimum doubles to 6 rebalances.
 
+## Research cards
+
+Ideas that name a new information set and have no pre-registration. They are
+not strategies: none is built, shadowed or costed until a human approves a
+pre-registration (`engine.md`, Research factory).
+
+- **Insider opportunistic buys.** Open-market Form 4 purchases by insiders whose
+  trades do not follow a calendar-month habit of three or more years
+  (Cohen-Malloy-Pomorski 2012). Entry from the second session after the filing,
+  because the first-day reaction is not capturable at the next-session fill.
+  Deterministic class. Judged by the spanning test against the reference book at
+  2× cost. The question is whether any drift survives past day 1 at our fill
+  time.
+- **Forced-seller liquidity provision.** Long names under fire sales identified
+  from fund flows or index exclusion, not from a price drop alone
+  (Coval-Stafford 2007). Horizon of days to weeks, so cost is the binding
+  question. Judged as above; it overlaps the short-term reversal factor, which
+  every report already controls for.
+- Post-earnings announcement drift is not carded: it has disappeared in recent
+  years, in microcaps too (Martineau 2022).
+
 ## Controls
 
 - The passive core: VTI and IEF at 60/40, the base of the reference book.
@@ -197,6 +225,17 @@ Time-series momentum on ETFs, long and short.
   50% of risk, rebalanced monthly, gross within the constraint set.
 - Several live strategies at once need the netting router and a universe-cap
   change (`kernel.md`).
+- **Breadth:** the fund's durable edge is the number of independent validated
+  signals, not any one of them. Independence is measured, never assumed: every
+  gate report gives the correlation of the strategy's daily net returns with
+  each promoted strategy, and the shadow book reports the effective number of
+  independent signals, `(Σλ)² / Σλ²` over the eigenvalues of that correlation
+  matrix. A strategy that adds no spanning alpha against the reference book is
+  not admitted, however good it looks alone. The shadow book budgets risk per
+  effective signal, not per strategy name.
+- **Retirement:** a signal the decay monitors kill (`math.md`, Decay
+  monitoring) is not re-tuned; its risk budget returns to the passive core, and
+  a replacement enters as a new pre-registration.
 - Order of testing, not a promise of promotion: ETF Trend, then Link Momentum
   (filings, news, intraday), then Filing Change, then Event Ripple rules.
   Event Ripple's forward shadow starts as soon as the engine produces
