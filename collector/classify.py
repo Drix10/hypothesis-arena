@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P1.3 canonical layer: signals.jsonl (event log) -> SQLite (truth) -> classified.jsonl.
+"""canonical layer: signals.jsonl (event log) -> SQLite (truth) -> classified.jsonl.
 
 The SQLite DB is canonical. classified.jsonl is a rebuildable projection:
 project_day() materializes it as a pure function of (DB rows first seen that
@@ -8,7 +8,7 @@ it byte-for-byte and repeated cycles accumulate.
 
 Deterministic, no LLM: TRIGGER eligibility comes from source, record type and
 the rule table. Records needing economic interpretation stay CONTEXT with
-effect_pending until the interpretation table exists (research plane, Phase 2.5).
+effect_pending until the interpretation table exists (research plane).
 
 Verdicts per record: new | duplicate | revision | correction | malformed | stale.
 Eligibility: TRIGGER_CANDIDATE | CONTEXT | REJECTED | STALE.
@@ -25,7 +25,7 @@ from email.utils import parsedate_to_datetime
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 PARSER_VERSION = "p1"
-RULES_VERSION = "rules_v1"
+RULES_VERSION = "rules"
 DB = os.environ.get("MIRO_CANONICAL_DB", os.path.join(ROOT, "data", "canonical.db"))
 CLASSIFIED = os.environ.get("MIRO_CLASSIFIED_DIR", os.path.join(ROOT, "data", "classified"))
 
@@ -34,9 +34,9 @@ SOURCE_TTL = {
     "edgar_8k": 900, "fed_monetary": 21600, "ecb_mid": 21600,
     "treasury_auctions": 86400, "bls_empsit": 86400, "fred_macro": 86400,
 }
-# 8-K items that may become TRIGGER candidates (deterministic table, rules_v1).
+# 8-K items that may become TRIGGER candidates (deterministic table, rules).
 TRIGGER_ITEMS = {"1.01", "1.02", "2.02", "2.06", "5.02", "7.01", "8.01"}
-# Header-anchored detection (rules_v1): an item promotes only as a section
+# Header-anchored detection (rules): an item promotes only as a section
 # header — line start, after <br>/newline/`>`, or after `;` — followed by
 # `:` or `-`. Narrative mentions ("discussion of Item 2.02 in...") do not.
 ITEM_HEADER_RE = re.compile(
@@ -45,7 +45,7 @@ ITEM_HEADER_RE = re.compile(
 
 
 def detect_amendment(source, rec):
-    """rules_v1 amendment contract (explicit scope, no SEC parser):
+    """rules amendment contract (explicit scope, no SEC parser):
     EDGAR-only. Matches when the feed entry itself carries the amendment
     marker (8-K/A in the title prefix, or source_id ending /A).
     Cross-accession linkage (amendment accession -> base accession) is NOT

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""live-provider-probe.py — Phase-D Box 4 live proof (OpenRouter).
+"""live-provider-probe.py — live provider probe (OpenRouter).
 
 First live-spend evidence through the production accounting path, no mocks:
   root .env (via collector.config.load) -> SpendGovernor(pricing) ->
@@ -52,7 +52,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix="liveprov-")
     log_path = os.path.join(tmp, "ledger.db")
     gov = spend_mod.SpendGovernor(
-        log_path, {model_id: WORST_LEG_PER_1K}, stage="G0",
+        log_path, {model_id: WORST_LEG_PER_1K}, stage="paper",
         state_dir=os.path.join(tmp, "state"))
     lease = "live-%d" % int(time.time())
     worst_case_usd = (64 * IN_PER_1K + 16 * OUT_PER_1K) / 1000.0 * 4
@@ -85,7 +85,7 @@ def main():
     attr_mod.append_span(log_path, 1, "live-probe", model_id, calls=1,
                          tokens=pt + ct, dollars=dollars,
                          span_id="live-" + lease, cycle_id="live",
-                         stage="G0", symbol="PROBE",
+                         stage="paper", symbol="PROBE",
                          prompt_tokens=pt, completion_tokens=ct,
                          usd=dollars)
     gov.settle_usd(lease)

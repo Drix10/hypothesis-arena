@@ -1,12 +1,10 @@
-"""Phase-2.5 production source→graph seam (doc 08 §8.3 harvest).
+"""Production source-to-graph seam.
 
-- plan/08 §8.3 assigns the graph harvest node to pull the doc-09
-  sources. The five adapters (EDGAR/FRED/Treasury/BLS/BEA) are that
+- The graph harvest node pulls the sources in plan/data.md. The five adapters (EDGAR/FRED/Treasury/BLS/BEA) are that
   implementation (pure I/O, no LLM, harvest-envelope shaped); this seam
   is the single orchestration point around them.
-- ARCHITECTURE.md §4 describes the frozen P1 pipeline (collect.py ->
-  data/signals), which keeps running. In Phase 2.5 there is one poll
-  path per source: adapter singletons owned here for the seam's
+- The collector pipeline (collect.py -> data/signals) keeps running.
+  There is one poll path per source: adapter singletons owned here for the seam's
   lifetime (engine/runner.py owns the seam per process).
 - Credentials live only in seam construction (env). Outage evidence
   travels via stamps + heartbeat files. Nothing here trades or sits on
@@ -14,7 +12,7 @@
 - The seam wires the real sleeper and a monotonic clock into every
   adapter, so their 1 req/s pacing, backoff and 429 throttle wait.
   Tests inject fakes through build_seam params.
-- Canonical authority is the frozen collector/classify.py
+- Canonical authority is collector/classify.py
   (validate_record + temporal_violation + ingest_signal + content_hash
   over source/source_id/title/text/url/links/published_at, volatile
   timing excluded). Each adapter record is adapted to that shape,
@@ -88,7 +86,7 @@ def _repo_root():
 
 
 def default_lineage_db_path(env=None):
-    """Same resolution as the frozen collector/reader: explicit
+    """Same resolution as the fixed collector/reader: explicit
     MIRO_CANONICAL_DB wins, else the repo canonical DB."""
     src = os.environ if env is None else env
     override = (src.get("MIRO_CANONICAL_DB", "") or "").strip()
@@ -154,7 +152,7 @@ def _iso(ns):
 
 
 def _collector_record(rec, estimated, retrieved_iso):
-    """Adapter record -> frozen collector canonical-record shape.
+    """Adapter record -> fixed collector canonical-record shape.
 
     Only fields in the collector's KNOWN_FIELDS: identity, labels,
     provenance URL, publication/observation instants. Labels are
@@ -197,9 +195,9 @@ def _collector_record(rec, estimated, retrieved_iso):
 
 
 def to_canonical(rec, ingested_ns):
-    """Adapter record -> frozen resolver canonical shape (or None).
+    """Adapter record -> fixed resolver canonical shape (or None).
 
-    The canonical_hash comes from the frozen collector (validate +
+    The canonical_hash comes from the fixed collector (validate +
     temporal check + ingest into the shared records table). Returns None
     on any defect (missing keys, wrong types, unregistered source/kind,
     non-bool estimated flag, validation failure, temporal violation,
@@ -282,7 +280,7 @@ class CanonicalStore:
         _classify.init_db(con)
         # projection cache, not a second authority: note() is the only writer,
         # keyed by the authority hash, and reads are cross-checked against the
-        # frozen row. Older two-column tables gain the checksum columns; their
+        # fixed row. Older two-column tables gain the checksum columns; their
         # old rows fail verification until re-noted.
         con.execute(CANON_CACHE_DDL)
         have = {r[1] for r in con.execute(
@@ -495,7 +493,7 @@ class Seam:
         return kept
 
     def _history_lineage_ok(self, con, sid, h):
-        """True only if the frozen authority holds this hash under this source."""
+        """True only if the fixed authority holds this hash under this source."""
         try:
             row = con.execute(
                 "SELECT 1 FROM records WHERE content_hash=? AND "

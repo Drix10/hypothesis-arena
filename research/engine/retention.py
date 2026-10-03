@@ -1,4 +1,4 @@
-"""Mandatory 30-day checkpoint retention (doc 08, stdlib + langgraph).
+"""Mandatory 30-day checkpoint retention.
 
 Checkpoints are resumable state, not an archive: threads whose latest
 checkpoint is older than RETAIN_DAYS are deleted via the saver's

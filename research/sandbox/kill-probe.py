@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""kill-probe.py — Phase-D deployment box 5 (supervisor WALL_S kill/reap).
+"""kill-probe.py — supervisor wall-clock kill and reap probe.
 
 Checks the shipped kill ladder (engine/timeout.py::run_in_process, which
 the production supervisor drives with timeout_s=WALL_S=480s) with short

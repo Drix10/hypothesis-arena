@@ -1,4 +1,4 @@
-"""EDGAR source adapter (doc 09 Tier A): submissions JSON + companyfacts only.
+"""EDGAR source adapter: submissions JSON + companyfacts only.
 
 Emits raw records (dicts with a `symbols` list, JSON-safe, size-capped);
 classification into f2 happens downstream. observed_at_ns is the SEC
@@ -21,7 +21,7 @@ import urllib.request
 
 SOURCE_ID = "edgar_8k"
 KIND = "filing_event"
-SCHEMA_KINDS = ("filing_event",)  # frozen schema.py mirror (subset we emit)
+SCHEMA_KINDS = ("filing_event",)  # fixed schema.py mirror (subset we emit)
 
 UA_BASE = "MiroHedge/phase0"
 
@@ -44,7 +44,7 @@ TICKERS_CACHE_DAYS = 7
 FORMS = ("8-K", "10-Q", "10-K", "4")
 
 CADENCE_S = 300
-TTL_S = 900  # doc 09: EDGAR stale after 15 min -> features expire
+TTL_S = 900  #: EDGAR stale after 15 min -> features expire
 HEARTBEAT_VERSION = 1
 HEARTBEAT_MAX_BYTES = 65536
 
@@ -356,8 +356,7 @@ class Adapter:
                     "tickers-malformed"
             return {}, "unavailable", "tickers-malformed"
         if data_path:
-            # data commits first; validators follow the commit (doc 09:
-            # ETag persists only after the signals it versions).
+            # data commits first; validators follow the commit.
             if self._atomic_write_json(data_path, raw):
                 self._write_meta(meta_path, h)
         return self._ticker_index(raw), "live", ""

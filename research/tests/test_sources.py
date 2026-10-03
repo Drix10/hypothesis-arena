@@ -1,4 +1,4 @@
-"""Calendar fail-closed gate tests (doc 09 sec. 9.4)."""
+"""Calendar fail-closed gate tests."""
 import os
 import sys
 import unittest

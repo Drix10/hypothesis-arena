@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P1.4 objective acceptance checker. Read-only; verifies every acceptance
+"""objective acceptance checker. Read-only; verifies every acceptance
 criterion that does not need a human eye, and emits PASS/FAIL per criterion.
 The only human work left: grading data/soak/human-queue.jsonl (ambiguous
 candidates the pre-grader could not resolve).
@@ -86,7 +86,7 @@ def atomic_write_json(dest, obj):
 def main():
     day = sys.argv[1] if len(sys.argv) > 1 else \
         datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    out = {"day": day, "rules_version": "rules_v1", "checks": []}
+    out = {"day": day, "rules_version": "rules", "checks": []}
     C = out["checks"]
     # Configured universe first: freshness bounds and coverage key on it.
     try:

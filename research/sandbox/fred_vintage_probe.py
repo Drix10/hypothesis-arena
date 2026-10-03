@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""fred-vintage-probe.py — Phase-D FRED/ALFRED evidence (operator key).
+"""fred-vintage-probe.py — FRED/ALFRED readiness probe (operator key).
 
 Checks, with N=3 timed samples per call and no secret leakage:
   1. authenticated real observation retrieval

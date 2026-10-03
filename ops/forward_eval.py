@@ -1,29 +1,29 @@
-"""Read-only evaluator for the forward shadow ledgers (<dir>/sleeves/*.jsonl).
+"""Read-only evaluator for the forward shadow ledgers (<dir>/ledgers/*.jsonl).
 
     python3 ops/forward_eval.py <dir> [--json]
 
 Every forward ledger is judged against a benchmark ledger of
 ops/forward_ledgers.py (BENCHMARKS); the result is evidence, never a promotion.
 This tool never places orders, never fetches prices and never touches a
-ledger; its only write is <dir>/sleeves/eval.json (atomic).
+ledger; its only write is <dir>/ledgers/eval.json (atomic).
 
 Per non-benchmark ledger, from its daily rows (the first row is the rebase
 row with ret 0.0 by construction and is not a return observation):
   sessions, cumulative return, annualised return / vol / Sharpe (excess of
-  bench_cash_bil_v1, paired by date), max drawdown; and the PAIRED daily
+  bench_cash_bil, paired by date), max drawdown; and the PAIRED daily
   active return against its benchmark (MAPPING): mean, HAC t-stat
   (stats.hac_mean_tstat), 95% stationary-bootstrap CI of the annualised active
   return (stats.bootstrap_ci), tracking error, information ratio. One-sided
   p-values (H1: active mean > 0) come from the HAC t-stat.
 
-Multiplicity (plan/11 section 11.0b: Holm): one Holm (stats.holm) over every
+Multiplicity: one Holm (stats.holm) over every
 non-benchmark ledger present in the directory. The family is the ledger set,
 not "the ledgers that have matured", so it cannot shrink by ignoring a young
 or broken ledger: a ledger whose p-value cannot be computed (too few
 observations, zero variance, no benchmark, broken chain) enters the family
 with p = 1.0.
 
-Checkpoint decision (pre-set, from the plan; constants below, never tuned):
+Checkpoint states (pre-set, from the plan; constants below, never tuned):
   sessions < WARMUP_SESSIONS (60)          WARMUP: plumbing / fidelity only,
                                            no judgement.
   sessions >= 60                           CONTINUE, unless
@@ -68,10 +68,10 @@ NOTICE = ("ELIGIBLE-FOR-REVIEW only means a human may review the ledger; it is "
           "never a promotion.")
 
 # Ledger id prefix -> (benchmark ledger id, reason). Longest matching prefix
-# wins. A sleeve that passes its A-gate adds its mapping here.
+# wins. A strategy that passes its backtest gate adds its mapping here.
 MAPPING = {
-    "core_passive": (S.BENCH_SPY,
-                     "core is the 60/40 sanity reference (plan/12 s12.6 item 3); "
+    "passive_core": (S.BENCH_SPY,
+                     "the passive core is the 60/40 sanity reference; "
                      "scored against SPY buy-and-hold to show what the passive "
                      "equity alternative did"),
 }
@@ -216,7 +216,7 @@ def decide(sessions, ci, adj_p, dd_ok):
 # ------------------------------------------------------------------ driver
 
 def evaluate(d, boot_b=BOOT_B, seed=SEED):
-    sd = os.path.join(d, "sleeves")
+    sd = os.path.join(d, "ledgers")
     names = sorted(f[:-6] for f in os.listdir(sd)
                    if f.endswith(".jsonl")) if os.path.isdir(sd) else []
     ledgers, broken = {}, {}
@@ -233,7 +233,7 @@ def evaluate(d, boot_b=BOOT_B, seed=SEED):
             return None
         return [cash[x] for x in dates]
 
-    res = {"schema": "sleeve_eval_v1", "notice": NOTICE,
+    res = {"schema": "forward_eval", "notice": NOTICE,
            "asof": max((r[-1]["date"] for r in ledgers.values() if r),
                        default=None),
            "rules": {"warmup_sessions": WARMUP_SESSIONS,
@@ -339,9 +339,9 @@ def _clean(x):
 
 
 def write_eval(d, **kw):
-    """evaluate + atomic write of <dir>/sleeves/eval.json; returns the dict."""
+    """evaluate + atomic write of <dir>/ledgers/eval.json; returns the dict."""
     res = evaluate(d, **kw)
-    sd = os.path.join(d, "sleeves")
+    sd = os.path.join(d, "ledgers")
     os.makedirs(sd, exist_ok=True)
     tmp = os.path.join(sd, "eval.json.tmp")
     with open(tmp, "w") as f:

@@ -1,4 +1,4 @@
-"""Writes candidates.jsonl lines for the core passive sleeve from SIP daily
+"""Writes candidates.jsonl lines for the core passive strategy from SIP daily
 bars: at most one candidate per symbol and month (month in New York time).
 The loop decides each candidate once and drops one that arrives while the
 session is closed, so run this during the session; --require-open refuses to
@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from research.strategy import sip_fetch
-from research.strategy.sleeves import core_passive
+from research.strategy import passive_core
 
 HISTORY_DAYS = 60
 SIP_DELAY_MIN = 16  # the SIP feed refuses an end within 15 minutes of now
@@ -71,7 +71,7 @@ def fetch_bars(now, http_get=sip_fetch.default_http_get, headers=None):
         "%Y-%m-%dT%H:%M:%SZ")
     out = {}
     http_get = retrying(http_get)
-    for sym in core_passive.SYMBOLS:
+    for sym in passive_core.SYMBOLS:
         rows, _ = sip_fetch.fetch(sym, "bars", start, end, "1Day", "raw",
                                   http_get=http_get, headers=headers, now=now)
         out[sym] = [(r["h"], r["l"], r["c"]) for r in rows]
@@ -100,7 +100,7 @@ def _emit(d, now):
     emitted = load_state(state_path)
     held = set()  # the kernel's veto refuses a collision; no broker read here
     month = now.astimezone(NY).strftime("%Y-%m")
-    lines, keys = core_passive.build(bars, held, month,
+    lines, keys = passive_core.build(bars, held, month,
                                      emitted, int(now.timestamp() * 1e9))
     # State first: a crash between the two loses a candidate for this month
     # (fail closed) rather than emitting a second buy under a new cid.

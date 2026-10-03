@@ -3,9 +3,9 @@
   "name": "edgar_8k",
   "kind": "atom",
   "limit": 40,
-  "class_hint": "SOURCE_FACT-default-CONTEXT; item table promotes (rules_v1)",
+  "class_hint": "SOURCE_FACT-default-CONTEXT; item table promotes (rules)",
   "url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=8-K&count=40&output=atom",
-  "note": "UA contact required; zero 403s over soak or this poller does not ship (doc 09 S9.4)",
+  "note": "UA contact required; zero 403s over a soak or this poller does not ship",
   "poll_min": 15
  },
  {

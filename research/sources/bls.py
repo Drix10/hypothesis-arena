@@ -1,4 +1,4 @@
-"""BLS Employment Situation source adapter (doc 09 Tier A): the single RSS
+"""BLS Employment Situation source adapter: the single RSS
 feed www.bls.gov/feed/empsit.rss. No key; UA carries MIRO_CONTACT when set.
 
 Headline+link records only (values_pending downstream). pubDate is
@@ -7,7 +7,7 @@ parsedate_to_datetime is lenient; observed_at_ns is the publication day's
 midnight, flagged estimated, and future days are dropped. guid is the dedupe
 key and is never synthesized. Bodies containing DOCTYPE are rejected.
 
-Symbols ["EURUSD","USDJPY","SPY"] mirror collector/entity_map.json
+Symbols ["TLT","IEF","SPY"] mirror collector/entity_map.json
 macro_release_to_symbols[NFP]. An empty item list or zero usable rows gives
 ok=False with reason empty-data / no-usable-records and last_ok_ts frozen;
 duplicate-only polls stay healthy. Pace 1 req/s, 3 retries with jittered
@@ -40,7 +40,7 @@ URL = "https://www.bls.gov/feed/empsit.rss"
 PROVENANCE = "https://www.bls.gov/news.release/empsit.htm"
 
 UA_BASE = "MiroHedge/phase0"
-SYMBOLS = ["EURUSD", "USDJPY", "SPY"]  # pinned map NFP; see module doc
+SYMBOLS = ["TLT", "IEF", "SPY"]  # pinned map NFP; see module doc
 
 MIN_INTERVAL_S = 1.0
 RETRIES = 3
@@ -51,7 +51,7 @@ MAX_BODY_BYTES = 2 << 20
 MAX_RECORDS = 64
 
 CADENCE_S = 3600
-TTL_S = 18 * 3600  # frozen schema SOURCE_TTL_S[bls_empsit]
+TTL_S = 18 * 3600  # fixed schema SOURCE_TTL_S[bls_empsit]
 HEARTBEAT_VERSION = 1
 HEARTBEAT_MAX_BYTES = 65536
 SKEW_ALLOW_S = 300

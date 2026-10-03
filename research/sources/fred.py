@@ -1,13 +1,13 @@
-"""FRED/ALFRED source adapter (doc 09 Tier A): series observations plus ALFRED
+"""FRED/ALFRED source adapter: series observations plus ALFRED
 realtime windows (realtime_start/end) for point-in-time vintages. No bulk
-download or mirroring (doc 09 license matrix).
+download or mirroring.
 
 FRED_API_KEY comes from the environment; missing raises ConfigError before
 any request. The key travels only in the query and never appears in errors,
 records, heartbeats or logs.
 
 Observations are day-granularity, so observed_at_ns is date midnight flagged
-observed_at_estimated (context-only, doc 09 R12). Missing "." values are
+observed_at_estimated (context-only. Missing "." values are
 dropped and counted. Emits raw records; f2 classification is downstream.
 Pace 1 req/s, 3 retries with jittered backoff, a 429 halves the rate once
 per episode. Transport, clock, sleep and jitter are injected.
@@ -40,20 +40,20 @@ MAX_BODY_BYTES = 2 << 20
 MAX_RECORDS = 64
 
 CADENCE_S = 3600
-TTL_S = 18 * 3600  # frozen schema SOURCE_TTL_S[fred_macro]
+TTL_S = 18 * 3600  # fixed schema SOURCE_TTL_S[fred_macro]
 HEARTBEAT_VERSION = 1
 HEARTBEAT_MAX_BYTES = 65536
 SKEW_ALLOW_S = 300
 
-# Operating core set (NOT a frozen contract): series -> (release key,
+# Operating core set (NOT a fixed contract): series -> (release key,
 # symbols drawn only from the pinned macro symbol universe).
 SERIES_CORE = {
     "GDP": ("GDP", ["SPY"]),
-    "CPIAUCSL": ("CPI", ["EURUSD", "USDJPY", "SPY"]),
-    "PAYEMS": ("NFP", ["EURUSD", "USDJPY", "SPY"]),
-    "UNRATE": ("NFP", ["EURUSD", "USDJPY", "SPY"]),
-    "FEDFUNDS": ("FOMC", ["EURUSD", "USDJPY", "SPY", "GLD"]),
-    "DGS10": ("FOMC", ["EURUSD", "USDJPY", "SPY", "GLD"]),
+    "CPIAUCSL": ("CPI", ["TLT", "IEF", "SPY"]),
+    "PAYEMS": ("NFP", ["TLT", "IEF", "SPY"]),
+    "UNRATE": ("NFP", ["TLT", "IEF", "SPY"]),
+    "FEDFUNDS": ("FOMC", ["TLT", "IEF", "SPY", "GLD"]),
+    "DGS10": ("FOMC", ["TLT", "IEF", "SPY", "GLD"]),
 }
 
 _tmp_seq = [0]

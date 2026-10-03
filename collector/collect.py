@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""P1.2 non-X collector: EDGAR/Fed/ECB/Treasury/BLS/FRED -> signals.jsonl.
+"""Collector: EDGAR/Fed/ECB/Treasury/BLS/FRED -> signals.jsonl.
 
 Stdlib only. Sequential polite polls, ETag/Last-Modified cache, jittered
-retries, per-source heartbeats. Dedupe/SQLite/tagging is P1.3; soak is P1.4.
-Failure defaults per doc 09: errors land in heartbeats, never in signals.
+retries, per-source heartbeats. Dedupe, SQLite and tagging live in classify.py; the soak is soak.py.
+Failure defaults: errors land in heartbeats, never in signals.
 """
 import hashlib
 import http.client
@@ -362,7 +362,7 @@ def to_record(source, it):
 
 
 def heartbeat(name, status, detail="", count=0):
-    """Source-status vocabulary (doc 09 source_status, P1.3 invariant #7):
+    """Source-status vocabulary:
     ok | EMPTY_SUCCESS | SKIPPED_CONFIG | SOURCE_DOWN | AUTH_FAILURE |
     RATE_LIMITED | PARSE_FAILURE | STALE. SKIPPED_CONFIG (FRED, no key) is a
     config state, never data absence: it must not become features_absent."""

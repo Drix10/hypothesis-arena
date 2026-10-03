@@ -8,11 +8,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from research.strategy import prereg as P
 
 BASE = {
-    "schema": "prereg_v1", "experiment_id": "trend-etf-v1",
+    "schema": "prereg", "experiment_id": "etf-trend",
     "family": "trend", "hypothesis": "ETF trend persists net of cost",
-    "sleeve": "trend_etf_v1", "universe": ["SPY", "TLT"],
+    "strategy": "etf_trend", "universe": ["SPY", "TLT"],
     "signal": "sma200", "variants": [{"n": 100}, {"n": 200}],
-    "cost_model_version": "cost_v2",
+    "cost_model": "costs",
     "split": {"scheme": "walk_forward", "n_splits": 4,
               "label_horizon_days": 5, "embargo_days": 5},
     "holdout": {"start": "2021-01-01", "end": "2024-01-01",
@@ -47,7 +47,7 @@ class T(unittest.TestCase):
         b["decision"]["new_signal_tstat_min"] = 2.0
         self.assertTrue(P.validate(b))
         b = copy.deepcopy(BASE)
-        b["cost_model_version"] = "cost_v1"
+        b["cost_model"] = "cost_v1"
         self.assertIn("cost-model-version", P.validate(b))
         b = copy.deepcopy(BASE)
         b["variants"] = [{"n": 1}, {"n": 1}]

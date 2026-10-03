@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""P1.4 soak runner: observation and validation only; changes no rules.
+"""soak runner: observation and validation only; changes no rules.
 
 One cycle: collect -> classify today's signals -> snapshot heartbeats ->
 daily audit. Loop mode aligns to 15-min boundaries for the 7-day window.
-rules_v1 is frozen during the soak.
+The classifier rules do not change during the soak.
 
 Usage:
   python3 collector/soak.py --once    # single cycle (validation)

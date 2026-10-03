@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-'''P1.5 stub ctx reader: validates section 8.5 bundles, enforces every boundary.
-Stdlib only, read-only (canonical.db opened read-only; P1.4 evidence never
+'''stub ctx reader: validates section 8.5 bundles, enforces every boundary.
+Stdlib only, read-only (canonical.db opened read-only; evidence never
 written). Rejects incomplete bundles wholesale; per-feature rejects are
 counted with reasons. Prose is quarantined, never consumed.
 
 Usage: python3 collector/ctx_read.py <bundle.json> [--db PATH] [--map PATH]
 
 Atomicity: the `commit is True` flag checked here is the bundle-internal
-completeness flag. The writer-side generation manifest (design frozen,
-implementation deferred to Phase 2.5, doc 08) is not enforced, so this reader
-is not manifest-backed.
+completeness flag. The writer-side generation manifest is not enforced, so
+this reader is not manifest-backed.
 '''
 import hashlib
 import json
@@ -22,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCHEMA = "f2"
-RULES = "plausibility_v1"
+RULES = "plausibility"
 FROZEN_N = 3
 KINDS = {"filing_event", "macro_release", "calendar_ahead", "osint_event",
          "sentiment_tail", "regime_hint"}
@@ -40,9 +39,9 @@ HEX64 = re.compile("^[0-9a-f]{64}$")
 SOURCE_COVER_MIN = {"edgar_8k": 45, "fed_monetary": 180, "ecb_mid": 180,
                       "treasury_auctions": 1080, "bls_empsit": 1080,
                       "fred_macro": 1080, "bea_nipa_gdp": 1080}
-SOURCE_IDS = frozenset(SOURCE_COVER_MIN)  # frozen source namespace (X11)
-# Frozen source->kind emission registry: which kinds each source may emit.
-# Directional/osint/sentiment/regime kinds have no emitter until the Phase 2.5
+SOURCE_IDS = frozenset(SOURCE_COVER_MIN)  # fixed source namespace
+# Source->kind emission registry: which kinds each source may emit.
+# Directional/osint/sentiment/regime kinds have no emitter until the
 # source->feature resolver exists; they are rejected (kind-no-emitter).
 SOURCE_KINDS = {
     "edgar_8k": {"filing_event"},
@@ -58,7 +57,7 @@ SOURCE_KINDS = {
 BUNDLE_REQUIRED = {"schema_version", "research_epoch", "bundle_id",
                    "commit", "watermarks", "features"}
 BUNDLE_OPTIONAL = {"history"}
-# Frozen watermark envelope: the bundle proves which map it was built
+# Watermark envelope: the bundle proves which map it was built
 # against (version + sha, verified below) AND, for every source
 # participating in the bundle (features + history), a last-observation
 # instant and an opaque source cursor. Sources NOT participating need no
@@ -71,16 +70,16 @@ WATERMARK_SOURCE_REQUIRED = {"last_observation_at", "cursor"}
 WATERMARK_SKEW_S = 60
 CURSOR_MAX_LEN = 256
 BUNDLE_SCHEMA = "f2"
-TTL_MAX_S = 7 * 86400  # emitters never grant freshness beyond this (X4)
-MAX_FEATURES = 64  # plan cap, now enforced (X3)
-MAX_HASHES = 16  # rows contributing to one derived feature (X9)
+TTL_MAX_S = 7 * 86400  # emitters never grant freshness beyond this
+MAX_FEATURES = 64  # plan cap, now enforced
+MAX_HASHES = 16  # rows contributing to one derived feature
 MAX_SYMBOLS = 16  # mapped tickers per feature: entity resolution,
 # session classification, disagreement, and snapshot build stay bounded.
 # More than 16 tickers on one feature is a basket/index construction that
-# belongs in the Phase 2.5 resolver, not in a single feature row.
+# belongs in the resolver, not in a single feature row.
 HISTORY_SKEW_S = 60  # history timestamps may not exceed now + skew:
 # a "frozen feed" whose frozen past lies in the future is not frozen.
-MAX_BUNDLE_BYTES = 1024 * 1024  # raw cap before parse (X1)
+MAX_BUNDLE_BYTES = 1024 * 1024  # raw cap before parse
 MAX_DEPTH = 16
 MAX_NODES = 20000
 MAX_STR = 4096
@@ -101,7 +100,7 @@ class _DupKey(ValueError):
 
 
 def _no_dupes(pairs):
-    """object_pairs_hook rejecting duplicate JSON members. P3.1 rejects
+    """object_pairs_hook rejecting duplicate JSON members. rejects
     duplicate members at the crypto boundary; the provenance boundary must
     too — last-write-wins on source_id would silently rebind lineage."""
     obj = {}
@@ -236,7 +235,7 @@ def check_feature(f, con, emap, history, now_ts):
         return False, "lineage-mismatch"
     for h in hs:
         # Lineage binds hash AND source: a row with this hash under the
-        # feature's claimed source must exist (X10). Same bytes under a
+        # feature's claimed source must exist. Same bytes under a
         # different source do not satisfy this feature's lineage.
         row = con.execute(
             "SELECT 1 FROM records WHERE content_hash=? AND source=?",
@@ -300,7 +299,7 @@ def check_feature(f, con, emap, history, now_ts):
         cover = SOURCE_COVER_MIN.get(f["source_id"], 60) * 60
         if same and span >= cover * 0.5:
             return False, "frozen-feed"
-    # Asset class from the pinned entity map, never symbol spelling (X12):
+    # Asset class from the pinned entity map, never symbol spelling:
     # equity = every symbol is a mapped equity ticker; macro/other otherwise.
     equity_like = f["symbols"] and all(s in tickers for s in f["symbols"])
     if equity_like:
@@ -358,7 +357,7 @@ def read_bundle(path, db_path, map_path, now_ts=None):
         _bid = b.get("bundle_id")
         return {"bundle_id": _bid if isinstance(_bid, str) else None,
                 "accepted": [], "stats": stats}
-    # Exact bundle envelope (X7/X8): schema, id, epoch, commit, features.
+    # Exact bundle envelope: schema, id, epoch, commit, features.
     if b.get("schema_version") != BUNDLE_SCHEMA:
         stats["reasons"]["bundle-schema"] = 1
         return {"bundle_id": b.get("bundle_id"), "accepted": [],
@@ -455,7 +454,7 @@ def read_bundle(path, db_path, map_path, now_ts=None):
     if emap.get("map_version") != wm["entity_map_version"]:
         stats["reasons"]["map-version-mismatch"] = 1
         return {"bundle_id": b["bundle_id"], "accepted": [], "stats": stats}
-    # Frozen watermark envelope (strict): exact top-level keys; per-source
+    # Watermark envelope (strict): exact top-level keys; per-source
     # {last_observation_at, cursor} with namespace, types, and skew;
     # coverage of every participating source (features + history).
     if set(wm) != WATERMARK_REQUIRED:

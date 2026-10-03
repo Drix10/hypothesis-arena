@@ -13,7 +13,7 @@ from research.engine import locks
 GENESIS = "0" * 64
 OPEN_FIELDS = ("trial_id", "hypothesis_card_id", "prereg_hash", "family",
                "variant", "dataset_hashes", "code_hash",
-               "cost_model_version", "window", "split_scheme", "runner")
+               "cost_model", "window", "split_scheme", "runner")
 CLOSE_VERDICTS = ("pass", "fail", "crashed", "abandoned", "void")
 _HEX = set("0123456789abcdef")
 
@@ -132,7 +132,7 @@ class TrialLedger:
             raise LedgerError("open-fields:missing=%s extra=%s"
                               % (missing, extra))
         for k in ("trial_id", "hypothesis_card_id", "family", "variant",
-                  "cost_model_version", "split_scheme", "runner"):
+                  "cost_model", "split_scheme", "runner"):
             if not isinstance(f[k], str) or not f[k]:
                 raise LedgerError("open-field-type:" + k)
         if not isinstance(f["window"], (str, dict)) or not f["window"]:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""kill9_worker.py — Phase-D deployment box 8 (kill -9 resume demo).
+"""kill9_worker.py — kill -9 resume demo.
 
 Builds the real 6-node graph with the repo's fake models/executors (no
 model key needed) and runs run_cycle for epochs [START..END] on one
@@ -41,7 +41,7 @@ def main():
     for e in range(start, end + 1):
         # one thread per epoch (production: cycle_id per run); a single thread
         # across epochs would exhaust its LLM_CALLS budget, while resume reuses
-        # the interrupted epoch's own thread (the §8.6 resume property)
+        # the interrupted epoch's own thread (the resume property)
         tag = "k9r" if e == fresh else prefix
         out = G.run_cycle(app, ["AAPL"], e, "%s-%d" % (tag, e))
         if out.get("aborted") or not out.get("emitted"):

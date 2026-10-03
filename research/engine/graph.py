@@ -1,4 +1,4 @@
-"""D1 six-node research graph (doc 08 sec. 8.3, LangGraph, pinned).
+"""Six-node research graph.
 
 harvest -> extract -> fuse -> hypothesize -> critique -> emit
 
@@ -19,22 +19,19 @@ harvest -> extract -> fuse -> hypothesize -> critique -> emit
 - Cycle identity: run_cycle() stamps state["cycle_id"] = thread_id
   (str, 1..64 chars, [A-Za-z0-9_.~-]). Budgets come from
   deps["budget_factory"](cycle_id, symbol) per attempt.
-- Spend tiers (doc 10 §10.4, reported by the governor, applied here): T1
-  doubles the interval, filters critique to TRIGGER-class symbols and
-  suspends NULL-class extraction; T2 switches non-JEV LLM work to the
-  cheapest configured model, caps hypothesize prose at 200 chars, cuts the
-  watchlist to the 2 best-calibrated symbols and emits the SOFT-kill
-  signal; T3 denies all research LLM and emits the MEDIUM-kill signal. JEV
-  lives in collector/jev.py and is never throttled.
+- Spend tiers: tier 1 doubles the interval, filters critique to TRIGGER-class
+  symbols and suspends NULL-class extraction; tier 2 switches model work to
+  the cheapest configured model, caps hypothesize prose at 200 chars, cuts the
+  watchlist to the 2 best-calibrated symbols and emits the SOFT-kill signal;
+  tier 3 denies all research model calls and emits the MEDIUM-kill signal.
   deps["spend_governor"] is required, with a persistent state_dir, and is
   the sole pricing authority (deps["pricing"] is ignored), so pricing
   cannot drift from cap enforcement.
 - Kill signals are durable sentinel files (signal_dir, required for
   Tier-2+) plus a supplemental health_hook event. A hook failure is
   blocked evidence; a sentinel write failure fails the cycle with no
-  publication. The supervisor/trading side consumes them; the C++ kill
-  state machine is Slice-D+ work and not authorized. The plane never acts
-  on capital.
+  publication. The supervisor and the kernel's kill state machine consume
+  them. The plane never acts on capital.
 - Every producer (harvest records, parser/worker candidates) drains under
   its own ceiling: infinite generators end with producer_overrun and a
   lower-bound dropped count. Malformed harvest envelopes are blocked
@@ -64,7 +61,7 @@ try:
 except ImportError:  # pragma: no cover - build gate pins the dep
     _LANGGRAPH = False
 
-from . import cadence, digest, locks, r15, retention, schema
+from . import cadence, digest, locks, caps, retention, schema
 from . import emit as emit_mod
 from . import spend as spend_mod
 from . import workers as _workers
@@ -88,14 +85,14 @@ STAMP_VALUE_BYTES_MAX = 1024
 HISTORY_SOURCES_MAX = 16
 HISTORY_SOURCE_KEY_MAX = 128
 HISTORY_ENTRIES_MAX = 256
-THESIS_CHARS_MAX = 500  # frozen thesis: reject, never truncate
+THESIS_CHARS_MAX = 500  # fixed thesis: reject, never truncate
 CRITIQUE_CHARS_MAX = 2000
 CANDIDATE_BYTES_MAX = 16384
 MODEL_PROMPT_BYTES_MAX = 32768
 # producer-iteration ceiling: a harvest/fuse iterable yielding beyond
 # limit+ceiling stops with producer_overrun=True and a lower-bound count
 PRODUCER_CEILING = 10000
-# NULL-class sources (doc 09 Tier-C): carried as declared nulls, suspended under Tier 1+
+# NULL-class sources: carried as declared nulls, suspended under Tier 1+
 NULL_SOURCES = frozenset({"x_lists_tail", "launch_library",
                           "submarine_cables", "aisstream", "opensky_adsb"})
 THREAD_ID_RE = re.compile(r"[A-Za-z0-9_.\-~]{1,64}")
@@ -157,7 +154,7 @@ def _drain(producer, keep_max):
             item = next(it)
         except StopIteration:
             break
-        except (r15.AbortCycle, _workers.ConfigBlocked):
+        except (caps.AbortCycle, _workers.ConfigBlocked):
             raise
         except Exception as e:
             return kept, drawn - len(kept), False, \
@@ -271,7 +268,7 @@ def build_graph(deps):
             return 3  # uncertain plane: most restrictive
 
     def _rank2(watchlist):
-        """T2 watchlist cut: the 2 best-calibrated symbols. Without a supervisor
+        """Tier 2 watchlist cut: the 2 best-calibrated symbols. Without a supervisor
         calibration ranking it is the first 2 alphabetically; the ranking only
         chooses which two."""
         wl = [s for s in watchlist if _valid_symbol(s)]
@@ -317,7 +314,7 @@ def build_graph(deps):
             envelope_defects += 1
         try:
             raw, dropped, overrun, herr = _drain(iter(recs), RAW_MAX)
-        except (r15.AbortCycle, _workers.ConfigBlocked):
+        except (caps.AbortCycle, _workers.ConfigBlocked):
             raise
         except Exception as e:
             return _invalid_harvest(state, "records-error:%r" % (e,))
@@ -386,7 +383,7 @@ def build_graph(deps):
         if history is not None:
             upd["history"] = history
             upd["history_dropped"] = history_dropped
-        # T2 watchlist cut applies before any node sees the watchlist
+        # Tier 2 watchlist cut applies before any node sees the watchlist
         if _tier(state) >= 2:
             cut, why = _rank2(state.get("watchlist", []))
             upd["watchlist"] = cut
@@ -497,7 +494,7 @@ def build_graph(deps):
             if aborted:
                 break  # doomed cycle: no further expensive work
             if tier >= 1 and _null_class(rec):
-                # T1+: NULL-class extraction suspended
+                # Tier 1+: NULL-class extraction suspended
                 null_dropped += 1
                 continue
             syms = rec.get("symbols") or [None]
@@ -534,7 +531,7 @@ def build_graph(deps):
                     for cand in produced:
                         if not _keep_candidate(cand, "llm", cands):
                             dropped += 1
-            except r15.AbortCycle:
+            except caps.AbortCycle:
                 # an ambiguous or errored attempt aborts the cycle and leaves blocked
                 # evidence, so an aborted cycle never has an empty blocked list
                 aborted = True
@@ -627,7 +624,7 @@ def build_graph(deps):
             return None, _blocked(state, "%s-spend-refused:%s" % (node,
                                                                   e)), \
                 False, False
-        except r15.AbortCycle:
+        except caps.AbortCycle:
             return None, blocked, True, True
         except Exception as e:
             # run_gated raises only the above; anything else is a harness defect
@@ -754,7 +751,7 @@ def build_graph(deps):
                 out[sym] = {"text": "", "disagreement": True}
                 continue
             if tier >= 1 and sym not in triggers:
-                # T1+: critique runs on TRIGGER-class symbols only; skipped symbols keep the safe default
+                # Tier 1+: critique runs on TRIGGER-class symbols only; skipped symbols keep the safe default
                 out[sym] = {"text": "", "disagreement": True}
                 skipped += 1
                 continue
@@ -843,7 +840,7 @@ def build_graph(deps):
         # budgets (attribution rows remain the audit source). A deleted live counter
         # raises AbortCycle here (blocked evidence), so the estimate never silently
         # under-counts
-        r15_blind = False
+        caps_blind = False
         try:
             syms = set(state.get("watchlist", [])) | {None}
             cyc = state.get("cycle_id", "local")
@@ -851,8 +848,8 @@ def build_graph(deps):
             for s in syms:
                 try:
                     total += (deps["budget_factory"](cyc, s).llm or 0)
-                except r15.AbortCycle:
-                    r15_blind = True
+                except caps.AbortCycle:
+                    caps_blind = True
                 except (_workers.ConfigBlocked, AttributeError,
                         TypeError):
                     pass
@@ -867,8 +864,8 @@ def build_graph(deps):
         blocked_emit = [_bound_str(b, BLOCKED_CHARS)
                         for b in (state.get("blocked") or [])
                         [:BLOCKED_MAX]]
-        if r15_blind and len(blocked_emit) < BLOCKED_MAX:
-            blocked_emit.append("r15-budget-unreadable")
+        if caps_blind and len(blocked_emit) < BLOCKED_MAX:
+            blocked_emit.append("caps-budget-unreadable")
         if tier >= 2:
             try:
                 _row, hook_note = _ensure_signal("SOFT_KILL", tier,
@@ -982,7 +979,7 @@ def run_cycle(app, watchlist, epoch, thread_id, trigger_symbols=()):
 
 
 def _reject_stale_thread(app, thread_id):
-    """Refuse a thread_id whose checkpoint outlives R15 budget authority.
+    """Refuse a thread_id whose checkpoint outlives research caps budget authority.
     Counters are kept 7 days and checkpoints 30, so resuming an older cycle
     would mint it a fresh budget under the same cycle_id.
       no checkpointer on the app -> proceed;
@@ -1032,14 +1029,14 @@ def _reject_stale_thread(app, thread_id):
         raise ValueError("stale thread_id (timezone-less checkpoint "
                          "age): %r" % (thread_id,))
     age = time.time() - parsed.timestamp()
-    from . import r15 as _r15
-    if age < -_r15.CLOCK_SKEW_S:
+    from . import caps as _caps
+    if age < -_caps.CLOCK_SKEW_S:
         # a checkpoint from the future extends the budget window like a future start_wall: reject
         raise ValueError("stale thread_id (checkpoint in the "
                          "future): %r" % (thread_id,))
     if age > _budgets.LEDGER_RETAIN_DAYS * 86400:
         raise ValueError("stale thread_id (checkpoint %.1f days "
-                         "old, R15 window %d): %r"
+                         "old, research caps window %d): %r"
                          % (age / 86400,
                             _budgets.LEDGER_RETAIN_DAYS, thread_id))
 

@@ -21,7 +21,7 @@
   "2026-12-25"
  ],
  "live_eligible": false,
- "note": "Seeded NYSE 2026; verify against exchange notice before G1. Missing calendar = no entries (R9 fail-closed).",
+ "note": "Seeded NYSE 2026; verify against the exchange notice before the tiny stage. A missing calendar means no entries (fail closed).",
  "source": "NYSE",
  "stocks_window": "09:30-16:00 America/New_York"
 }

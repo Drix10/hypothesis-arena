@@ -137,7 +137,7 @@ def _ols(ys, xs):
 
 
 def spanning_alpha(rs, rb, level=0.95, b=2000, seed=0, lag=None):
-    """Spanning test (plan/11 11.3a item 3): regress the sleeve's periodic
+    """Spanning test: regress the strategy's periodic
     excess returns rs on the reference book's rb, paired by period.
     Returns dict(alpha, beta, t_alpha, ci, n): the Newey-West t-stat of
     alpha and a stationary-bootstrap CI of alpha over resampled pairs."""

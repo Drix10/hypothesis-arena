@@ -1,4 +1,4 @@
-"""D2 sandboxed execution gate (doc 08 sec. 8.2 + doc 10 sec. 10.4).
+"""Sandboxed execution gate.
 
 Worker model: a smolagents CodeAgent over a prebuilt immutable Docker
 image, non-root, read-only rootfs, dropped capabilities, CPU/RAM/pids
@@ -30,7 +30,7 @@ Invocation:
   full reservation as UNKNOWN_SPEND (never $0) and block future spend
   until a supervisor reconciles.
 
-Token bounds (recorded in plan/10 §10.4.1):
+Token bounds (recorded in plan/stages.md):
 - Prompt upper bound = utf-8 bytes of the exact outbound prompt. This is
   a true upper bound for byte-level-BPE providers (every token spans >= 1
   byte); it is an assumption, checked by a post-call tripwire.
@@ -57,11 +57,11 @@ absent).
 import subprocess
 
 from . import attribution
-from . import r15
+from . import caps
 from . import schema as schema_mod
 from . import timeout as timeout_mod
 
-# mechanism constants (see module docstring; plan/10 §10.4.1: a change needs a doc edit and a fresh paper window)
+# mechanism constants (see module docstring; plan/stages.md: a change needs a doc edit and a fresh paper window)
 COMPLETION_MAX = 1500
 AGENT_MAX_STEPS = 5
 TOOL_OUT_MAX_BYTES = 1500
@@ -70,7 +70,7 @@ PROMPT_BYTES_MAX = 32768
 BRIEF_CHARS_MAX = 8192
 IDENT_MAX = 64
 
-# import allowlist (doc 08 §8.2, exact)
+# import allowlist
 ALLOWLIST = {"json", "re", "datetime", "urllib", "xml", "html", "math",
              "statistics", "collections", "itertools", "hashlib",
              "base64", "requests", "bs4", "lxml", "pydantic", "pandas",
@@ -131,7 +131,7 @@ def _allowed_top(top):
 
 def _check_ident(name, value):
     if not isinstance(value, str) or not 0 < len(value) <= IDENT_MAX:
-        raise r15.AbortCycle("gate", {"bad-identity": name})
+        raise caps.AbortCycle("gate", {"bad-identity": name})
 
 
 def _truncate_bytes(text, limit):
@@ -707,7 +707,7 @@ def _clamp_completion(asked):
 
 def _release_pre_provider(budget, governor, lease, lease_id,
                           release_hold=True):
-    """Unwind a pre-provider reservation (provider untouched): settle the R15
+    """Unwind a pre-provider reservation (provider untouched): settle the research caps
     lease at zero and release the dollar hold. Returns None when both unwind
     cleanly, else a diagnostic dict; the caller aborts with it and the
     conservative reservation stays in place. Rule: pre-provider cleanup
@@ -715,7 +715,7 @@ def _release_pre_provider(budget, governor, lease, lease_id,
     cleanup = {}
     try:
         budget.settle_call(lease, 0)
-    except r15.AbortCycle as e:
+    except caps.AbortCycle as e:
         cleanup["lease-cleanup-failed"] = str(e.snapshot)
     if release_hold:
         try:
@@ -736,7 +736,7 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
     0. snapshot Tier-3 pre-filter (clean refusal),
     1. validate identities + task shape (clean failures),
     2. price lookup (missing pricing blocks clean),
-    3. R15 reservation of the true token bound (clean refusal),
+    3. research caps reservation of the true token bound (clean refusal),
     4. durable tier check + worst-case dollar hold against the stage cap in
        one tier-lock section (reserve_research_call: Tier 3, a tier raised
        above entry_tier, or unverifiable tier state refuse clean),
@@ -745,7 +745,7 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
        AbortCycle),
     7. ambiguous outcomes (timeout/crash/provider-error/unaccountable usage)
        settle the full reservation as UNKNOWN_SPEND, keep the hold, poison the
-       R15 row and AbortCycle (future spend blocks until reconcile_unknown).
+       research caps row and AbortCycle (future spend blocks until reconcile_unknown).
 
     kind: "generate" (task={messages, max_tokens_asked?}) or "extract"
     (task={brief, rec_defaults}). Returns the child result payload on accounted
@@ -762,9 +762,9 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
     # importing it here would be circular.
     governor.check_research_tier(entry_tier)
     if type(epoch) is not int or not 0 <= epoch <= 2 ** 31 - 1:
-        raise r15.AbortCycle("gate", {"bad-identity": "epoch"})
+        raise caps.AbortCycle("gate", {"bad-identity": "epoch"})
     if kind not in ("generate", "extract"):
-        raise r15.AbortCycle("gate", {"bad-kind": kind})
+        raise caps.AbortCycle("gate", {"bad-kind": kind})
     if not callable(provider_factory):
         raise ConfigBlocked("provider_factory not callable")
     # timeout is control-plane input: an invalid value blocks the attempt
@@ -788,7 +788,7 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
 
     steps = AGENT_MAX_STEPS if steps is None else steps
     if type(steps) is not int or not 1 <= steps <= AGENT_MAX_STEPS:
-        raise r15.AbortCycle("gate", {"bad-steps": steps})
+        raise caps.AbortCycle("gate", {"bad-steps": steps})
     comp = _clamp_completion(
         COMPLETION_MAX if max_tokens_asked is None else max_tokens_asked)
     if kind == "generate":
@@ -822,11 +822,11 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
         need = _token_need("extract", prompt_bytes, comp, steps)
         tools_needed = steps * TOOLS_PER_STEP_MAX
         messages = None
-    if need > r15.TOKENS:
+    if need > caps.TOKENS:
         # a bound that cannot fit the cycle is refused before any spend (counted upstream as blocked evidence)
         raise ConfigBlocked("call-bound-exceeds-cycle")
 
-    # pre-call gates: R15 tokens first, then absolute dollars; a refusal is clean (provider untouched)
+    # pre-call gates: research caps tokens first, then absolute dollars; a refusal is clean (provider untouched)
     lease = budget.reserve_call(need, tools_needed)
     lease_id = "spend:%s" % lease["lease_id"]
     try:
@@ -838,7 +838,7 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
             budget, governor, lease, lease_id, release_hold=False)
         if cleanup is not None:
             cleanup["original"] = _bounded_repr(orig)
-            raise r15.AbortCycle(
+            raise caps.AbortCycle(
                 symbol, {"pre-provider-cleanup-failure": cleanup})
         raise
     try:
@@ -848,7 +848,7 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
                                         lease_id)
         if cleanup is not None:
             cleanup["original"] = _bounded_repr(orig)
-            raise r15.AbortCycle(
+            raise caps.AbortCycle(
                 symbol, {"pre-provider-cleanup-failure": cleanup})
         raise
 
@@ -860,7 +860,7 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
                                         lease_id)
         if cleanup is not None:
             cleanup["original"] = "bad-container-name"
-            raise r15.AbortCycle(
+            raise caps.AbortCycle(
                 symbol, {"pre-provider-cleanup-failure": cleanup})
         raise ConfigBlocked("bad-container-name")
     payload = {"kind": kind, "provider_factory": provider_factory,
@@ -885,7 +885,7 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
                                         lease_id)
         if cleanup is not None:
             cleanup["original"] = "task-unpicklable:%r" % (e,)
-            raise r15.AbortCycle(
+            raise caps.AbortCycle(
                 symbol, {"pre-provider-cleanup-failure": cleanup})
         raise ConfigBlocked("task-unpicklable:%r" % (e,))
 
@@ -896,7 +896,7 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
         note = _unknown(budget, governor, log_path, epoch, node,
                         model_id, cycle_id, symbol, lease, lease_id,
                         worst, need, "timeout", container_name)
-        raise r15.AbortCycle(symbol, {"timeout": True,
+        raise caps.AbortCycle(symbol, {"timeout": True,
                                       "unknown-spend": worst,
                                       "reap": note})
     except Exception as e:
@@ -906,7 +906,7 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
                         model_id, cycle_id, symbol, lease, lease_id,
                         worst, need, "transport:%r" % (e,),
                         container_name)
-        raise r15.AbortCycle(symbol, {"transport-ambiguous": True,
+        raise caps.AbortCycle(symbol, {"transport-ambiguous": True,
                                       "unknown-spend": worst,
                                       "reap": note})
 
@@ -919,21 +919,21 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
         if cleanup is not None:
             cleanup["original"] = str(child.get("reason",
                                                  "config-error"))
-            raise r15.AbortCycle(
+            raise caps.AbortCycle(
                 symbol, {"pre-provider-cleanup-failure": cleanup})
         raise ConfigBlocked(str(child.get("reason", "config-error")))
     if status == "provider-error":
         note = _unknown(budget, governor, log_path, epoch, node,
                         model_id, cycle_id, symbol, lease, lease_id,
                         worst, need, "provider-error", container_name)
-        raise r15.AbortCycle(symbol, {"provider-error": True,
+        raise caps.AbortCycle(symbol, {"provider-error": True,
                                       "unknown-spend": worst,
                                       "reap": note})
     if status != "ok" or not isinstance(child, dict):
         note = _unknown(budget, governor, log_path, epoch, node,
                         model_id, cycle_id, symbol, lease, lease_id,
                         worst, need, "bad-envelope", container_name)
-        raise r15.AbortCycle(symbol, {"bad-envelope": True,
+        raise caps.AbortCycle(symbol, {"bad-envelope": True,
                                       "unknown-spend": worst,
                                       "reap": note})
 
@@ -946,7 +946,7 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
                         model_id, cycle_id, symbol, lease, lease_id,
                         worst, need, "unaccountable-usage",
                         container_name)
-        raise r15.AbortCycle(symbol, {"unaccountable-usage": True,
+        raise caps.AbortCycle(symbol, {"unaccountable-usage": True,
                                       "unknown-spend": worst,
                                       "reap": note})
     actual = usage[0] + usage[1]
@@ -959,7 +959,7 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
         breach = {"bound-breach": actual}
         try:
             budget.settle_call(lease, actual)
-        except r15.AbortCycle as e:
+        except caps.AbortCycle as e:
             breach["settle-failed"] = str(e.snapshot)
         try:
             usd = (actual / 1000.0) * price
@@ -970,9 +970,9 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
             breach["span-or-settle-failed"] = _bounded_repr(e)
         try:
             budget.invalidate()
-        except r15.AbortCycle as e:
+        except caps.AbortCycle as e:
             breach["invalidate-failed"] = str(e.snapshot)
-        raise r15.AbortCycle(symbol, breach)
+        raise caps.AbortCycle(symbol, breach)
     # accounted success: settle actuals, exactly one span, release the hold.
     # Any failure from here is AbortCycle: the call was real.
     try:
@@ -981,14 +981,14 @@ def run_gated(kind, node, symbol, cycle_id, epoch, task, provider_cfg,
               usage[0], usage[1], (actual / 1000.0) * price,
               "success", lease)
         governor.settle_usd(lease_id)
-    except r15.AbortCycle:
+    except caps.AbortCycle:
         raise
     except Exception as e:
         try:
             budget.invalidate()
-        except r15.AbortCycle:
+        except caps.AbortCycle:
             pass
-        raise r15.AbortCycle(symbol, {"accounting-failure": _bounded_repr(e)})
+        raise caps.AbortCycle(symbol, {"accounting-failure": _bounded_repr(e)})
     return _shape_success_result(kind, child, usage, tool_calls,
                                  container_name)
 
@@ -1055,7 +1055,7 @@ def _unknown(budget, governor, log_path, epoch, node, model_id,
     operation (record_unknown: span + unknown row + invoked mark); any failure
     there raises AbortCycle with an unresolved-spend snapshot.
 
-    When worst == 0.0 (a free model) there are no uncertain dollars: the R15
+    When worst == 0.0 (a free model) there are no uncertain dollars: the research caps
     reservation still settles at the full bound and the row is poisoned, but
     no unknown rows are written (an unknown $0 row is rejected) and the hold
     is released, so nothing needs reconciling.
@@ -1064,7 +1064,7 @@ def _unknown(budget, governor, log_path, epoch, node, model_id,
     folds into the abort snapshot."""
     try:
         budget.settle_call(lease, need)
-    except r15.AbortCycle:
+    except caps.AbortCycle:
         pass
     span_id = "%s:%s:%s:run:%d" % (cycle_id, symbol, node, lease["seq"])
     if worst > 0:
@@ -1078,21 +1078,21 @@ def _unknown(budget, governor, log_path, epoch, node, model_id,
             # blocks on the invoked-hold backstop even without unknown rows
             try:
                 budget.invalidate()
-            except r15.AbortCycle:
+            except caps.AbortCycle:
                 pass
-            raise r15.AbortCycle(
+            raise caps.AbortCycle(
                 symbol, {"unresolved-spend": _bounded_repr(e),
                          "unknown-spend": worst})
     else:
         # zero-price ambiguity: no dollars uncertain, so release the hold and keep
-        # the R15 poison; a surviving $0 hold can neither block nor move money
+        # the research caps poison; a surviving $0 hold can neither block nor move money
         try:
             governor.settle_usd(lease_id)
         except Exception:
             pass
     try:
         budget.invalidate()
-    except r15.AbortCycle:
+    except caps.AbortCycle:
         pass
     try:
         _reap_container(container_name)

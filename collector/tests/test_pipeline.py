@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P1.3 self-check: duplicate, amendment, stale, malformed, replay,
+"""self-check: duplicate, amendment, stale, malformed, replay,
 lookahead, concurrent-write. Stdlib only; fails loudly.
 Usage: python3 collector/tests/test_pipeline.py
 """
@@ -22,7 +22,7 @@ import classify as _CLOCK  # noqa: E402
 _PINNED_NOW = "2026-09-18T18:05:00+00:00"
 # Deterministic wall clock: every fixture in this file is stamped
 # 2026-09-18, so "now" is pinned just after the fixture window.
-# Without this the frozen 7-day archaeology boundary drifts under
+# Without this the fixed 7-day archaeology boundary drifts under
 # the fixtures as the calendar moves (test 9's 17:50 publication
 # ages into STALE) and the suite rots with the date. run() calls
 # below set their own explicit as_of; test 19 re-pins temporarily
@@ -140,7 +140,7 @@ ts = [threading.Thread(target=writer) for _ in range(2)]
 assert sorted(outcomes) == ["duplicate", "new"], outcomes
 print("ok concurrent-write")
 
-print("ALL P1.3 CHECKS PASS")
+print("ALL CHECKS PASS")
 
 # 9. aged candidate: hot items but first seen beyond TTL -> CONTEXT + aged flag
 from classify import is_fresh, validate_record, ITEM_HEADER_RE  # noqa: E402

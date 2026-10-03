@@ -1,4 +1,4 @@
-"""Acceptance check for a running (or finished) G0 paper loop. Exit 0 = PASS.
+"""Acceptance check for a running (or finished) paper loop. Exit 0 = PASS.
 
     python3 ops/deploy/check.py <loop_dir> [--no-broker] [--watch SECONDS]
 
@@ -7,7 +7,7 @@ Fails when any of these hold:
   - freeze.txt exists
   - alerts.jsonl holds a flatten*, unprotected-position, journal-* or kill alert
   - the order journal hash chain is broken
-  - loop.log or sleeves.log contains a traceback
+  - loop.log or ledgers.log contains a traceback
   - a non-empty journal row is not a 7-field row
   - (broker) a held position is not fully covered by resting sell quantity
 Read-only: it never places or cancels anything.
@@ -51,7 +51,7 @@ def check(d, broker):
             fails.append("journal chain broken")
     except ValueError:
         fails.append("journal row unreadable")
-    for log in ("loop.log", "sleeves.log"):
+    for log in ("loop.log", "ledgers.log"):
         if any("Traceback" in ln for ln in monitor.read_lines(os.path.join(d, "logs", log))):
             fails.append("traceback in logs/" + log)
     notes.append("journal rows %d" % len(rows))

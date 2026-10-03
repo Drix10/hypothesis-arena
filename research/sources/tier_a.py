@@ -1,12 +1,12 @@
-"""D11 Tier-A readiness evidence (doc 09 sec. 9.4, stdlib only).
+"""D11 Tier-A readiness evidence.
 
 Runs what the environment allows, records blockers honestly, fakes
 nothing:
-- EDGAR 8-K atom + Fed monetary RSS: live GET with the frozen UA,
+- EDGAR 8-K atom + Fed monetary RSS: live GET with the fixed UA,
   3 samples each, p50/p99 latency, status/bytes. Network failure is
   recorded as DOWN with the error (evidence, not a pass).
 - UA compliance: the exact UA string sent is recorded; EDGAR requires
-  contact-bearing UA (doc 09 sec. 9.2) and zero 403s.
+  contact-bearing UA and zero 403s.
 - FRED/ALFRED: key-gated -> BLOCKED (no key in env), never silently
   downgraded. ALFRED vintage replay needs the same key.
 - Calendar: fail-closed gate result (missing -> CalendarMissing).
@@ -90,7 +90,7 @@ def run():
         ev["gates"]["calendar"] = {
             "state": "LOADED", "version": cal.get("calendar_version"),
             "live_eligible": cal.get("live_eligible", False),
-            "note": "seed: paper only until verified before G1"}
+            "note": "seed: paper only until verified before the tiny stage"}
     except calendars.CalendarMissing as e:
         ev["gates"]["calendar"] = {"state": "FAIL-CLOSED", "error": str(e)}
     return ev

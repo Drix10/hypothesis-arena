@@ -14,10 +14,10 @@ from ops import forward_eval as E
 from ops import forward_ledgers as S
 from research.strategy import stats
 
-STRONG, MID, WEAK = "alpha_v1", "beta_v1", "gamma_v1"
+STRONG, MID, WEAK = "alpha", "beta", "gamma"
 B_SPY, B_CASH = S.BENCH_SPY, S.BENCH_CASH
 BOOT = 300   # fast bootstrap in tests; decisions are far from the boundary
-# Test-only ledger families, mapped like a promoted sleeve would be.
+# Test-only ledger families, mapped like a promoted strategy would be.
 TEST_MAP = {k: (B_SPY, "test family %s, scored against SPY buy-and-hold" % k)
             for k in ("alpha", "beta", "gamma", "delta")}
 _SAVED = {}
@@ -53,10 +53,10 @@ def write(d, sid, rets, start="2026-09-30"):
     for i, (dt, r) in enumerate(zip(dates(len(rets), start), rets)):
         r = 0.0 if i == 0 else r
         eq *= 1.0 + r
-        rows.append({"date": dt, "sleeve": sid, "equity": round(eq, 4),
+        rows.append({"date": dt, "strategy": sid, "equity": round(eq, 4),
                      "ret": round(r, 8), "target": None})
-    os.makedirs(os.path.join(d, "sleeves"), exist_ok=True)
-    S.append_rows(os.path.join(d, "sleeves", sid + ".jsonl"), [], rows)
+    os.makedirs(os.path.join(d, "ledgers"), exist_ok=True)
+    S.append_rows(os.path.join(d, "ledgers", sid + ".jsonl"), [], rows)
 
 
 def bench_set(d, n, seed=1):
@@ -140,7 +140,7 @@ class Eval(unittest.TestCase):
         n = 121
         self.with_active(STRONG, n, [0.0] * n)
         r = ev(self.d)["ledgers"][STRONG]["returns"]
-        rows, _ = S.read_log(os.path.join(self.d, "sleeves", STRONG + ".jsonl"))
+        rows, _ = S.read_log(os.path.join(self.d, "ledgers", STRONG + ".jsonl"))
         rets = [x["ret"] for x in rows[1:]]
         self.assertEqual(r["n_returns"], 120)
         self.assertAlmostEqual(r["cum_return"], rows[-1]["equity"] / S.CASH0 - 1,
@@ -185,13 +185,13 @@ class Eval(unittest.TestCase):
         n = 200
         bench_set(self.d, n)
         write(self.d, STRONG, [b + 0.002 for b in noise(n, 1)])
-        write(self.d, "mystery_v1", noise(n, 4))       # no mapping
+        write(self.d, "mystery", noise(n, 4))       # no mapping
         res = ev(self.d)
-        self.assertEqual(res["ledgers"]["mystery_v1"]["checkpoint"]["state"],
+        self.assertEqual(res["ledgers"]["mystery"]["checkpoint"]["state"],
                          "NO-MAPPING")
         h = res["holm"]["pooled"]
         self.assertEqual(h["m"], 2)
-        self.assertEqual(h["p"][h["ledgers"].index("mystery_v1")], 1.0)
+        self.assertEqual(h["p"][h["ledgers"].index("mystery")], 1.0)
 
     def test_missing_benchmark(self):
         write(self.d, STRONG, noise(100, 1))
@@ -239,7 +239,7 @@ class Eval(unittest.TestCase):
         n = 200
         self.with_active(STRONG, n, [0.001] * n)
         write(self.d, MID, noise(n, 11))
-        p = os.path.join(self.d, "sleeves", STRONG + ".jsonl")
+        p = os.path.join(self.d, "ledgers", STRONG + ".jsonl")
         with open(p) as f:
             lines = f.read().splitlines()
         r = json.loads(lines[5])
@@ -269,7 +269,7 @@ class Eval(unittest.TestCase):
     def test_broken_benchmark_marks_dependents(self):
         n = 100
         self.with_active(STRONG, n, [0.001] * n)
-        p = os.path.join(self.d, "sleeves", B_SPY + ".jsonl")
+        p = os.path.join(self.d, "ledgers", B_SPY + ".jsonl")
         with open(p) as f:
             lines = f.read().splitlines()
         lines[3] = lines[3].replace('"equity": ', '"equity": 1')
@@ -283,7 +283,7 @@ class Eval(unittest.TestCase):
     def test_cli_json_writes_atomic_eval_and_never_touches_ledgers(self):
         n = 130
         self.with_active(STRONG, n, noise(n, 1, sd=0.001, mu=0.0005))
-        sd = os.path.join(self.d, "sleeves")
+        sd = os.path.join(self.d, "ledgers")
 
         def snap():
             out = {}
@@ -314,11 +314,11 @@ class Eval(unittest.TestCase):
         self.assertEqual(ev(self.d), ev(self.d))
 
     def test_mapping(self):
-        self.assertEqual(E.benchmark_for("core_passive_v1")[0], B_SPY)
-        self.assertEqual(E.benchmark_for("alpha_v1")[0], B_SPY)
+        self.assertEqual(E.benchmark_for("passive_core")[0], B_SPY)
+        self.assertEqual(E.benchmark_for("alpha")[0], B_SPY)
         self.assertIsNone(E.benchmark_for("zzz")[0])
         self.assertTrue(all(len(v[1]) > 20 for v in E.MAPPING.values()))
-        self.assertTrue(all(v[0] in S.BENCHMARKS or v[0] == "core_passive_v1"
+        self.assertTrue(all(v[0] in S.BENCHMARKS or v[0] == "passive_core"
                             for v in E.MAPPING.values()))
 
     def test_shadow_hook_never_stops_the_loop(self):
@@ -334,7 +334,7 @@ class Eval(unittest.TestCase):
         n = 70
         self.with_active(STRONG, n, [0.0] * n)
         S._evaluate(self.d)
-        self.assertTrue(os.path.exists(os.path.join(self.d, "sleeves", "eval.json")))
+        self.assertTrue(os.path.exists(os.path.join(self.d, "ledgers", "eval.json")))
 
     def test_empty_dir(self):
         res = ev(self.d)
@@ -351,14 +351,14 @@ class Monitor(unittest.TestCase):
             write(d, STRONG, [b + 0.001 for b in noise(n, 1)])
             E.write_eval(d, boot_b=BOOT)
             out = []
-            monitor.panel_sleeves(d, out)
+            monitor.panel_ledgers(d, out)
             txt = "\n".join(out)
             self.assertIn("EVAL CONTINUE", txt)
             self.assertIn("t=", txt)
             self.assertIn("EVAL BENCHMARK", txt)
-            os.remove(os.path.join(d, "sleeves", "eval.json"))
+            os.remove(os.path.join(d, "ledgers", "eval.json"))
             out = []
-            monitor.panel_sleeves(d, out)
+            monitor.panel_ledgers(d, out)
             self.assertIn("EVAL n/a", "\n".join(out))
 
 

@@ -1,4 +1,4 @@
-"""Live terminal view of a running G0 paper loop. Read-only: it never writes to
+"""Live terminal view of a running paper loop. Read-only: it never writes to
 the loop directory and never places orders.
 
     python3 ops/monitor.py <loop_dir> [--interval 3] [--once] [--no-broker]
@@ -209,7 +209,7 @@ def panel_journal(d, out):
 
 
 def eval_line(ev, sid, last):
-    """EVAL line from sleeves/eval.json (read-only): checkpoint state and HAC
+    """EVAL line from ledgers/eval.json (read-only): checkpoint state and HAC
     t-stat of the paired active return; flagged stale if the eval lags the
     ledger. 'ELIGIBLE-FOR-REVIEW' means a human may review, never promote."""
     try:
@@ -230,9 +230,9 @@ def eval_line(ev, sid, last):
         return "    " + col("EVAL unreadable", YEL)
 
 
-def panel_sleeves(d, out):
-    out.append(col("SLEEVE SHADOW LEDGERS (virtual $100k each, no orders)", BOLD))
-    sd = os.path.join(d, "sleeves")
+def panel_ledgers(d, out):
+    out.append(col("SHADOW LEDGERS (virtual $100k each, no orders)", BOLD))
+    sd = os.path.join(d, "ledgers")
     names = sorted(f for f in os.listdir(sd) if f.endswith(".jsonl")) if os.path.isdir(sd) else []
     if not names:
         out.append("  " + col("none yet (runs after each close)", DIM))
@@ -305,11 +305,11 @@ def panel_broker(broker, out):
 
 def render(d, broker):
     now = time.time()
-    out = [col("MiroHedge G0 paper monitor", BOLD) + "  %s  dir=%s" % (
+    out = [col("MiroHedge paper monitor", BOLD) + "  %s  dir=%s" % (
         time.strftime("%Y-%m-%d %H:%M:%S"), d), ""]
     panels = [lambda: panel_loop(d, out, now), lambda: panel_candidates(d, out),
               lambda: panel_decisions(d, out), lambda: panel_journal(d, out),
-              lambda: panel_sleeves(d, out)]
+              lambda: panel_ledgers(d, out)]
     if broker:
         panels.append(lambda: panel_broker(broker, out))
     for fn in panels:

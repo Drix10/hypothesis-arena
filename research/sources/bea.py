@@ -1,4 +1,4 @@
-"""BEA NIPA source adapter (doc 09 Tier A): one GetData call per poll
+"""BEA NIPA source adapter: one GetData call per poll
 (NIPA, T10101 headline GDP, Frequency=A).
 
 BEA_USER_ID comes from the environment; build() raises when absent. The key
@@ -11,7 +11,7 @@ else LineNumber). DataValue must be numeric (commas allowed); markers such as
 (NA) drop the row. observed_at_ns is Jan-1 midnight of the period year,
 flagged estimated. Dedupe key: (TableName, series, TimePeriod).
 
-Symbols ["EURUSD","USDJPY","SPY"] are an operating default; no pinned GDP map
+Symbols ["TLT","IEF","SPY"] are an operating default; no pinned GDP map
 exists. An empty Data list or zero usable rows gives ok=False with reason
 empty-data / no-usable-records and last_ok_ts frozen; duplicate-only polls
 stay healthy. Pace 1 req/s, 3 retries with jittered backoff, a 429 halves the
@@ -36,7 +36,7 @@ TABLE = "T10101"
 PROVENANCE = "https://www.bea.gov/data/gdp/gross-domestic-product"
 
 UA_BASE = "MiroHedge/phase0"
-SYMBOLS = ["EURUSD", "USDJPY", "SPY"]  # operating default, see doc
+SYMBOLS = ["TLT", "IEF", "SPY"]  # operating default, see doc
 
 MIN_INTERVAL_S = 1.0
 RETRIES = 3

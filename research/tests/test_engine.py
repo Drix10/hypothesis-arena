@@ -1,4 +1,4 @@
-"""Phase 2.5 plane tests: R15/ledger, cadence, attribution, scanner,
+"""Engine tests: research caps and ledger, cadence, attribution, scanner,
 gate (pre-call dollar/token reservation through a child-process
 boundary), spend governor (projection/tiers/holds), digest,
 retention, emit/publisher hardening, graph with FORCED invocation
@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.join(ROOT, ".."))  # repo root: collector/
 
 from collector import ctx_read
 from engine import attribution, budgets, cadence, digest, emit as emit_mod
-from engine import locks, r15, retention, schema, spend as spend_mod
+from engine import locks, caps, retention, schema, spend as spend_mod
 from engine import timeout as timeout_mod
 from engine import publish, workers
 
@@ -64,9 +64,9 @@ OBS_S = 1767625200  # Monday 2026-01-05 15:00 UTC (in session)
 OBS_NS = OBS_S * 10 ** 9
 NOW_S = OBS_S + 100
 HEXA = "a" * 64
-MAP = {"map_version": "entity-v1-test",
+MAP = {"map_version": "entity-map-test",
        "cik_to_ticker": {"0000320193": "AAPL"},
-       "macro_release_to_symbols": {"FOMC": ["EURUSD"]}}
+       "macro_release_to_symbols": {"FOMC": ["TLT"]}}
 SANDBOX = {"image_digest": "repo@sha256:" + "b" * 64,
            "proxy_network": "rp-egress",
            "seccomp_profile": "/etc/rp/seccomp.json",
@@ -223,7 +223,7 @@ def _sleepy(secs):
     return "woke"
 
 
-def _gate(d, pricing=None, stage="G0", cycle="t1", symbol="AAPL"):
+def _gate(d, pricing=None, stage="paper", cycle="t1", symbol="AAPL"):
     """Real ledger + real governor + real budget (the gate's actual
     authorities, never doubles)."""
     pricing = dict(PRICING) if pricing is None else pricing
@@ -258,43 +258,43 @@ def _gen_call(d, cfg=None, timeout_s=30.0, messages=None, cycle="t1",
     return out, led, log, gov, budget
 
 
-class R15Test(unittest.TestCase):
+class CapsTest(unittest.TestCase):
     def test_looping_tool_caught(self):
-        b = r15.CycleBudget("AAPL", now=1000.0)
-        with self.assertRaises(r15.AbortCycle):
+        b = caps.CycleBudget("AAPL", now=1000.0)
+        with self.assertRaises(caps.AbortCycle):
             for _ in range(200):
                 b.charge_tool()
-        self.assertLessEqual(b.tools, r15.TOOL_CALLS + 1)
+        self.assertLessEqual(b.tools, caps.TOOL_CALLS + 1)
 
     def test_check_guards_without_charging(self):
-        b = r15.CycleBudget("AAPL", now=0.0)
+        b = caps.CycleBudget("AAPL", now=0.0)
         b.check()
         self.assertEqual(b.llm, 0)
-        b.llm = r15.LLM_CALLS
-        with self.assertRaises(r15.AbortCycle):
+        b.llm = caps.LLM_CALLS
+        with self.assertRaises(caps.AbortCycle):
             b.check()
 
     def test_invalidate_poisons(self):
-        b = r15.CycleBudget("AAPL", now=0.0)
+        b = caps.CycleBudget("AAPL", now=0.0)
         b.invalidate()
-        with self.assertRaises(r15.AbortCycle):
+        with self.assertRaises(caps.AbortCycle):
             b.check()
-        with self.assertRaises(r15.AbortCycle):
+        with self.assertRaises(caps.AbortCycle):
             b.charge_tool()
 
     def test_symbol_pause_and_degrade(self):
-        h = r15.PlaneHealth(["A", "B", "C"], now_s=0.0)
+        h = caps.PlaneHealth(["A", "B", "C"], now_s=0.0)
         for _ in range(3):
             h.record("A", True, now_s=10.0)
         r = h.record("A", True, now_s=10.0)
         self.assertIn("A", r["paused"])
-        h2 = r15.PlaneHealth(["A", "B", "C"], now_s=0.0)
+        h2 = caps.PlaneHealth(["A", "B", "C"], now_s=0.0)
         h2.record("A", True, now_s=10.0)
         r2 = h2.record("B", True, now_s=20.0)
         self.assertTrue(r2["degraded"])
 
     def test_degraded_recovers(self):
-        h = r15.PlaneHealth(["A", "B", "C"], now_s=0.0)
+        h = caps.PlaneHealth(["A", "B", "C"], now_s=0.0)
         h.record("A", True, now_s=10.0)
         self.assertTrue(h.record("B", True, now_s=20.0)["degraded"])
         r = h.record("C", False, now_s=5000.0)
@@ -302,7 +302,7 @@ class R15Test(unittest.TestCase):
         self.assertEqual(r["paused"], [])
 
     def test_pause_clears_on_success(self):
-        h = r15.PlaneHealth(["A"], now_s=0.0)
+        h = caps.PlaneHealth(["A"], now_s=0.0)
         for _ in range(3):
             h.record("A", True, now_s=5.0)
         self.assertIn("A", h.record("A", True, now_s=5.0)["paused"])
@@ -327,25 +327,25 @@ class LedgerTest(unittest.TestCase):
         d = tempfile.mkdtemp()
         led = self._ledger(d)
         for bad in ("100", 1.5, -1, None, True, 10 ** 13):
-            with self.assertRaises(r15.AbortCycle, msg=repr(bad)):
+            with self.assertRaises(caps.AbortCycle, msg=repr(bad)):
                 led.reserve_call("c", "AAPL", bad, 0)
-        with self.assertRaises(r15.AbortCycle):
+        with self.assertRaises(caps.AbortCycle):
             led.reserve_call("c", "AAPL", 10, -2)
 
     def test_token_bound_binds(self):
         d = tempfile.mkdtemp()
         led = self._ledger(d)
-        with self.assertRaises(r15.AbortCycle):
-            led.reserve_call("c", "AAPL", r15.TOKENS + 1, 0)
+        with self.assertRaises(caps.AbortCycle):
+            led.reserve_call("c", "AAPL", caps.TOKENS + 1, 0)
 
     def test_double_settle_and_unknown_lease(self):
         d = tempfile.mkdtemp()
         led = self._ledger(d)
         lease = led.reserve_call("c", "AAPL", 100, 0)
         led.settle_call("c", "AAPL", lease, 100)
-        with self.assertRaises(r15.AbortCycle):
+        with self.assertRaises(caps.AbortCycle):
             led.settle_call("c", "AAPL", lease, 100)
-        with self.assertRaises(r15.AbortCycle):
+        with self.assertRaises(caps.AbortCycle):
             led.settle_call("c", "AAPL", {"lease_id": "nope"}, 1)
 
     def test_deleting_db_aborts_never_resets(self):
@@ -356,7 +356,7 @@ class LedgerTest(unittest.TestCase):
         led.settle_call("c", "AAPL", lease, 100)
         os.remove(path)  # marker survives: authority deleted
         self.assertTrue(os.path.exists(path + ".init"))
-        with self.assertRaises(r15.AbortCycle) as cm:
+        with self.assertRaises(caps.AbortCycle) as cm:
             budgets.BudgetLedger(path).snapshot("c", "AAPL")
         self.assertIn("authority-deleted",
                       str(cm.exception.snapshot))
@@ -409,7 +409,7 @@ class LedgerTest(unittest.TestCase):
         mut[target] ^= 0xFF
         with open(path, "wb") as _fh:
             _fh.write(bytes(mut))
-        with self.assertRaises(r15.AbortCycle) as cm:
+        with self.assertRaises(caps.AbortCycle) as cm:
             budgets.BudgetLedger(path).snapshot("c0", "AAPL")
         self.assertIn("integrity",
                       str(cm.exception.snapshot))
@@ -423,7 +423,7 @@ class LedgerTest(unittest.TestCase):
         con.execute("ALTER TABLE counters ADD COLUMN evil TEXT")
         con.commit()
         con.close()
-        with self.assertRaises(r15.AbortCycle):
+        with self.assertRaises(caps.AbortCycle):
             budgets.BudgetLedger(path).snapshot("c", "AAPL")
 
     def test_oversize_blocks(self):
@@ -433,7 +433,7 @@ class LedgerTest(unittest.TestCase):
         led.reserve_call("c", "AAPL", 10, 0)
         with open(path, "ab") as fh:
             fh.write(b"x" * (65 << 20))
-        with self.assertRaises(r15.AbortCycle):
+        with self.assertRaises(caps.AbortCycle):
             budgets.BudgetLedger(path).snapshot("c", "AAPL")
 
     def test_crash_resume_reconstructs(self):
@@ -462,7 +462,7 @@ class LedgerTest(unittest.TestCase):
         led = self._ledger(d)
         led.reserve_call("c", "AAPL", 10, 0)
         led.invalidate("c", "AAPL")
-        with self.assertRaises(r15.AbortCycle):
+        with self.assertRaises(caps.AbortCycle):
             led.reserve_call("c", "AAPL", 10, 0)
 
     def test_storage_counts_wal(self):
@@ -789,7 +789,7 @@ class AttributionTest(unittest.TestCase):
 
 
 class SpendTest(unittest.TestCase):
-    def _gov(self, d, pricing=None, stage="G0"):
+    def _gov(self, d, pricing=None, stage="paper"):
         log = os.path.join(d, "spans.jsonl")
         return spend_mod.SpendGovernor(
             log, dict(PRICING) if pricing is None else pricing, stage,
@@ -928,18 +928,18 @@ class SpendTest(unittest.TestCase):
 
     def test_ratio_suspended_without_feed(self):
         d = tempfile.mkdtemp()
-        gov, log = self._gov(d, stage="G2")
+        gov, log = self._gov(d, stage="scaled")
         self.assertEqual(gov.ratio_status()[0], "suspended")
 
     def test_ratio_forces_tier3_after_3_failed_days(self):
         d = tempfile.mkdtemp()
         log = os.path.join(d, "spans.jsonl")
         gov = spend_mod.SpendGovernor(
-            log, dict(PRICING), "G2", state_dir=os.path.join(d, "spend"),
+            log, dict(PRICING), "scaled", state_dir=os.path.join(d, "spend"),
             profit_since=lambda since: 1.0)
         now = int(time.time())
         # Spend inside the 30d ratio window but OUTSIDE the 7d
-        # projection window: projection stays T0, ratio fails daily.
+        # projection window: projection stays tier 0, ratio fails daily.
         self._seed(log, 300.0, now - 10 * 86400)
         self.assertEqual(gov.projection_30d(now), 0.0)
         self.assertEqual(gov.evaluate(now)[0], 0)
@@ -995,7 +995,7 @@ class GateTest(unittest.TestCase):
         d = tempfile.mkdtemp()
         led, log, gov, budget, pricing = _gate(d)
         cfg = _cfg(fake_behavior="hang")
-        with self.assertRaises(r15.AbortCycle) as cm:
+        with self.assertRaises(caps.AbortCycle) as cm:
             workers.run_gated(
                 "generate", "hypothesize", "AAPL", "t1", 1,
                 {"messages": [{"role": "user", "content": "hi"}]},
@@ -1021,7 +1021,7 @@ class GateTest(unittest.TestCase):
         cur.close()
         attribution.reconcile_unknown(log, lease_id, 0.0, "not billed")
         self.assertEqual(gov.decision()[0], "allow")
-        # Spend unblocked; the poisoned CYCLE stays dead (R15), so
+        # Spend unblocked; the poisoned CYCLE stays dead (research caps), so
         # the next call proceeds on a fresh cycle.
         out, _, _, _, _ = _gen_call(d, cycle="t2")
         self.assertEqual(out["text"], "thesis")
@@ -1030,7 +1030,7 @@ class GateTest(unittest.TestCase):
         d = tempfile.mkdtemp()
         led, log, gov, budget, pricing = _gate(d)
         cfg = _cfg(fake_behavior="error")
-        with self.assertRaises(r15.AbortCycle):
+        with self.assertRaises(caps.AbortCycle):
             workers.run_gated(
                 "generate", "hypothesize", "AAPL", "t1", 1,
                 {"messages": [{"role": "user", "content": "hi"}]},
@@ -1049,7 +1049,7 @@ class GateTest(unittest.TestCase):
             dd = tempfile.mkdtemp()
             led, log, gov, budget, pricing = _gate(dd)
             cfg = _cfg(fake_behavior=behavior)
-            with self.assertRaises(r15.AbortCycle):
+            with self.assertRaises(caps.AbortCycle):
                 workers.run_gated(
                     "generate", "hypothesize", "AAPL", "t1", 1,
                     {"messages": [{"role": "user", "content": "hi"}]},
@@ -1067,7 +1067,7 @@ class GateTest(unittest.TestCase):
         d = tempfile.mkdtemp()
         led, log, gov, budget, pricing = _gate(d)
         cfg = _cfg(fake_behavior="huge-usage")
-        with self.assertRaises(r15.AbortCycle) as cm:
+        with self.assertRaises(caps.AbortCycle) as cm:
             workers.run_gated(
                 "generate", "hypothesize", "AAPL", "t1", 1,
                 {"messages": [{"role": "user", "content": "hi"}]},
@@ -1115,7 +1115,7 @@ class GateTest(unittest.TestCase):
         real = attribution.append_span
         with _mock.patch.object(attribution, "append_span",
                                 side_effect=RuntimeError("disk gone")):
-            with self.assertRaises(r15.AbortCycle) as cm:
+            with self.assertRaises(caps.AbortCycle) as cm:
                 workers.run_gated(
                     "generate", "hypothesize", "AAPL", "t1", 1,
                     {"messages": [{"role": "user", "content": "hi"}]},
@@ -1137,7 +1137,7 @@ class GateTest(unittest.TestCase):
     def test_call_bound_exceeds_cycle_refuses(self):
         d = tempfile.mkdtemp()
         led, log, gov, budget, pricing = _gate(d)
-        big = [{"role": "user", "content": "x" * (r15.TOKENS + 1)}]
+        big = [{"role": "user", "content": "x" * (caps.TOKENS + 1)}]
         with self.assertRaises(workers.ConfigBlocked):
             workers.run_gated(
                 "generate", "hypothesize", "AAPL", "t1", 1,
@@ -1203,7 +1203,7 @@ class GateTest(unittest.TestCase):
         growth = 1500 + workers.TOOLS_PER_STEP_MAX * 1500
         n5 = workers._token_need("extract", 2000, 1500, 5)
         self.assertEqual(n5, 5 * 2000 + growth * 5 * 4 // 2 + 5 * 1500)
-        self.assertLess(n5, r15.TOKENS)
+        self.assertLess(n5, caps.TOKENS)
 
 
 class WorkerScanTest(unittest.TestCase):
@@ -1355,7 +1355,7 @@ class GraphTest(unittest.TestCase):
         log = os.path.join(d, "spans.jsonl")
         led = budgets.BudgetLedger(os.path.join(d, "ledger.sqlite3"))
         gov = spend_mod.SpendGovernor(
-            log, dict(PRICING), "G0", state_dir=os.path.join(d, "spend"))
+            log, dict(PRICING), "paper", state_dir=os.path.join(d, "spend"))
         if spend_usd is not None:
             attribution.append_span(log, 1, "seed", "seed",
                                     cycle_id="seed", symbol="AAPL",
@@ -1388,7 +1388,7 @@ class GraphTest(unittest.TestCase):
         def extract(rec, ctx):
             calls["extract"] += 1
             if extract_abort:
-                raise r15.AbortCycle("AAPL", {})
+                raise caps.AbortCycle("AAPL", {})
             ctx["budget"].charge_tool()
             return [dict(rec)]
 
@@ -1610,7 +1610,7 @@ class GraphTest(unittest.TestCase):
     def test_tier1_trims(self):
         d = tempfile.mkdtemp()
         _fixtures(d)
-        # spend 25 in the last 7d -> projection 107/150 = T1.
+        # spend 25 in the last 7d -> projection 107/150 = tier 1.
         app, deps, calls, log, gov = self._app(d, spend_usd=25.0)
         out = _graph().run_cycle(app, ["AAPL", "MSFT"], 1, "t1",
                                  trigger_symbols=("AAPL",))
@@ -1623,7 +1623,7 @@ class GraphTest(unittest.TestCase):
     def test_tier1_suspends_null_extraction(self):
         d = tempfile.mkdtemp()
         mapp, dbp, msha = _fixtures(d)
-        # spend 25 in the last 7d -> T1: the NULL record suspends,
+        # spend 25 in the last 7d -> tier 1: the NULL record suspends,
         # the normal record still flows to a published bundle.
         app, deps, calls, log, gov = self._app(d, spend_usd=25.0,
                                                nulls=True)
@@ -1640,7 +1640,7 @@ class GraphTest(unittest.TestCase):
         d = tempfile.mkdtemp()
         _fixtures(d)
         long250 = "T" * 250
-        # spend 30 in 7d -> projection 128.6/150 = T2.
+        # spend 30 in 7d -> projection 128.6/150 = tier 2.
         app, deps, calls, log, gov = self._app(
             d, script=long250,
             spend_usd=30.0,
@@ -1706,8 +1706,8 @@ class GraphTest(unittest.TestCase):
                 if r[0] == "hypothesize"]
         self.assertEqual(rows, [])
 
-    def test_emit_records_r15_blind(self):
-        # A fail-closed R15 reader error (deleted live counter)
+    def test_emit_records_caps_blind(self):
+        # A fail-closed research caps reader error (deleted live counter)
         # surfaces as blocked evidence in emit — never a silent
         # under-count of the cadence estimate.
         d = tempfile.mkdtemp()
@@ -1718,13 +1718,13 @@ class GraphTest(unittest.TestCase):
         class _BlindBudget(budgets.DurableBudget):
             @property
             def llm(self):
-                raise r15.AbortCycle("c", {})
+                raise caps.AbortCycle("c", {})
         deps["budget_factory"] = (
             lambda cyc, sym: _BlindBudget(led, cyc, sym))
         app = _graph().build_graph(deps)
         out = _graph().run_cycle(app, ["AAPL"], 1, "tem")
         blocked = " ".join(out.get("blocked") or [])
-        self.assertIn("r15-budget-unreadable", blocked)
+        self.assertIn("caps-budget-unreadable", blocked)
 
     @unittest.skipUnless(_HAS_SMOL, "smolagents missing")
     def test_extract_cleanup_failure_reaps_and_blocks(self):

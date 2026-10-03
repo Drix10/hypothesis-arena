@@ -1,4 +1,4 @@
-"""Trial ledger tests (doc 11 §11.0a). Stdlib only."""
+"""Trial ledger tests. Stdlib only."""
 import json
 import os
 import sys
@@ -15,7 +15,7 @@ H = "a" * 64
 def mk(tid="t1", **kw):
     f = dict(trial_id=tid, hypothesis_card_id="hc1", prereg_hash=H,
              family="trend", variant="v0", dataset_hashes=[H],
-             code_hash=H, cost_model_version="cost_v2",
+             code_hash=H, cost_model="costs",
              window="2015..2024", split_scheme="wf", runner="test")
     f.update(kw)
     return f

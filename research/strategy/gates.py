@@ -1,4 +1,4 @@
-"""A-gate and B-gate report generators. Every condition is computed from the
+"""backtest gate and shadow gate report generators. Every condition is computed from the
 supplied series and reported with its value; the verdict is PASS only if all
 conditions pass, and required evidence that is missing fails its condition.
 Sharpe-based conditions use returns in excess of the cash leg. Passing is
@@ -11,10 +11,10 @@ from research.strategy import benchmarks, stats
 DSR_MIN = 0.95
 PBO_MAX = 0.20
 EXCLUDED_EVENT_MAX = 0.05
-B_MIN_SESSIONS = 60
-B_MIN_TRADES = 30
-B_MIN_REBALANCES = 3
-B_COST_RATIO_MAX = 1.5
+SHADOW_MIN_SESSIONS = 60
+SHADOW_MIN_TRADES = 30
+SHADOW_MIN_REBALANCES = 3
+SHADOW_COST_RATIO_MAX = 1.5
 ANNUAL = 252
 
 
@@ -26,11 +26,11 @@ def _c(name, ok, value):
     return {"name": name, "pass": bool(ok), "value": value}
 
 
-def a_gate(ret_1x, ret_2x, cash, passive, n_trials, sr_var, *, seed=0,
+def backtest_gate(ret_1x, ret_2x, cash, passive, n_trials, sr_var, *, seed=0,
            variants_matrix=None, literature=False, tstat=None,
            haircut_ok=None, transfer_ok=None, participation_ok=None,
-           excluded_event_frac=None, is_event_sleeve=False,
-           ai_component=False, paired_no_ai_exists=None, decision=None,
+           excluded_event_frac=None, is_event_strategy=False,
+           model_component=False, paired_no_model_exists=None, decision=None,
            cost_multiple=None):
     """Holdout series in, {'gate','verdict','failed','conditions'} out.
 
@@ -87,20 +87,20 @@ def a_gate(ret_1x, ret_2x, cash, passive, n_trials, sr_var, *, seed=0,
     conds.append(_c("transferability", transfer_ok is True, transfer_ok))
     conds.append(_c("participation_caps", participation_ok is True,
                     participation_ok))
-    if is_event_sleeve:
+    if is_event_strategy:
         conds.append(_c("excluded_events_le_5pct",
                         excluded_event_frac is not None
                         and excluded_event_frac <= EXCLUDED_EVENT_MAX,
                         excluded_event_frac))
-    if ai_component:
-        conds.append(_c("paired_no_ai_variant_exists",
-                        paired_no_ai_exists is True, paired_no_ai_exists))
+    if model_component:
+        conds.append(_c("paired_no_model_variant_exists",
+                        paired_no_model_exists is True, paired_no_model_exists))
     failed = [c["name"] for c in conds if not c["pass"]]
-    return {"gate": "A", "verdict": "PASS" if not failed else "FAIL",
+    return {"gate": "backtest", "verdict": "PASS" if not failed else "FAIL",
             "failed": failed, "conditions": conds}
 
 
-def b_gate(kind, sessions, trades, rebalances, shadow_ret, band_lo, band_hi,
+def shadow_gate(kind, sessions, trades, rebalances, shadow_ret, band_lo, band_hi,
            modeled_cost_usd, live_cost_est_usd, unexplained_anomalies):
     """kind: 'daily' or 'monthly'. Tracking = shadow total return inside
     [band_lo, band_hi] (5th/95th pct of equal-length bootstrapped
@@ -109,11 +109,11 @@ def b_gate(kind, sessions, trades, rebalances, shadow_ret, band_lo, band_hi,
         raise ValueError("kind")
     conds = []
     if kind == "daily":
-        conds.append(_c("min_sessions_60", sessions >= B_MIN_SESSIONS,
+        conds.append(_c("min_sessions_60", sessions >= SHADOW_MIN_SESSIONS,
                         sessions))
-        conds.append(_c("min_trades_30", trades >= B_MIN_TRADES, trades))
+        conds.append(_c("min_trades_30", trades >= SHADOW_MIN_TRADES, trades))
     else:
-        conds.append(_c("min_rebalances_3", rebalances >= B_MIN_REBALANCES,
+        conds.append(_c("min_rebalances_3", rebalances >= SHADOW_MIN_REBALANCES,
                         rebalances))
     tot = 1.0
     for r in shadow_ret:
@@ -126,12 +126,12 @@ def b_gate(kind, sessions, trades, rebalances, shadow_ret, band_lo, band_hi,
              and modeled_cost_usd and modeled_cost_usd > 0 else None)
     conds.append(_c("modeled_cost_within_1.5x_live",
                     ratio is not None
-                    and 1.0 / B_COST_RATIO_MAX <= ratio <= B_COST_RATIO_MAX,
+                    and 1.0 / SHADOW_COST_RATIO_MAX <= ratio <= SHADOW_COST_RATIO_MAX,
                     ratio))
     conds.append(_c("zero_unexplained_anomalies",
                     unexplained_anomalies == 0, unexplained_anomalies))
     failed = [c["name"] for c in conds if not c["pass"]]
-    return {"gate": "B", "verdict": "PASS" if not failed else "FAIL",
+    return {"gate": "shadow", "verdict": "PASS" if not failed else "FAIL",
             "failed": failed, "conditions": conds}
 
 

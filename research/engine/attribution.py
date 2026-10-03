@@ -1,19 +1,18 @@
-"""D9 spend/token attribution ledger (doc 08 sec. 8.2 + doc 10 sec. 10.4).
+"""Spend and token attribution ledger.
 
 One durable row per actual model invocation, written by the parent-side
-gate (workers.run_gated) that also reserves R15 budget.
+gate (workers.run_gated) that also reserves the research-caps budget.
 
 Durability: SQLite is authoritative (UNIQUE(span_id) gives atomic
 exactly-once across processes). The JSONL mirror beside it is a
 best-effort Langfuse tail, appended only when the ledger actually inserts
 (rowcount == 1); sync_mirror() regenerates it atomically from the ledger.
 
-Row schema (doc-10 spend taxonomy + outcome + unknown flag):
+Row schema (spend taxonomy, outcome, unknown flag):
   ts, research_epoch, cycle_id, stage, symbol, node, model,
   prompt_tokens, completion_tokens, usd, category, outcome,
   is_unknown, span_id.
-category is the doc-10 set {decision, research, experiment,
-observability}; error/timeout/blocked live in `outcome`
+category is one of {research, experiment, observability}; error/timeout/blocked live in `outcome`
 {success, error, timeout, blocked}. is_unknown=1 marks an ambiguous
 attempt (may have been billed): its usd is the full pre-call reservation,
 never $0, and it blocks future spend until a supervisor reconciles it
@@ -57,7 +56,7 @@ import time
 
 from . import locks
 
-CATEGORIES = ("decision", "research", "experiment", "observability")
+CATEGORIES = ("research", "experiment", "observability")
 OUTCOMES = ("success", "error", "timeout", "blocked")
 
 SCHEMA_VERSION = 3
@@ -88,7 +87,7 @@ _SPANS_DDL = (
     "1000000000000), "
     "CHECK (length(span_id) BETWEEN 1 AND 128), "
     "CHECK (category IN "
-    "('decision','research','experiment','observability')), "
+    "('research','experiment','observability')), "
     "CHECK (outcome IN ('success','error','timeout','blocked')), "
     "CHECK (is_unknown IN (0, 1)))")
 _UNKNOWN_DDL = (

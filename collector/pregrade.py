@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""P1.4 pre-grader: triages TRIGGER_CANDIDATEs so humans review only the
-ambiguous ones. Deterministic stdlib heuristics, read-only. rules_v1 verdicts
+"""pre-grader: triages TRIGGER_CANDIDATEs so humans review only the
+ambiguous ones. Deterministic stdlib heuristics, read-only. rules verdicts
 are never changed here; this only sorts the review queue.
 
   auto_genuine  header-parsed items (or FOMC policy text), source timestamp,
                 fresh           -> almost certainly on-topic
-  auto_noise    candidate-shaped rows that should not exist under rules_v1
+  auto_noise    candidate-shaped rows that should not exist under rules
                 (estimated timestamp, aged, no parsable items) -> counted as
                 noise AND filed as observed defects
   ambiguous     everything else -> human review list

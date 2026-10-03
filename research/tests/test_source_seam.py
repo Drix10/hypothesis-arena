@@ -1,5 +1,5 @@
-"""Production source->graph seam tests: harvest -> frozen collector
-authority -> resolver -> publisher leg -> frozen ctx_read, with fake
+"""Production source->graph seam tests: harvest -> fixed collector
+authority -> resolver -> publisher leg -> fixed ctx_read, with fake
 transports, stepped clocks, and the REAL lineage DB harvest writes
 (never hand-seeded rows).
 
@@ -77,7 +77,7 @@ class FakeClock:
     """Stepped mono (pacing waits advance it); wall time frozen.
 
     Splitting the two is deliberate: adapter pacing runs on mono,
-    while poll/record timestamps read the frozen wall clock — so a
+    while poll/record timestamps read the fixed wall clock — so a
     repeat poll provably reuses the same instant (history test)."""
 
     def __init__(self, t=NOW):
@@ -159,7 +159,7 @@ def ctx_accept(feats, hist, lineage_db):
     with open(MAP_PATH, "rb") as fh:
         map_sha = hashlib.sha256(fh.read()).hexdigest()
     srcs = {f["source_id"] for f in feats} | set(hist or {})
-    wm = {"entity_map_version": "entity-v1",
+    wm = {"entity_map_version": "entity-map",
           "entity_map_sha256": map_sha,
           "sources": {s: {"last_observation_at": int(NOW) - 300,
                            "cursor": "seam-test"} for s in srcs}}
@@ -246,7 +246,7 @@ class TestSourceSeam(unittest.TestCase):
         self.assertEqual(feats[0]["ttl_s"], 64800)
 
     def test_hash_is_authority_hash(self):
-        # The emitted canonical_hash is EXACTLY the frozen authority's
+        # The emitted canonical_hash is EXACTLY the fixed authority's
         # stored hash for that row (same table ctx_read checks) — not
         # a seam-local digest of adapter JSON.
         seam, _db = make_seam()
@@ -268,7 +268,7 @@ class TestSourceSeam(unittest.TestCase):
 
     def test_publisher_leg_unit(self):
         # Publisher-leg unit (NOT the full chain): fused candidates
-        # through the real publish.resolve_emit into frozen ctx_read.
+        # through the real publish.resolve_emit into fixed ctx_read.
         # The one true end-to-end lives in test_seam_graph.py.
         seam, _db = make_seam()
         recs, stamps, hist = seam.harvest(["AAPL", "SPY"], 3)
@@ -433,9 +433,9 @@ class TestSourceSeam(unittest.TestCase):
         self.assertTrue(stamps["treasury_auctions"]["ok"])
         self.assertTrue(stamps["bls_empsit"]["ok"])
 
-    def test_edgar_skipped_forex_only(self):
+    def test_edgar_skipped_without_filer_symbols(self):
         seam, _db = make_seam()
-        recs, stamps, hist = seam.harvest(["EURUSD"], 5)
+        recs, stamps, hist = seam.harvest(["TLT"], 5)
         self.assertNotIn("edgar_8k", stamps)
         self.assertIn("treasury_auctions", stamps)
 
@@ -718,7 +718,7 @@ class TestSourceSeam(unittest.TestCase):
         finally:
             con.close()
         self.assertGreater(n[0], 0)
-        # Default resolution matches the frozen collector's own rule.
+        # Default resolution matches the fixed collector's own rule.
         self.assertEqual(
             source_seam.default_lineage_db_path({}),
             os.path.join(source_seam._repo_root(), "data",

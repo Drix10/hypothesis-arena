@@ -4,7 +4,7 @@ first, buys from settled cash only, whole shares. Equity is marked at each
 close and idle cash earns nothing. No trading on the last session."""
 import math
 
-from research.strategy import costs_v2 as C
+from research.strategy import costs as C
 from research.strategy.settlement import CashLedger
 
 
@@ -113,7 +113,7 @@ def _rebalance(led, prices, d, pending, spread_bps, mult, vol, min_usd,
             if qty <= 0:
                 continue
             bid, ask = quote(s)
-            f = C.fill_v2("SELL", bid, ask, qty, mult,
+            f = C.fill("SELL", bid, ask, qty, mult,
                           (vol or {}).get(s))
             unfinished |= f["filled"] < qty
             if f["filled"] > 0:
@@ -132,7 +132,7 @@ def _rebalance(led, prices, d, pending, spread_bps, mult, vol, min_usd,
         qty = int(min(diff, led.settled) / est)
         unfinished |= qty < desired
         while qty > 0:
-            f = C.fill_v2("BUY", bid, ask, qty, mult, (vol or {}).get(s))
+            f = C.fill("BUY", bid, ask, qty, mult, (vol or {}).get(s))
             if f["filled"] == 0:
                 unfinished = True
                 break

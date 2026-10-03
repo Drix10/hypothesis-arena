@@ -1,7 +1,7 @@
-"""Benchmark set (doc 12 §12.6). Same calendar, same cost_v2, daily returns.
+"""Benchmark set. Same calendar, same cost_v2, daily returns.
 
 Pure functions over the portfolio engine and plain return lists. The
-caller supplies the sleeve's own returns; the "same sleeve without its AI
+caller supplies the strategy's own returns; the "same strategy without its AI
 component" and `baseline_v1` reproduction are paired runs the caller
 registers in the trial ledger (they are not synthesized here).
 """
@@ -44,29 +44,29 @@ def sixty_forty(sessions, prices, equity="SPY", bond="IEF", **kw):
     return portfolio.run(sessions, prices, fn, **kw)
 
 
-def vol_match(sleeve, passive):
+def vol_match(strategy, passive):
     """De-risk whichever series is riskier (no leverage; scale <= 1) so
     both have the same realized volatility; the remainder sits in cash at
-    0 return. Returns (sleeve_scaled, passive_scaled)."""
-    if len(sleeve) != len(passive):
+    0 return. Returns (strategy_scaled, passive_scaled)."""
+    if len(strategy) != len(passive):
         raise BenchmarkError("calendar-mismatch")
-    a, b = stats.stdev(sleeve), stats.stdev(passive)
+    a, b = stats.stdev(strategy), stats.stdev(passive)
     if a == 0.0 or b == 0.0:
         raise BenchmarkError("zero-volatility")
     if a >= b:
         k = b / a
-        return [x * k for x in sleeve], list(passive)
+        return [x * k for x in strategy], list(passive)
     k = a / b
-    return list(sleeve), [x * k for x in passive]
+    return list(strategy), [x * k for x in passive]
 
 
-def compare(sleeve, benches, ann=252):
-    """Net Sharpe of the sleeve and of each benchmark + excess per bench."""
-    out = {"sleeve_sharpe": stats.sharpe(sleeve, ann)}
+def compare(strategy, benches, ann=252):
+    """Net Sharpe of the strategy and of each benchmark + excess per bench."""
+    out = {"strategy_sharpe": stats.sharpe(strategy, ann)}
     for name, r in benches.items():
-        if len(r) != len(sleeve):
+        if len(r) != len(strategy):
             raise BenchmarkError("calendar-mismatch:" + name)
         out[name] = {"sharpe": stats.sharpe(r, ann),
                      "mean_daily_excess": stats.mean(
-                         [x - y for x, y in zip(sleeve, r)])}
+                         [x - y for x, y in zip(strategy, r)])}
     return out

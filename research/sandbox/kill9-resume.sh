@@ -1,5 +1,5 @@
 #!/bin/bash
-# kill9-resume.sh — Phase-D deployment box 8 (§8.6 kill + resume).
+# kill9-resume.sh — kill -9 and resume probe.
 #
 # kill -9 during a graph run, then resume on the same thread:
 #  1. worker runs epochs 1..40 (real 6-node graph, fake models, SQLite

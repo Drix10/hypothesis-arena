@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P1.3 audit: machine-readable baseline report for a signals sample.
+"""audit: machine-readable report for a signals sample.
 
 Runs the pipeline against a scratch DB (canonical.db untouched) and reports:
 total / unique / duplicates / revisions / malformed / stale /

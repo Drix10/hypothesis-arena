@@ -1,6 +1,6 @@
-"""Register the forward-shadow program in the global trial ledger (doc 11
-0a: every evaluation appends a row BEFORE results are shown; N comes only from
-the ledger).
+"""Register the forward-shadow program in the global trial ledger (every
+evaluation appends a row BEFORE results are shown; N comes only from the
+ledger, plan/validation.md).
 
     python3 ops/forward_register.py <dir>
 
@@ -8,16 +8,16 @@ Appends ONE `open` trial row per forward shadow ledger to
 research/ledger/trials.jsonl through research.strategy.ledger.TrialLedger
 (hash chain verified first, and against research/ledger/checkpoint.json when it
 exists; the checkpoint is rewritten after an append). Today that is
-core_passive_v1; a sleeve that passes its A-gate adds its entry in entries().
+passive_core; a strategy that passes its backtest gate adds its entry in entries().
 
 Benchmarks (cash, SPY) are comparators and are NOT trials. Every row:
-hypothesis_card_id = experiment id `forward_shadow_2026q4`, cost_v2, window
+hypothesis_card_id = experiment id `forward_shadow`, the cost model, window
 start 2026-09-30 (forward, open end), split scheme `forward_only`, dataset =
-SIP daily adjusted bars, prereg_hash = hash of the sleeve's spec.
+SIP daily adjusted bars, prereg_hash = hash of the strategy's spec.
 
 Idempotent per (ledger id, spec hash): the trial id embeds both, an existing
 open row is never re-appended, so a second run appends nothing. Changing a
-sleeve's spec changes its hash and opens a NEW trial (N counts it). Rows are
+strategy's spec changes its hash and opens a NEW trial (N counts it). Rows are
 left open; the evaluator closes them at checkpoints, this module never
 closes a trial or invents a verdict.
 
@@ -37,19 +37,19 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from research.strategy import ledger
 
-EXPERIMENT = "forward_shadow_2026q4"
+EXPERIMENT = "forward_shadow"
 WINDOW = {"start": "2026-09-30", "end": "open", "forward_only": True}
 SPLIT_SCHEME = "forward_only"
-COST_MODEL = "cost_v2"
+COST_MODEL = "costs"
 RUNNER = "ops.forward_register"
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 LEDGER = os.path.join(ROOT, "research", "ledger", "trials.jsonl")
 CHECKPOINT = os.path.join(ROOT, "research", "ledger", "checkpoint.json")
-CORE_SPEC = ("core_passive_v1: 60/40 VTI/IEF buy and hold, no rebalance; "
-             "SIP daily adjusted; cost_v2; forward from 2026-09-30")
+CORE_SPEC = ("passive_core: 60/40 VTI/IEF buy and hold, no rebalance; "
+             "SIP daily adjusted; costs; forward from 2026-09-30")
 SIP_DATASET = "alpaca_sip:bars:1Day:adjustment=all:forward"
 CODE = ("ops/forward_ledgers.py", "research/strategy/portfolio.py",
-        "research/strategy/costs_v2.py", "research/strategy/settlement.py")
+        "research/strategy/costs.py", "research/strategy/settlement.py")
 RECEIPT = "forward_register.json"
 
 
@@ -69,7 +69,7 @@ def entries():
     """Every forward ledger as a dict: ledger_id, family, variant, spec_hash,
     datasets, trial_id."""
     sip = [_sha(SIP_DATASET)]
-    out = [{"ledger_id": "core_passive_v1", "family": "core_passive",
+    out = [{"ledger_id": "passive_core", "family": "passive_core",
             "variant": "buy_and_hold", "spec_hash": _sha(CORE_SPEC),
             "datasets": sip}]
     for e in out:
@@ -83,7 +83,7 @@ def _late(d, lids):
     out = []
     for lid in lids:
         try:
-            with open(os.path.join(d, "sleeves", lid + ".jsonl")) as f:
+            with open(os.path.join(d, "ledgers", lid + ".jsonl")) as f:
                 if any(ln.strip() for ln in f):
                     out.append(lid)
         except OSError:
@@ -112,7 +112,7 @@ def register(d, ledger_path=None, checkpoint_path=None):
                 trial_id=e["trial_id"], hypothesis_card_id=EXPERIMENT,
                 prereg_hash=e["spec_hash"], family=e["family"],
                 variant=e["variant"], dataset_hashes=e["datasets"],
-                code_hash=ch, cost_model_version=COST_MODEL,
+                code_hash=ch, cost_model=COST_MODEL,
                 window=dict(WINDOW), split_scheme=SPLIT_SCHEME,
                 runner=RUNNER)
         except ledger.LedgerError as ex:

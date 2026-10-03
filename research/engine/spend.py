@@ -1,7 +1,7 @@
-"""Research spend governor (doc 10, stdlib only).
+"""Research spend governor.
 
-R15 caps runaway loops; this module caps money. Absolute stage caps per
-30 days: G0/G1 $150, G2 $400, G3 $1000.
+The research caps limit runaway loops; this module caps money. Absolute caps per
+30 days: paper and tiny $150, scaled $400, full $1000.
 
 Tier input is the trailing-7-day run rate extrapolated to 30 days (not the
 trailing-30d cumulative), evaluated at most hourly. Tier transitions are
@@ -13,17 +13,16 @@ threshold. First install starts at Tier 0, but missing/corrupt/future-dated
 state with history, or a stage/pricing change without a fresh evaluation,
 raises StateUnavailable (callers deny) rather than defaulting to Tier 0.
 
-Tier effects (doc 10 §10.4; the graph implements them, this module reports
-them):
-  T0 normal: full research depth.
-  T1 trim (>=60%): research cycle interval doubled (TTL 30->60min,
+Tier effects:
+  Tier 0 normal: full research depth.
+  Tier 1 trim (>=60%): research cycle interval doubled (TTL 30->60min,
     harvest 5->10min), critique on TRIGGER-class symbols only, NULL-class
     source extraction suspended.
-  T2 cheap (>=80%): non-JEV LLM work on the cheapest configured model,
+  Tier 2 cheap (>=80%): model work on the cheapest configured model,
     hypothesize prose capped at 200 chars, watchlist cut to the 2
     best-calibrated symbols, SOFT kill (no new entries).
-  T3 stop (>=100%, or ratio failed 3 consecutive days at G2/G3): research
-    LLM stops (deny). MEDIUM-kill signalling is the graph's duty; this
+  Tier 3 stop (>=100%, or ratio failed 3 consecutive days at the scaled or
+    full stage): research model calls stop (deny). MEDIUM-kill signalling is the graph's duty; this
     module reports the tier.
 
 Pre-call enforcement: reserve_usd() holds worst-case dollars before the
@@ -47,12 +46,12 @@ Spend input is the attribution ledger. A genuinely new ledger starts at
 zero; a deleted authority (marker without DB) raises LedgerUnavailable and
 the governor denies.
 
-Ratio cap (G2/G3): rolling-30d spend <= 20% of trailing-90d realized net
+Ratio cap (scaled and full stages): rolling-30d spend <= 20% of trailing-90d realized net
 profit; undefined (suspended, not failed) when profit <= $0 or no profit
 ledger is wired. Three distinct consecutive failed UTC days force Tier 3
 (repeated hourly failures on one day count once; an ok or suspended day
 breaks the streak). Without a profit feed every day is suspended and the
-absolute cap alone governs (G0/G1 have no ratio cap; the suspension flag is
+absolute cap alone governs (the paper and tiny stages have no ratio cap; the suspension flag is
 report-only there).
 """
 import json
@@ -64,7 +63,7 @@ from . import attribution
 from . import locks
 from . import workers as _workers
 
-STAGE_CAPS_USD = {"G0": 150.0, "G1": 150.0, "G2": 400.0, "G3": 1000.0}
+STAGE_CAPS_USD = {"paper": 150.0, "tiny": 150.0, "scaled": 400.0, "full": 1000.0}
 # tier entry thresholds (fraction of cap, on the projection)
 TIER1_FRAC = 0.60
 TIER2_FRAC = 0.80
@@ -75,7 +74,7 @@ PROJECTION_WINDOW_S = 7 * 86400
 PROJECTION_HORIZON_DAYS = 30
 TIER_EVAL_S = 3600
 ANTI_FLAP_HOURS = 6
-# Ratio inputs (G2/G3): 30d spend vs 90d profit; 3 failed days -> T3.
+# Ratio inputs (scaled and full stages): 30d spend vs 90d profit; 3 failed days -> tier 3.
 RATIO_WINDOW_S = 30 * 86400
 PROFIT_WINDOW_S = 90 * 86400
 RATIO_MAX = 0.20
@@ -89,7 +88,7 @@ RATIO_JOURNAL_NAME = "ratio_journal.jsonl"
 # (ratio_head). Rewriting a decided day (failed -> ok) breaks the chain or
 # the anchor, so valid-JSON tampering with Tier-3 history denies. The streak
 # rule itself is unchanged.
-RATIO_GENESIS_PREV = "ratio-genesis-v1"
+RATIO_GENESIS_PREV = "ratio-genesis"
 STATE_MAX_BYTES = 4096
 JOURNAL_TAIL_BYTES = 65536  # bounded crash-recovery scan
 TIER_LOCK_NAME = "tier.lock"  # one lock file for state + journals
@@ -130,7 +129,7 @@ class StateUnavailable(Exception):
 class SpendGovernor:
     """Pre-call dollar gate + hourly tier evaluator."""
 
-    def __init__(self, log_path, pricing, stage="G0", state_dir=None,
+    def __init__(self, log_path, pricing, stage="paper", state_dir=None,
                  profit_since=None):
         if not isinstance(pricing, dict) or not pricing:
             raise _workers.ConfigBlocked(
@@ -169,7 +168,7 @@ class SpendGovernor:
                 "no price for model %r" % model_id)
 
     def cheapest_model(self):
-        """The T2 model: minimum worst-leg price; ties break by model_id sort."""
+        """The tier-2 model: minimum worst-leg price; ties break by model_id sort."""
         return sorted(self.pricing.items(),
                       key=lambda kv: (kv[1], kv[0]))[0][0]
 
@@ -302,7 +301,7 @@ class SpendGovernor:
             return self._initial_state()
         except OSError:
             # present-but-unreadable (permissions, I/O) is not a fresh install: tier
-            # state gates T1/T2/T3, so an uncertain state denies
+            # state gates tiers 1-3, so an uncertain state denies
             raise StateUnavailable("tier-state-unreadable")
         except ValueError:
             raise StateUnavailable("tier-state-corrupt")
@@ -343,7 +342,7 @@ class SpendGovernor:
         tier). With now given, no row timestamp or embedded evaluated_at may lie
         beyond the clock-skew allowance, and a snapshot may not postdate its row.
         This proves the rows could only have come from the governor's own
-        transition rule: a forged T3->T0 row cannot both continue the chain and
+        transition rule: a forged tier 3 to tier 0 row cannot both continue the chain and
         match the state. Legacy (rev-less) rows are excluded (see the legacy
         recovery path). windowed: the bounded tail scan cut older rows, so the
         first visible revisioned row need not start at Tier 0 (revs, from/to
@@ -563,7 +562,7 @@ class SpendGovernor:
             proj = self.projection_30d(now)
         except attribution.LedgerUnavailable:
             return st["tier"], st["projection"]
-        # ratio-forced Tier 3 (G2/G3 with a wired profit feed)
+        # ratio-forced Tier 3 (scaled and full stages with a wired profit feed)
         if self._ratio_forces_stop(now, st, locked=locked):
             new_tier = 3
         else:
@@ -599,14 +598,14 @@ class SpendGovernor:
             pass
         return st["tier"], proj
 
-    # ratio (G2/G3; suspended without a profit feed)
+    # ratio (scaled and full stages; suspended without a profit feed)
     def ratio_status(self, now=None):
         """(state, detail): ok | failed | suspended. Suspended (no profit feed or
         non-positive trailing profit) is report-only; the absolute cap governs.
         Never raises on missing data. Type-exact numerics: bool/NaN/infinite profit
         or spend cannot pass or poison the ratio."""
         now = int(time.time()) if now is None else now
-        if self.stage not in ("G2", "G3") or self.profit_since is None:
+        if self.stage not in ("scaled", "full") or self.profit_since is None:
             return "suspended", "no-profit-feed"
         try:
             profit = self.profit_since(now - PROFIT_WINDOW_S)
@@ -940,7 +939,7 @@ class SpendGovernor:
         return verdict, reason
 
     def check_research_tier(self, entry_tier):
-        """Early refusal of a Tier-3 snapshot before any R15 reservation (clean
+        """Early refusal of a Tier-3 snapshot before any research caps reservation (clean
         SpendRefused, provider untouched). Pre-filter only: the authority is the
         durable tier re-read inside reserve_research_call, atomically with the
         dollar hold, which also refuses stale snapshots and callers without one

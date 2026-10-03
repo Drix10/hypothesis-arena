@@ -7,15 +7,14 @@ variables always win over `.env` values.
                            Missing -> MISSING_REQUIRED_CONFIG, fail fast.
   OPTIONAL  FRED_API_KEY   FRED collector. Missing -> SKIPPED_CONFIG heartbeat,
                            never a failure.
-  OPTIONAL  OPENROUTER_API_KEY  JEV sidecar / live provider. Missing ->
-                           jev_error:no-key HOLD, never a crash.
+  OPTIONAL  OPENROUTER_API_KEY  Research model provider. Missing -> live
+                           paths BLOCKED (fail-closed), never a crash.
   OPTIONAL  RESEARCH_MODEL_ID   Live research model slug. Missing ->
                            live paths BLOCKED (fail-closed), never a default.
 
 `.env` lives at the repo root, is gitignored, and is never committed.
-`.env.example` is the only committed template. OANDA keys do not
-exist as consumed config yet and must not be added until a code path
-actually consumes them.
+`.env.example` is the only committed template. A key is added only when a
+code path consumes it.
 """
 import os
 
@@ -24,7 +23,7 @@ REQUIRED = {
 }
 OPTIONAL = {
     "FRED_API_KEY": "FRED collector; absent means SKIPPED_CONFIG, not failure",
-    "OPENROUTER_API_KEY": "JEV sidecar; absent means jev_error:no-key HOLD, never a crash",
+    "OPENROUTER_API_KEY": "research model provider; absent BLOCKS live paths, never a default",
     "RESEARCH_MODEL_ID": "live research model slug; absent BLOCKS live paths, never a default",
     "BEA_USER_ID": "BEA collector; absent means SKIPPED_CONFIG, not failure",
     "ALPACA_KEY_ID": "Alpaca paper; absent means SKIPPED_CONFIG, not failure",

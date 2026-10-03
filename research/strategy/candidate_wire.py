@@ -1,16 +1,27 @@
-"""Writer for candidates.jsonl: the c1 wire record the kernel gate reads.
+"""Writer for candidates.jsonl: the candidate record the kernel gate reads.
 
-Every CID-recipe field is emitted as the exact string the CID was hashed
-over, prices at two decimals, so the kernel recomputes the same digest."""
+Every identity field is emitted as the exact string the id was hashed over,
+prices at two decimals, so the kernel recomputes the same digest."""
+import hashlib
 import json
 
-from research.strategy.candidate import _ID_FIELDS, candidate_id
+SCHEMA = "c1"  # the kernel gate rejects any other schema
 
-SCHEMA = "c1"
+# Identity recipe: pipe-joined, in this exact order. The kernel recomputes it
+# field for field.
+ID_FIELDS = ("strategy_version", "symbol", "snapshot_ts_ns", "proposed_side",
+             "proposed_family", "entry_px", "stop_px", "tp_px",
+             "time_exit_ns", "exit_profile_version", "cost_model_version",
+             "feature_revision")
 
 
 class WireError(ValueError):
     pass
+
+
+def candidate_id(**kw) -> str:
+    parts = [str(kw[f]) for f in ID_FIELDS]
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
 
 
 def _px(x):
@@ -19,7 +30,7 @@ def _px(x):
     return "%.2f" % x
 
 
-def wire_record(sleeve, symbol, snapshot_ts_ns, entry, stop, tp,
+def wire_record(strategy, symbol, snapshot_ts_ns, entry, stop, tp,
                 time_exit_ns=0, side="BUY", family="trend",
                 exit_profile="exit_trend_v1", cost_model="cost_v2",
                 feature_revision="f1", created_ns=None):
@@ -33,7 +44,7 @@ def wire_record(sleeve, symbol, snapshot_ts_ns, entry, stop, tp,
         raise WireError("SELL needs tp < entry < stop")
     if snapshot_ts_ns < 0 or time_exit_ns < 0:
         raise WireError("timestamps")
-    f = {"strategy_version": sleeve, "symbol": symbol,
+    f = {"strategy_version": strategy, "symbol": symbol,
          "snapshot_ts_ns": str(int(snapshot_ts_ns)), "proposed_side": side,
          "proposed_family": family, "entry_px": e, "stop_px": s, "tp_px": t,
          "time_exit_ns": str(int(time_exit_ns)),
@@ -41,7 +52,7 @@ def wire_record(sleeve, symbol, snapshot_ts_ns, entry, stop, tp,
          "cost_model_version": cost_model, "feature_revision": feature_revision}
     if any("|" in v for v in f.values()):
         raise WireError("separator in field")
-    cand = dict(f, cid=candidate_id(**{k: f[k] for k in _ID_FIELDS}))
+    cand = dict(f, cid=candidate_id(**{k: f[k] for k in ID_FIELDS}))
     created = snapshot_ts_ns if created_ns is None else created_ns
     return {"schema": SCHEMA, "created_ns": str(int(created)),
             "candidate": cand}

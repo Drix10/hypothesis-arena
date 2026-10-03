@@ -1,13 +1,13 @@
-"""D10 cadence + cost gating (doc 08 sec. 8.3a, stdlib only).
+"""Cadence and cost gating.
 
 - harvest/extract/fuse run every 5-min cycle (pure I/O + code, ~free).
 - hypothesize/critique re-run per symbol only when (a) a new
   TRIGGER-eligible feature landed since the last thesis, or (b) the
   thesis is older than the 30-min staleness TTL.
-- Tier-1 throttle (doc 10 §10.4 "research cycle interval doubled"):
+- Tier-1 throttle:
   TTL 30 -> 60 min, harvest cadence 5 -> 10 min. Parameter change only.
 - Steady-state estimate recorder: compares the measured LLM-call rate
-  with the 8.3a estimate (20/hour for 5 quiet symbols). The emit node
+  with the planning estimate (20/hour for 5 quiet symbols). The emit node
   feeds record_cycle() with per-cycle budget totals; durable attribution
   rows remain the audit source.
 
@@ -18,7 +18,7 @@ looks stale.
 Persistence: unique temp + fsync + dir fsync, writers serialized under
 the inter-process lock. Load is size-capped and shape-validated;
 oversized or corrupt state starts empty (an extra refresh is bounded
-by R15).
+by the research caps).
 """
 import os
 
@@ -28,7 +28,7 @@ HARVEST_MIN = 5
 THESIS_TTL_MIN = 30
 THROTTLED_HARVEST_MIN = 10
 THROTTLED_THESIS_TTL_MIN = 60
-# §8.3a steady-state floor: 5 symbols x 2 refreshes/h x 2 calls.
+# steady-state floor: 5 symbols x 2 refreshes/h x 2 calls.
 ESTIMATE_BASE_CALLS_PER_H = 20
 
 STATE_MAX_BYTES = 65536

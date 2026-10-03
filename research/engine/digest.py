@@ -1,4 +1,4 @@
-"""Durable research-digest writer (doc 08 topology, stdlib only).
+"""Durable research-digest writer.
 
 hypothesize writes a <=500-character thesis and critique writes its
 advisory metadata into research_digest.jsonl, separate from

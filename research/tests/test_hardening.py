@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(ROOT, ".."))  # repo root: collector/
 sys.path.insert(0, ROOT)  # research/: engine/
 
 import test_engine as T
-from engine import attribution, budgets, locks, r15
+from engine import attribution, budgets, locks, caps
 from engine import spend as spend_mod
 from engine import workers
 
@@ -56,7 +56,7 @@ def _race_gated_child(args):
     pricing = {"racer": 5.0}
     led = budgets.BudgetLedger(os.path.join(d, "ledger.sqlite3"))
     gov = spend_mod.SpendGovernor(
-        log, pricing, "G0", state_dir=os.path.join(d, "spend"))
+        log, pricing, "paper", state_dir=os.path.join(d, "spend"))
     budget = budgets.DurableBudget(led, "race-%s" % tag, "AAPL")
     cfg = {"model_id": "racer",
            "egress_proxy": "http://proxy.invalid:8080",
@@ -149,7 +149,7 @@ class AtomicReserveTest(unittest.TestCase):
         d = tempfile.mkdtemp()
         log = os.path.join(d, "spans.jsonl")
         gov = spend_mod.SpendGovernor(
-            log, {"m": 1.0}, "G0",
+            log, {"m": 1.0}, "paper",
             state_dir=os.path.join(d, "spend"))
         now = int(time.time())
         gov.reserve_usd(0.10, "E", now)
@@ -167,7 +167,7 @@ class AtomicReserveTest(unittest.TestCase):
         d = tempfile.mkdtemp()
         log = os.path.join(d, "spans.jsonl")
         gov = spend_mod.SpendGovernor(
-            log, {"m": 1.0}, "G0",
+            log, {"m": 1.0}, "paper",
             state_dir=os.path.join(d, "spend"))
         with self.assertRaises(workers.ConfigBlocked):
             gov.price_for("unpriced-model")
@@ -199,7 +199,7 @@ class AtomicReserveTest(unittest.TestCase):
 
     def test_race_loser_never_touches_provider(self):
         # End to end through run_gated: two concurrent $90 attempts
-        # against the $150 G0 cap. Exactly one provider build happens;
+        # against the $150 paper cap. Exactly one provider build happens;
         # the loser is refused pre-spawn (no touch file, no hold).
         d = tempfile.mkdtemp()
         log = os.path.join(d, "spans.jsonl")
@@ -289,7 +289,7 @@ class IdentityTest(unittest.TestCase):
                                 completion_tokens=5, usd=usd,
                                 span_id="raise", ts=now - 60)
         gov2 = T.spend_mod.SpendGovernor(
-            log, dict(T.PRICING), "G0",
+            log, dict(T.PRICING), "paper",
             state_dir=os.path.join(d, "spend"))
         return gov, gov2.evaluate(now)[0], snap, budget, log
 
@@ -469,7 +469,7 @@ class UnknownRecoveryTest(unittest.TestCase):
             attribution.reconcile_unknown(log, "ghost", 1.0, "x")
 
     def test_zero_price_timeout_proceeds(self):
-        # A free model that hangs: AbortCycle + R15 poison, but no
+        # A free model that hangs: AbortCycle + research caps poison, but no
         # unreconcilable dollar block — the next fresh cycle runs.
         d = tempfile.mkdtemp()
         led, log, gov, budget, _p = T._gate(
@@ -477,7 +477,7 @@ class UnknownRecoveryTest(unittest.TestCase):
         cfg = {"model_id": "free",
                "egress_proxy": "http://proxy.invalid:8080",
                "fake_behavior": "hang"}
-        with self.assertRaises(r15.AbortCycle):
+        with self.assertRaises(caps.AbortCycle):
             workers.run_gated(
                 "generate", "hypothesize", "AAPL", "z1", 1,
                 {"messages": [{"role": "user", "content": "hi"}]},
@@ -512,7 +512,7 @@ class UnknownRecoveryTest(unittest.TestCase):
         cfg = T._cfg(fake_behavior="hang")
         with _mock.patch.object(attribution, "record_unknown",
                                 side_effect=RuntimeError("disk gone")):
-            with self.assertRaises(r15.AbortCycle) as cm:
+            with self.assertRaises(caps.AbortCycle) as cm:
                 workers.run_gated(
                     "generate", "hypothesize", "AAPL", "t1", 1,
                     {"messages": [{"role": "user", "content": "hi"}]},
@@ -587,11 +587,11 @@ class MarkerTriStateTest(unittest.TestCase):
         led.reserve_call("c", "AAPL", 10, 0)
         with open(path + ".init", "wb") as fh:
             fh.write(b"[{bad]")
-        with self.assertRaises(r15.AbortCycle) as cm:
+        with self.assertRaises(caps.AbortCycle) as cm:
             budgets.BudgetLedger(path).snapshot("c", "AAPL")
         self.assertIn("marker-invalid", str(cm.exception.snapshot))
         os.remove(path)
-        with self.assertRaises(r15.AbortCycle) as cm:
+        with self.assertRaises(caps.AbortCycle) as cm:
             budgets.BudgetLedger(path).snapshot("c", "AAPL")
         self.assertIn("marker-invalid", str(cm.exception.snapshot))
 
@@ -905,7 +905,7 @@ class GraphGovernanceTest(unittest.TestCase):
         deps2, _c2, _l2, _led2, _g2 = gt._deps(d)
         log2 = os.path.join(d, "spans2.jsonl")
         deps2["spend_governor"] = T.spend_mod.SpendGovernor(
-            log2, dict(T.PRICING), "G0", state_dir=None)
+            log2, dict(T.PRICING), "paper", state_dir=None)
         with self.assertRaises(workers.ConfigBlocked):
             T._graph().build_graph(deps2)
         # Partial interface double is rejected at construction.
@@ -1131,7 +1131,7 @@ class TierStateTest(unittest.TestCase):
     def _gov(self, d, **kw):
         log = os.path.join(d, "spans.jsonl")
         return T.spend_mod.SpendGovernor(
-            log, dict(T.PRICING), "G0",
+            log, dict(T.PRICING), "paper",
             state_dir=os.path.join(d, "spend")), log
 
     def test_deleted_state_fails_closed(self):
@@ -1144,7 +1144,7 @@ class TierStateTest(unittest.TestCase):
         gov._journal(T.spend_mod.TIER_JOURNAL_NAME,
                      {"ts": now, "from": 0, "to": 0,
                       "projection_30d": 0.0, "cap": 150.0,
-                      "stage": "G0"})
+                      "stage": "paper"})
         os.remove(os.path.join(d, "spend",
                                T.spend_mod.TIER_STATE_NAME))
         with self.assertRaises(T.spend_mod.StateUnavailable):
@@ -1178,7 +1178,7 @@ class TierStateTest(unittest.TestCase):
         # Same dir, changed pricing: the cached tier is NOT reused —
         # a fresh evaluation runs immediately (hourly cache bypassed).
         gov2 = T.spend_mod.SpendGovernor(
-            log, {"fake": 99.0}, "G0",
+            log, {"fake": 99.0}, "paper",
             state_dir=os.path.join(d, "spend"))
         t, _p = gov2.evaluate(now + 10)
         self.assertEqual(t, 0)
@@ -1188,7 +1188,7 @@ class TierStateTest(unittest.TestCase):
 
     def _tier2_gov(self, d):
         # Governor that transitions 0 -> 2 on first evaluation
-        # ($30 spend vs $150 G0 cap), leaving a rev-1 journal row.
+        # ($30 spend vs $150 paper cap), leaving a rev-1 journal row.
         from engine import spend as spend_mod
         log = os.path.join(d, "spans.jsonl")
         now = int(time.time())
@@ -1197,7 +1197,7 @@ class TierStateTest(unittest.TestCase):
                                 completion_tokens=5, usd=30.0,
                                 span_id="t2seed", ts=now)
         gov = spend_mod.SpendGovernor(
-            log, dict(T.PRICING), "G0",
+            log, dict(T.PRICING), "paper",
             state_dir=os.path.join(d, "spend"))
         tA, _p = gov.evaluate(now)
         self.assertEqual(tA, 2)
@@ -1211,7 +1211,7 @@ class TierStateTest(unittest.TestCase):
         d = tempfile.mkdtemp()
         log = os.path.join(d, "spans.jsonl")
         gov = spend_mod.SpendGovernor(
-            log, dict(T.PRICING), "G0",
+            log, dict(T.PRICING), "paper",
             state_dir=os.path.join(d, "spend"))
         now = int(time.time())
         self.assertEqual(gov.verdict_snapshot(now),
@@ -1222,7 +1222,7 @@ class TierStateTest(unittest.TestCase):
                                 completion_tokens=5, usd=40.0,
                                 span_id="raise", ts=now)
         gov2 = spend_mod.SpendGovernor(
-            log, dict(T.PRICING), "G0",
+            log, dict(T.PRICING), "paper",
             state_dir=os.path.join(d, "spend"))
         self.assertEqual(gov2.evaluate(now + 3600)[0], 3)
         snap = gov.verdict_snapshot(now + 3600)
@@ -1244,7 +1244,7 @@ class TierStateTest(unittest.TestCase):
 
         def mk():
             return spend_mod.SpendGovernor(
-                log, dict(T.PRICING), "G0",
+                log, dict(T.PRICING), "paper",
                 state_dir=os.path.join(d, "spend"))
 
         jp = os.path.join(d, "spend", spend_mod.TIER_JOURNAL_NAME)
@@ -1286,18 +1286,18 @@ class TierStateTest(unittest.TestCase):
         sdir = os.path.join(d, "spend")
         now = int(time.time())
         gov_a = spend_mod.SpendGovernor(
-            log, dict(T.PRICING), "G0", state_dir=sdir)
+            log, dict(T.PRICING), "paper", state_dir=sdir)
         self.assertEqual(gov_a.evaluate(now)[0], 0)
         gov_b = spend_mod.SpendGovernor(
-            log, dict(T.PRICING), "G0", state_dir=sdir)
+            log, dict(T.PRICING), "paper", state_dir=sdir)
         st = gov_b._load_state(now)
-        proj = 25.0 / 7.0 * 30.0  # $107 on the $150 G0 cap
+        proj = 25.0 / 7.0 * 30.0  # $107 on the $150 paper cap
         st.update(tier=1, projection=proj, evaluated_at=now,
                   below_count=0, tier_rev=1)
         row = {"ts": now, "from": 0, "to": 1,
                "projection_30d": proj,
-               "cap": spend_mod.STAGE_CAPS_USD["G0"],
-               "stage": "G0", "rev": 1}
+               "cap": spend_mod.STAGE_CAPS_USD["paper"],
+               "stage": "paper", "rev": 1}
         gov_b._save_state_and_journal_locked(
             st, spend_mod.TIER_JOURNAL_NAME, row)
         self.assertEqual(gov_a.evaluate(now)[0], 1)
@@ -1359,7 +1359,7 @@ class TierStateTest(unittest.TestCase):
         d2 = tempfile.mkdtemp()
         from engine import spend as _sp
         gov2 = _sp.SpendGovernor(
-            os.path.join(d2, "spans.jsonl"), dict(T.PRICING), "G0",
+            os.path.join(d2, "spans.jsonl"), dict(T.PRICING), "paper",
             state_dir=os.path.join(d2, "spend"))
         gov2.evaluate(int(time.time()))  # no transition, rev 0
         self.assertEqual(gov2._load_state()["tier_rev"], 0)
@@ -1382,7 +1382,7 @@ class TierStateTest(unittest.TestCase):
             gov._load_state(now + 7200)
 
     def test_tier_chain_forgery_denies(self):
-        # A syntactically valid row attempting T2 -> T0
+        # A syntactically valid row attempting tier 2 -> tier 0
         # through recovery (valid binding, newer timestamp, rev
         # continuing the chain) must deny — the chain plus the
         # state-mirror rule proves it was not governor-written.
@@ -1396,7 +1396,7 @@ class TierStateTest(unittest.TestCase):
                             evaluated_at=now + 3600)
         forged = {"ts": now + 7200, "from": 2, "to": 0,
                   "projection_30d": 10.0, "cap": 150.0,
-                  "stage": "G0", "rev": 2,
+                  "stage": "paper", "rev": 2,
                   "state": forged_state}
         with open(jpath, "a", encoding="utf-8") as fh:
             fh.write(_json.dumps(forged, sort_keys=True) + "\n")
@@ -1483,7 +1483,7 @@ class TierStateTest(unittest.TestCase):
                     st, T.spend_mod.TIER_JOURNAL_NAME,
                     {"ts": now + 3600, "from": 0, "to": 2,
                      "projection_30d": 130.0, "cap": 150.0,
-                     "stage": "G0"})
+                     "stage": "paper"})
         finally:
             gov._journal_locked = real_journal
         loaded = gov._load_state(now + 7200)
@@ -1505,7 +1505,7 @@ class TierStateTest(unittest.TestCase):
                   below_count=0)
         row = {"ts": now + 3600, "from": 0, "to": 2,
                "projection_30d": 130.0, "cap": 150.0,
-               "stage": "G0", "state": st}
+               "stage": "paper", "state": st}
         with open(os.path.join(d, "spend", "tier_journal.jsonl"),
                   "w", encoding="utf-8") as fh:
             fh.write(_json.dumps(row, sort_keys=True) + "\n")
@@ -1525,7 +1525,7 @@ class RatioDaysTest(unittest.TestCase):
             return profits[i]
 
         gov = T.spend_mod.SpendGovernor(
-            log, dict(T.PRICING), "G2",
+            log, dict(T.PRICING), "scaled",
             state_dir=os.path.join(d, "spend"), profit_since=_profit)
         return gov, log
 
@@ -1689,7 +1689,7 @@ class RatioDaysTest(unittest.TestCase):
         _gov, _log, now = self._failed_3day(d)
         jp, rows = self._ratio_journal(d)
         mid = {"day": rows[1]["day"], "state": "failed",
-               "stage": "G2"}
+               "stage": "scaled"}
         # Re-link the chain over the gap so the ONLY violation is
         # the legacy row's era (order valid, chain valid).
         rows[2]["prev"] = rows[0]["digest"]
@@ -1839,9 +1839,9 @@ class RatioDaysTest(unittest.TestCase):
             for dd, stt in ((day + 86400, "failed"),
                             (day + 2 * 86400, "ok")):
                 dg = spend_mod.SpendGovernor._ratio_digest(
-                    dd, stt, "G2", head)
+                    dd, stt, "scaled", head)
                 fh.write(_json.dumps(
-                    {"day": dd, "state": stt, "stage": "G2",
+                    {"day": dd, "state": stt, "stage": "scaled",
                      "prev": head, "digest": dg},
                     sort_keys=True) + "\n")
                 head = dg
@@ -1905,7 +1905,7 @@ class RatioDaysTest(unittest.TestCase):
 
     def test_ok_day_resets_streak(self):
         d = tempfile.mkdtemp()
-        # fail, fail, OK (huge profit), fail, fail, fail -> T3 only
+        # fail, fail, OK (huge profit), fail, fail, fail -> tier 3 only
         # on the third consecutive failure AFTER the reset.
         gov, log = self._gov(d, [1.0, 1.0, 10 ** 9, 1.0, 1.0, 1.0])
         now = int(time.time())
@@ -1940,7 +1940,7 @@ class BudgetOracleTest(unittest.TestCase):
     def test_sequences_agree(self):
         d = tempfile.mkdtemp()
         led = budgets.BudgetLedger(os.path.join(d, "ledger.sqlite3"))
-        ref = T.r15.CycleBudget("AAPL", cycle_id="c")
+        ref = T.caps.CycleBudget("AAPL", cycle_id="c")
         dur = budgets.DurableBudget(led, "c", "AAPL")
         # Script: reserve 100 tokens + 2 tools, settle 50, reserve
         # again, over-reserve aborts both, invalidate poisons both.
@@ -1957,15 +1957,15 @@ class BudgetOracleTest(unittest.TestCase):
         ref.tokens = 50  # reference settles by assignment in tests
         self.assertEqual(dur.snapshot()["tokens"],
                          ref.snapshot()["tokens"])
-        for reserve in (lambda: dur.reserve_call(T.r15.TOKENS, 0),
-                        lambda: ref.charge_llm(T.r15.TOKENS)):
-            with self.assertRaises(T.r15.AbortCycle):
+        for reserve in (lambda: dur.reserve_call(T.caps.TOKENS, 0),
+                        lambda: ref.charge_llm(T.caps.TOKENS)):
+            with self.assertRaises(T.caps.AbortCycle):
                 reserve()
         dur.invalidate()
         ref.invalidate()
-        with self.assertRaises(T.r15.AbortCycle):
+        with self.assertRaises(T.caps.AbortCycle):
             dur.reserve_call(1, 0)
-        with self.assertRaises(T.r15.AbortCycle):
+        with self.assertRaises(T.caps.AbortCycle):
             ref.check()
 
 
@@ -1998,7 +1998,7 @@ class LifecycleStressTest(unittest.TestCase):
 
         cfg = T._cfg(fake_behavior="hang")
         with _mock.patch.object(workers.subprocess, "run", _stub):
-            with self.assertRaises(T.r15.AbortCycle):
+            with self.assertRaises(T.caps.AbortCycle):
                 workers.run_gated(
                     "generate", "hypothesize", "AAPL", "t1", 1,
                     {"messages": [{"role": "user", "content": "hi"}]},
@@ -2029,7 +2029,7 @@ class NumericsTest(unittest.TestCase):
             with self.subTest(price=bad_price):
                 with self.assertRaises(workers.ConfigBlocked):
                     T.spend_mod.SpendGovernor(log, {"m": bad_price},
-                                              "G0")
+                                              "paper")
 
     def test_bool_and_infinite_amounts_refused(self):
         d = tempfile.mkdtemp()
@@ -2064,7 +2064,7 @@ class NumericsTest(unittest.TestCase):
         d = tempfile.mkdtemp()
         log = os.path.join(d, "spans.jsonl")
         gov = T.spend_mod.SpendGovernor(
-            log, dict(T.PRICING), "G0",
+            log, dict(T.PRICING), "paper",
             state_dir=os.path.join(d, "spend"))
         now = int(time.time())
         gov.evaluate(now)
@@ -2165,7 +2165,7 @@ class PublisherHardeningTest(unittest.TestCase):
         cases.append(bad)
         bad = dict(base, evil=1)
         cases.append(bad)
-        bad = dict(base, macro_release_to_symbols={"FOMC": "EURUSD"})
+        bad = dict(base, macro_release_to_symbols={"FOMC": "TLT"})
         cases.append(bad)
         bad = dict(base, note="n" * 1025)
         cases.append(bad)
@@ -2255,7 +2255,7 @@ class ManifestBoundTest(unittest.TestCase):
              "sources": {"edgar_8k": {"last_observation_at": T.OBS_S,
                                           "cursor": "g"}}})
         # Newer generation: hash-valid + envelope-valid, but the
-        # frozen reader THROWS on it (simulated downstream defect).
+        # fixed reader THROWS on it (simulated downstream defect).
         env = {"schema_version": "f2", "research_epoch": 2,
                "bundle_id": "rp-2-" + "b" * 64, "commit": True,
                "watermarks": {}, "features": []}
@@ -2551,9 +2551,9 @@ class ReauditFixTest(unittest.TestCase):
                 side_effect=spend_mod.SpendRefused("cap")):
             with _mock.patch.object(
                     budget, "settle_call",
-                    side_effect=r15.AbortCycle(
+                    side_effect=caps.AbortCycle(
                         "AAPL", {"boom": True})):
-                with self.assertRaises(r15.AbortCycle) as cm:
+                with self.assertRaises(caps.AbortCycle) as cm:
                     workers.run_gated(
                         "generate", "hypothesize", "AAPL", "t1", 1,
                         {"messages": [{"role": "user",
@@ -2606,7 +2606,7 @@ class ReauditFixTest(unittest.TestCase):
                                 prompt_tokens=10, completion_tokens=5,
                                 usd=30.0, span_id="prime", ts=now)
         mk = lambda: spend_mod.SpendGovernor(
-            log, dict(T.PRICING), "G0",
+            log, dict(T.PRICING), "paper",
             state_dir=os.path.join(d, "spend"))
         govA, govB = mk(), mk()
         stale = govB._load_state(now)
@@ -2696,7 +2696,7 @@ class ReauditFixTest(unittest.TestCase):
         con.execute("DROP TABLE counters")
         con.commit()
         con.close()
-        with self.assertRaises(r15.AbortCycle) as cm:
+        with self.assertRaises(caps.AbortCycle) as cm:
             led.reserve_call("c", "AAPL", 10, 0)
         self.assertIn("table-missing:counters",
                       str(cm.exception.snapshot))
@@ -2715,7 +2715,7 @@ class ReauditFixTest(unittest.TestCase):
         con.execute("DROP TABLE cycles")
         con.commit()
         con.close()
-        with self.assertRaises(r15.AbortCycle) as cm:
+        with self.assertRaises(caps.AbortCycle) as cm:
             led.reserve_call("c", "AAPL", 10, 0)
         self.assertIn("table-missing:cycles",
                       str(cm.exception.snapshot))
@@ -2828,7 +2828,7 @@ class ReauditFixTest(unittest.TestCase):
             con.execute(sql)
             con.commit()
             con.close()
-            with self.assertRaises(r15.AbortCycle) as cm:
+            with self.assertRaises(caps.AbortCycle) as cm:
                 if op == "reserve":
                     led.reserve_call("c", "AAPL", 10, 0)
                 elif op == "check":
@@ -2850,7 +2850,7 @@ class ReauditFixTest(unittest.TestCase):
             con.execute(sql)
             con.commit()
             con.close()
-            with self.assertRaises(r15.AbortCycle) as cm:
+            with self.assertRaises(caps.AbortCycle) as cm:
                 led.settle_call("c", "AAPL", lease, 100)
             self.assertIn("digest-mismatch:leases",
                           str(cm.exception.snapshot))
@@ -2863,7 +2863,7 @@ class ReauditFixTest(unittest.TestCase):
         import json as _json
         from engine import spend as spend_mod
         d = tempfile.mkdtemp()
-        gov = self._ratio_gov(d, "G2")
+        gov = self._ratio_gov(d, "scaled")
         now = int(time.time())
         today = now - (now % 86400)
         jpath = os.path.join(d, "spend",
@@ -2875,7 +2875,7 @@ class ReauditFixTest(unittest.TestCase):
                 for dd in days:
                     fh.write(_json.dumps(
                         {"day": dd, "state": "failed",
-                         "stage": "G2"}) + "\n")
+                         "stage": "scaled"}) + "\n")
 
         D = today - 3 * 86400
         _rows([D, D + 86400, D + 86400])  # duplicate day
@@ -3096,7 +3096,7 @@ class ReauditFixTest(unittest.TestCase):
         budgets.BudgetLedger(path).reserve_call("c", "AAPL",
                                                  10, 0)
         os.remove(path + ".init")
-        with self.assertRaises(r15.AbortCycle) as cm:
+        with self.assertRaises(caps.AbortCycle) as cm:
             budgets.BudgetLedger(path).reserve_call("c", "AAPL",
                                                      10, 0)
         self.assertIn("marker-deleted",
@@ -3150,7 +3150,7 @@ class ReauditFixTest(unittest.TestCase):
         con.execute("DELETE FROM cycles")
         con.commit()
         con.close()
-        with self.assertRaises(r15.AbortCycle) as cm:
+        with self.assertRaises(caps.AbortCycle) as cm:
             led.reserve_call("c", "AAPL", 10, 0)
         self.assertIn("digest-mismatch:counters",
                       str(cm.exception.snapshot))
@@ -3160,7 +3160,7 @@ class ReauditFixTest(unittest.TestCase):
         con.execute("DELETE FROM counters")
         con.commit()
         con.close()
-        with self.assertRaises(r15.AbortCycle) as cm:
+        with self.assertRaises(caps.AbortCycle) as cm:
             led.reserve_call("c", "AAPL", 10, 0)
         self.assertIn("digest-mismatch:counters",
                       str(cm.exception.snapshot))
@@ -3174,7 +3174,7 @@ class ReauditFixTest(unittest.TestCase):
                    lambda: led.snapshot("c", "AAPL"),
                    lambda: led.reserve_call("c", "AAPL", 10,
                                              0)):
-            with self.assertRaises(r15.AbortCycle) as cm:
+            with self.assertRaises(caps.AbortCycle) as cm:
                 op()
             self.assertIn("digest-mismatch:cycles",
                           str(cm.exception.snapshot))
@@ -3199,7 +3199,7 @@ class ReauditFixTest(unittest.TestCase):
                    lambda: led.snapshot("c", "AAPL"),
                    lambda: led.reserve_call("c", "AAPL", 10,
                                              0)):
-            with self.assertRaises(r15.AbortCycle) as cm:
+            with self.assertRaises(caps.AbortCycle) as cm:
                 op()
             # Out-of-band wall edit trips the digest before the
             # wall check reads the row.
@@ -3210,7 +3210,7 @@ class ReauditFixTest(unittest.TestCase):
         # denies first).
         ledw = budgets.BudgetLedger(
             os.path.join(tempfile.mkdtemp(), "ledger.sqlite3"))
-        with self.assertRaises(r15.AbortCycle) as cm:
+        with self.assertRaises(caps.AbortCycle) as cm:
             ledw.reserve_call("c2", "AAPL", 10, 0,
                               now_wall=now + 86400)
         self.assertIn("future-start-wall",
@@ -3353,7 +3353,7 @@ class ReauditFixTest(unittest.TestCase):
                     "depth=0")
         con.commit()
         con.close()
-        with self.assertRaises(r15.AbortCycle) as cm:
+        with self.assertRaises(caps.AbortCycle) as cm:
             led.check("c", "AAPL")
         self.assertIn("digest-mismatch:counters",
                       str(cm.exception.snapshot))
@@ -3374,7 +3374,7 @@ class ReauditFixTest(unittest.TestCase):
         con.commit()
         con.close()
         os.remove(path + ".seen")
-        with self.assertRaises(r15.AbortCycle):
+        with self.assertRaises(caps.AbortCycle):
             led.reserve_call("c", "AAPL", 10, 0)
         d = tempfile.mkdtemp()
         path = os.path.join(d, "ledger.sqlite3")
@@ -3387,7 +3387,7 @@ class ReauditFixTest(unittest.TestCase):
         con.commit()
         con.close()
         os.remove(path + ".seen")
-        with self.assertRaises(r15.AbortCycle) as cm:
+        with self.assertRaises(caps.AbortCycle) as cm:
             led.reserve_call("c", "AAPL", 10, 0)
         self.assertIn("digest-deleted",
                       str(cm.exception.snapshot))
@@ -3416,7 +3416,7 @@ class ReauditFixTest(unittest.TestCase):
                         "tokens=0, depth=0")
             con.commit()
             con.close()
-            with self.assertRaises(r15.AbortCycle) as cm:
+            with self.assertRaises(caps.AbortCycle) as cm:
                 budgets.BudgetLedger(path).reserve_call(
                     "c", "AAPL", 10, 0)
             self.assertIn("digest-deleted",
@@ -3436,7 +3436,7 @@ class ReauditFixTest(unittest.TestCase):
             con.execute("PRAGMA user_version=%d" % ver)
             con.commit()
             con.close()
-            with self.assertRaises(r15.AbortCycle) as cm:
+            with self.assertRaises(caps.AbortCycle) as cm:
                 budgets.BudgetLedger(pp).reserve_call(
                     "c", "AAPL", 10, 0)
             self.assertIn("digest-deleted",
@@ -3453,7 +3453,7 @@ class ReauditFixTest(unittest.TestCase):
         con.execute("UPDATE counters SET llm=0")
         con.commit()
         con.close()
-        with self.assertRaises(r15.AbortCycle) as cm:
+        with self.assertRaises(caps.AbortCycle) as cm:
             budgets.BudgetLedger(pp).reserve_call("c", "AAPL",
                                                    10, 0)
         self.assertIn("digest-missing:counters",
@@ -3553,7 +3553,7 @@ class ReauditFixTest(unittest.TestCase):
 
         with _mock.patch.object(locks, "atomic_write_bytes",
                                 _crash):
-            with self.assertRaises(r15.AbortCycle):
+            with self.assertRaises(caps.AbortCycle):
                 led.reserve_call("c", "AAPL", 10, 0)
         self.assertFalse(os.path.exists(path + ".seen"))
         led.reserve_call("c", "AAPL", 10, 0)
@@ -3569,7 +3569,7 @@ class ReauditFixTest(unittest.TestCase):
         os.mkdir(dbp + ".init")
         self.assertEqual(locks.marker_state(dbp)[0], "invalid")
         led = budgets.BudgetLedger(dbp)
-        with self.assertRaises(r15.AbortCycle) as cm:
+        with self.assertRaises(caps.AbortCycle) as cm:
             led.reserve_call("c", "AAPL", 10, 0)
         self.assertIn("marker-invalid", str(cm.exception.snapshot))
         # Control: a provably missing marker is still absent.
@@ -3579,14 +3579,14 @@ class ReauditFixTest(unittest.TestCase):
     def test_tier_state_unreadable_denies_not_tier0(self):
         # A present-but-unreadable tier state (directory in the way)
         # denies — it must not initialize a fresh Tier 0 that would
-        # loosen T1/T2/T3 gating.
+        # loosen tier 1/tier 2/tier 3 gating.
         from engine import spend as spend_mod
         d = tempfile.mkdtemp()
         sdir = os.path.join(d, "spend")
         os.makedirs(sdir)
         os.mkdir(os.path.join(sdir, spend_mod.TIER_STATE_NAME))
         gov = spend_mod.SpendGovernor(
-            os.path.join(d, "spans.jsonl"), dict(T.PRICING), "G0",
+            os.path.join(d, "spans.jsonl"), dict(T.PRICING), "paper",
             state_dir=sdir)
         with self.assertRaises(spend_mod.StateUnavailable):
             gov.evaluate()
@@ -3613,7 +3613,7 @@ class ReauditFixTest(unittest.TestCase):
         # too.
         from engine import spend as spend_mod
         d = tempfile.mkdtemp()
-        gov = self._ratio_gov(d, "G2")
+        gov = self._ratio_gov(d, "scaled")
         t0 = int(time.time())
         gov.evaluate(t0)
         jpath = os.path.join(d, "spend",
@@ -3639,7 +3639,7 @@ class ReauditFixTest(unittest.TestCase):
         # must not silently lose records.
         from engine import spend as spend_mod
         d = tempfile.mkdtemp()
-        gov = self._ratio_gov(d, "G2")
+        gov = self._ratio_gov(d, "scaled")
         t0 = int(time.time())
         gov.evaluate(t0)
         jpath = os.path.join(d, "spend",
@@ -3648,9 +3648,9 @@ class ReauditFixTest(unittest.TestCase):
         for bad in ('[]\n', '"garbage"\n',
                     '{"day": 1}\n',
                     '{"day": "x", "state": "failed", '
-                    '"stage": "G2"}\n',
+                    '"stage": "scaled"}\n',
                     '{"day": 1, "state": "meh", '
-                    '"stage": "G2"}\n'):
+                    '"stage": "scaled"}\n'):
             with open(jpath, "w", encoding="utf-8") as fh:
                 fh.write(bad)
             with self.assertRaises(spend_mod.StateUnavailable):
@@ -3661,34 +3661,34 @@ class ReauditFixTest(unittest.TestCase):
         day = t0 - (t0 % 86400)
         with open(jpath, "w", encoding="utf-8") as fh:
             fh.write('{"day": %d, "state": "failed", '
-                     '"stage": "G2"}\n' % day)
+                     '"stage": "scaled"}\n' % day)
         with self.assertRaises(spend_mod.StateUnavailable) as cm:
             gov.evaluate(t0 + 3700)
         self.assertIn("ratio-anchor-unknown", str(cm.exception))
         # Genuinely fresh (anchor-less) legacy history still reads:
         # pre-chain residue with no proven head is not a rewrite.
         d2 = tempfile.mkdtemp()
-        gov2 = self._ratio_gov(d2, "G2")
+        gov2 = self._ratio_gov(d2, "scaled")
         jpath2 = os.path.join(d2, "spend",
                               spend_mod.RATIO_JOURNAL_NAME)
         os.makedirs(os.path.dirname(jpath2), exist_ok=True)
         with open(jpath2, "w", encoding="utf-8") as fh:
             fh.write('{"day": %d, "state": "failed", '
-                     '"stage": "G2"}\n' % day)
+                     '"stage": "scaled"}\n' % day)
         gov2.evaluate(t0 + 3700)  # must not raise
 
     def test_ratio_first_run_without_journal_is_fresh(self):
-        # Upgrade path: tier history (G0, suspended, never journaled)
+        # Upgrade path: tier history (paper stage, suspended, never journaled)
         # plus no ratio journal is a fresh streak, not a deletion —
         # the first counted day journals cleanly.
         from engine import spend as spend_mod
         d = tempfile.mkdtemp()
-        g0 = self._ratio_gov(d, "G0")
+        g0 = self._ratio_gov(d, "paper")
         g0.evaluate()
         jpath = os.path.join(d, "spend",
                              spend_mod.RATIO_JOURNAL_NAME)
         self.assertFalse(os.path.exists(jpath))
-        g2 = self._ratio_gov(d, "G2")
+        g2 = self._ratio_gov(d, "scaled")
         g2.evaluate()  # must not raise
         self.assertTrue(os.path.exists(jpath))
 
@@ -3722,13 +3722,13 @@ class ReauditFixTest(unittest.TestCase):
                                               0),
                    lambda: led2.check("c", "AAPL"),
                    lambda: led2.snapshot("c", "AAPL")):
-            with self.assertRaises(r15.AbortCycle) as cm:
+            with self.assertRaises(caps.AbortCycle) as cm:
                 op()
             self.assertIn("digest-mismatch:cycles",
                           str(cm.exception.snapshot))
 
     def test_stale_thread_refused(self):
-        # A thread_id whose checkpoint outlives the R15 window is
+        # A thread_id whose checkpoint outlives the research caps window is
         # refused (same cycle_id must never mint a second budget);
         # new threads, recent threads, and unreadable saver state
         # proceed.
@@ -3897,7 +3897,7 @@ class ReauditFixTest(unittest.TestCase):
         self.assertEqual(tuple(hold), ("invoked", 2.0))
         self.assertEqual(tuple(span), (2.0, 1))
 
-    def test_r15_deleted_live_row_aborts(self):
+    def test_caps_deleted_live_row_aborts(self):
         # A live cycle whose counters row vanishes is a deletion,
         # never a first use: the next reservation aborts.
         d = tempfile.mkdtemp()
@@ -3907,11 +3907,11 @@ class ReauditFixTest(unittest.TestCase):
         con.execute("DELETE FROM counters")
         con.commit()
         con.close()
-        with self.assertRaises(r15.AbortCycle) as cm:
+        with self.assertRaises(caps.AbortCycle) as cm:
             led.reserve_call("c", "AAPL", 10, 0)
         self.assertIn("digest-mismatch:counters", str(cm.exception.snapshot))
 
-    def test_r15_snapshot_and_check_fail_closed_on_deletion(self):
+    def test_caps_snapshot_and_check_fail_closed_on_deletion(self):
         # Deletion detection covers every reader, not just new
         # reservations: a missing row for a seen cycle aborts in
         # snapshot() (which feeds the cycle estimate) and check(),
@@ -3928,14 +3928,14 @@ class ReauditFixTest(unittest.TestCase):
         con.execute("DELETE FROM counters")
         con.commit()
         con.close()
-        with self.assertRaises(r15.AbortCycle) as cm:
+        with self.assertRaises(caps.AbortCycle) as cm:
             led.snapshot("c", "AAPL")
         self.assertIn("digest-mismatch:counters",
                       str(cm.exception.snapshot))
-        with self.assertRaises(r15.AbortCycle):
+        with self.assertRaises(caps.AbortCycle):
             led.check("c", "AAPL")
 
-    def test_r15_migration_backfills_registry(self):
+    def test_caps_migration_backfills_registry(self):
         # An old-schema ledger (no cycles table) gains deletion
         # detection immediately on upgrade: existing counters rows
         # are registered from start_wall in the migration itself.
@@ -3965,12 +3965,12 @@ class ReauditFixTest(unittest.TestCase):
         con.commit()
         con.close()
         self.assertEqual(reg, 1)
-        with self.assertRaises(r15.AbortCycle) as cm:
+        with self.assertRaises(caps.AbortCycle) as cm:
             led2.reserve_call("c", "AAPL", 10, 0)
         self.assertIn("digest-mismatch:counters",
                       str(cm.exception.snapshot))
 
-    def test_r15_prune_aged_row_recreates(self):
+    def test_caps_prune_aged_row_recreates(self):
         # Prune is the only legitimate deleter: an aged-out cycle
         # may start over (registry memory older than retain too).
         d = tempfile.mkdtemp()
@@ -3993,7 +3993,7 @@ class ReauditFixTest(unittest.TestCase):
                 attribution, "settle_hold",
                 side_effect=attribution.LedgerUnavailable(
                     "disk-gone")):
-            with self.assertRaises(r15.AbortCycle) as cm:
+            with self.assertRaises(caps.AbortCycle) as cm:
                 workers.run_gated(
                     "generate", "hypothesize", "AAPL", "t1", 1,
                     {"messages": [{"role": "user",

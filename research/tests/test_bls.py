@@ -96,7 +96,7 @@ class TestBLS(unittest.TestCase):
         self.assertEqual(r["observed_at_ns"], day_ns(2026, 9, 21))
         self.assertTrue(r["observed_at_estimated"])
         self.assertTrue(r["values_pending"])
-        self.assertEqual(r["symbols"], ["EURUSD", "USDJPY", "SPY"])
+        self.assertEqual(r["symbols"], ["TLT", "IEF", "SPY"])
         self.assertEqual(r["provenance_url"],
                          "https://www.bls.gov/news.release/empsit.htm")
 

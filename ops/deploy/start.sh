@@ -1,5 +1,5 @@
 #!/bin/bash
-# One-command start for the G0 paper run (Alpaca PAPER, zero capital).
+# One-command start for the paper run (Alpaca PAPER, zero capital).
 #   bash ops/deploy/start.sh [loop_dir] [--resume]    default loop_dir: ~/g0
 #   bash ops/deploy/start.sh stop
 # Order of work: preflight (keys, flat account), STAGE sign-off, build a copy of
@@ -89,10 +89,10 @@ echo $! > "$dir/loop.pid"
 sleep 5
 kill -0 "$(cat "$dir/loop.pid")" 2>/dev/null || { tail -5 "$dir/logs/loop.log" >&2; echo "the loop exited at once" >&2; exit 5; }
 echo "loop running (pid $(cat "$dir/loop.pid")). live view: python3 ops/monitor.py $dir"
-# Forward shadow ledgers for the non-routed sleeves (log-only, no orders).
-setsid nohup python3 ops/forward_ledgers.py "$dir" --loop </dev/null >>"$dir/logs/sleeves.log" 2>&1 &
-echo "sleeve shadow ledgers running (log: $dir/logs/sleeves.log, data: $dir/sleeves/)"
-# Optional: macro/filing collector (frozen code, writes only repo data/, nothing reads it yet).
+# Forward shadow ledgers for the non-routed strategies (log-only, no orders).
+setsid nohup python3 ops/forward_ledgers.py "$dir" --loop </dev/null >>"$dir/logs/ledgers.log" 2>&1 &
+echo "strategy shadow ledgers running (log: $dir/logs/ledgers.log, data: $dir/ledgers/)"
+# Optional: macro/filing collector (writes only repo data/, nothing reads it yet).
 if [ "${WITH_COLLECTOR:-0}" = "1" ]; then
     setsid nohup python3 collector/soak.py --loop </dev/null >>"$dir/logs/collector.log" 2>&1 &
     echo "collector running (log: $dir/logs/collector.log)"

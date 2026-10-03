@@ -87,7 +87,7 @@ mkdir -p ~/g2
 [ -f ~/g2/approved.json ] || cp ops/deploy/approved.json.example ~/g2/approved.json
 ```
 
-`approved.json` lists the approved sleeves (with their freshness window) and
+`approved.json` lists the approved strategies (with their freshness window) and
 the instrument allowlist. The runner refuses to start without a valid `STAGE`
 in the loop directory. That file is written only by a human, in person:
 
@@ -116,12 +116,13 @@ the session only.
 
 Forward ledgers (`start.sh` starts these; they are log-only and place no
 orders). Each is a virtual $100k book with one hash-chained row per session,
-written to `~/g2/sleeves/` and shown in the monitor:
+written to `~/g2/ledgers/` and shown in the monitor:
 
-- the 60/40 core (`core_passive_v1`);
+- the 60/40 core (`passive_core`);
 - the cash (BIL) and SPY benchmarks.
 
-A sleeve joins after it passes its A-gate (plan/07). `~/g2/sleeves/status.json` flags a ledger at -15% drawdown (soft) and -20%
+A strategy joins after it passes its backtest gate (`plan/roadmap.md`).
+`~/g2/ledgers/status.json` flags a ledger at -15% drawdown (soft) and -20%
 (hard).
 
 Check that history reproduces (the fidelity gate) at any time. Exit 1 means a
@@ -134,7 +135,7 @@ python3 ops/forward_ledgers.py ~/g2 --verify
 
 Every ledger is scored against a benchmark ledger (`bench_*`) as a paired
 daily difference. `python3 ops/forward_eval.py ~/g2` prints the
-table and writes `~/g2/sleeves/eval.json`, which the monitor shows. The states
+table and writes `~/g2/ledgers/eval.json`, which the monitor shows. The states
 are WARMUP under 60 sessions; KILL-FUTILE from 126 sessions when even the best
 case is below the benchmark; ELIGIBLE-FOR-REVIEW only after 504 sessions with a
 corrected p under 0.05. That last state never means promote.
@@ -145,7 +146,7 @@ On first start the loop registers the forward ledgers in the trial ledger
 
 Optional macro and filing collector (nothing reads its output yet):
 `WITH_COLLECTOR=1 bash ops/deploy/start.sh ~/g2`. Plan and promotion rules are
-in `plan/07-build-roadmap.md` and `plan/11-calibration-and-self-improvement.md`.
+in `plan/roadmap.md` and `plan/validation.md`.
 
 On a Linux-native checkout, `bash ops/deploy/start.sh` automates the same
 steps (build, first-run STAGE sign-off, loop, emitter, forward ledgers);

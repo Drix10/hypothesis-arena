@@ -115,7 +115,7 @@ def content_hash(rows):
 
 def manifest(symbol, kind, q, rows, fetched_utc=None):
     """Manifest carrying no credential material by construction."""
-    return {"source": "alpaca-market-data-v2", "endpoint": KINDS[kind],
+    return {"source": "alpaca-market-data", "endpoint": KINDS[kind],
             "symbol": symbol, "kind": kind, "query": dict(q),
             "range": {"start": q["start"], "end": q["end"]},
             "feed": FEED, "adjustment": q.get("adjustment"),

@@ -1,4 +1,4 @@
-# Langfuse self-hosted stack for per-node token and cost attribution (doc 08).
+# Langfuse self-hosted stack for per-node token and cost attribution (plan/engine.md).
 # Secrets come from the environment and are never committed. Before
 # `docker compose up`, export LANGFUSE_POSTGRES_PASSWORD,
 # LANGFUSE_CLICKHOUSE_PASSWORD, LANGFUSE_NEXTAUTH_SECRET, LANGFUSE_SALT and

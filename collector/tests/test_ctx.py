@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-'''P1.5 acceptance: every ctx/boundary/plausibility contract has a test.
-Run: python3 collector/tests/test_ctx.py (stdlib only, temp DB, no P1.4 writes)
+'''acceptance: every ctx/boundary/plausibility contract has a test.
+Run: python3 collector/tests/test_ctx.py (stdlib only, temp DB, no writes)
 '''
 import hashlib
 import json
@@ -53,13 +53,13 @@ def feat(**kw):
 
 
 def wm_full(*sources):
-    """Frozen watermark envelope for tests: map pins + per-source
+    """Watermark envelope for tests: map pins + per-source
     {last_observation_at, cursor} for the given sources."""
     sha = hashlib.sha256(open(MAP, "rb").read()).hexdigest()
     srcs = sources or ("edgar_8k", "fed_monetary", "ecb_mid",
                        "treasury_auctions", "bls_empsit", "fred_macro",
                        "bea_nipa_gdp")
-    return {"entity_map_version": "entity-v1",
+    return {"entity_map_version": "entity-map",
             "entity_map_sha256": sha,
             "sources": {s: {"last_observation_at": int(NOW) - 300,
                               "cursor": "test-cursor"} for s in srcs}}
@@ -112,7 +112,7 @@ check("lineage-mismatch", r["stats"]["reasons"].get("lineage-mismatch") == 1)
 # 5. entity binding
 r = run([feat(symbols=["FAKECOIN"])])
 check("entity-unmapped", "entity-unmapped:FAKECOIN" in r["stats"]["reasons"])
-r = run([feat(symbols=["EURUSD"], kind="macro_release",
+r = run([feat(symbols=["TLT"], kind="macro_release",
               source_id="fed_monetary", observed_at_ns=IN_SESSION)])
 check("macro-symbols-pass", r["stats"]["accepted"] == 1)
 
@@ -121,7 +121,7 @@ t0 = NOW - 3000
 hist3 = {"history": {"edgar_8k": [dated(H1, t0), dated(H1, t0 + 1500),
                                      dated(H1, t0 + 2900)]}}
 r = run([feat()], extra=hist3)
-check("frozen-feed-v1", r["stats"]["reasons"].get("frozen-feed") == 1)
+check("frozen-feed", r["stats"]["reasons"].get("frozen-feed") == 1)
 r = run([feat()], extra={"history": {"edgar_8k": [dated(H2, t0),
                                                   dated(H1, t0 + 1500),
                                                   dated(H1, t0 + 2900)]}})
@@ -131,10 +131,10 @@ check("below-frozen-threshold", r["stats"]["accepted"] == 1)
 r = run([feat(observed_at_ns=OVERNIGHT, ttl_s=86400)])
 check("session-reject", r["stats"]["reasons"].get("session-reject") == 1)
 r = run([feat(observed_at_ns=OVERNIGHT, kind="calendar_ahead",
-              source_id="fed_monetary", symbols=["EURUSD"], ttl_s=86400)])
+              source_id="fed_monetary", symbols=["TLT"], ttl_s=86400)])
 check("overnight-allowlist", r["stats"]["accepted"] == 1)
 
-# 8. R12 + TTL
+# 8. lookahead + TTL
 r = run([feat(observed_at_ns=int((NOW + 60) * 1e9))])
 check("future-timestamp", r["stats"]["reasons"].get("future-timestamp") == 1)
 r = run([feat(observed_at_ns=int((NOW - 7200) * 1e9), ttl_s=3600)])
@@ -150,12 +150,12 @@ check("heartbeat-map", HB_MAP == expect)
 # 10. map version mismatch + hash mismatch + missing watermarks
 import hashlib as _hlm
 MAP_SHA = _hlm.sha256(open(MAP, "rb").read()).hexdigest()
-wm = {"watermarks": {"entity_map_version": "entity-v99",
+wm = {"watermarks": {"entity_map_version": "entity-map-other",
                      "entity_map_sha256": MAP_SHA}}
 r = run([feat()], extra=wm, name="bmap1")
 check("map-version-mismatch", r["accepted"] == []
       and "map-version-mismatch" in r["stats"]["reasons"])
-wm2 = {"watermarks": {"entity_map_version": "entity-v1",
+wm2 = {"watermarks": {"entity_map_version": "entity-map",
                       "entity_map_sha256": "0" * 64}}
 r = run([feat()], extra=wm2, name="bmap2")
 check("map-hash-mismatch", r["accepted"] == []
@@ -200,13 +200,13 @@ check("frozen-needs-time-cover", r["stats"]["accepted"] == 1)
 fed_ok = {"history": {"fed_monetary": [dated(H1, NOW - 6000),
                                            dated(H1, NOW - 3000),
                                            dated(H1, NOW - 100)]}}
-ff = feat(source_id="fed_monetary", symbols=["EURUSD"], kind="macro_release")
+ff = feat(source_id="fed_monetary", symbols=["TLT"], kind="macro_release")
 r = run([ff], extra=fed_ok, name="bfed")
 check("frozen-fed-cover", r["stats"]["reasons"].get("frozen-feed") == 1)
 fed_short = {"history": {"fed_monetary": [dated(H1, NOW - 3000),
                                               dated(H1, NOW - 1500),
                                               dated(H1, NOW - 100)]}}
-r = run([feat(source_id="fed_monetary", symbols=["EURUSD"],
+r = run([feat(source_id="fed_monetary", symbols=["TLT"],
               kind="macro_release")], extra=fed_short, name="bfed2")
 check("frozen-fed-short", r["stats"]["accepted"] == 1)
 tre_ok = {"history": {"treasury_auctions": [dated(H1, NOW - 35000),
@@ -336,7 +336,7 @@ con = sqlite3.connect(DB)
 con.execute("INSERT INTO records VALUES (?,?,?)", ("edgar_8k", "z", H3))
 con.commit()
 con.close()
-r = run([feat(source_id="fed_monetary", symbols=["EURUSD"],
+r = run([feat(source_id="fed_monetary", symbols=["TLT"],
               kind="macro_release", canonical_hash=H3)], name="bx10")
 check("lineage-wrong-source", r["stats"]["reasons"].get("lineage-mismatch") == 1
       and r["stats"]["accepted"] == 0)
@@ -400,10 +400,10 @@ r = run([feat(kind="sentiment_tail")], name="bk2")
 check("sentiment-no-emitter",
       r["stats"]["reasons"].get("kind-no-emitter") == 1)
 r = run([feat(kind="regime_hint", source_id="fed_monetary",
-              symbols=["EURUSD"])], name="bk3")
+              symbols=["TLT"])], name="bk3")
 check("regime-no-emitter",
       r["stats"]["reasons"].get("kind-no-emitter") == 1)
-r = run([feat(source_id="fed_monetary", symbols=["EURUSD"],
+r = run([feat(source_id="fed_monetary", symbols=["TLT"],
               kind="macro_release")], name="bk4")
 check("fed-macro-emitter", r["stats"]["accepted"] == 1)
 
@@ -418,7 +418,7 @@ check("bundle-duplicate-keys",
       "bundle-duplicate-keys" in r["stats"]["reasons"])
 _fraw = ('{"bundle_id": "dupf", "commit": true, '
          '"schema_version": "f2", "research_epoch": 0, '
-         '"watermarks": {"entity_map_version": "entity-v1", '
+         '"watermarks": {"entity_map_version": "entity-map", '
          '"entity_map_sha256": "%s"}, '
          '"features": [{"source_id": "edgar_8k", '
          '"source_id": "fed_monetary"}]}' % MAP_SHA)

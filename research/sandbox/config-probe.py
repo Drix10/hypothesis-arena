@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""config-probe.py — Phase-D deployment box 4 (model credential + pricing).
+"""config-probe.py — model credential and pricing config probe.
 
 Checks fail-closed behavior for missing/invalid deployment config using
 the shipped constructors (no mocks of the units under test):

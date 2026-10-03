@@ -6,15 +6,15 @@ import hashlib
 import json
 import math
 
-SCHEMA = "prereg_v1"
-REQUIRED = ("schema", "experiment_id", "family", "hypothesis", "sleeve",
-            "universe", "signal", "variants", "cost_model_version",
+SCHEMA = "prereg"
+REQUIRED = ("schema", "experiment_id", "family", "hypothesis", "strategy",
+            "universe", "signal", "variants", "cost_model",
             "split", "holdout", "decision", "created")
 SPLIT_KEYS = ("scheme", "n_splits", "label_horizon_days", "embargo_days")
 HOLDOUT_KEYS = ("start", "end", "rule")
 DECISION_KEYS = ("min_net_sharpe", "max_drawdown_pct", "min_cost_multiple",
                  "min_days", "new_signal_tstat_min")
-COST_MODELS = ("cost_v2",)
+COST_MODELS = ("costs",)
 CUTOFF_MARGIN_DAYS = 30
 
 
@@ -38,7 +38,7 @@ def _date(s):
 
 
 def contamination_errors(llm, eval_start):
-    """LLM-influenced evidence must start after cutoff + 30 d (§11.0c)."""
+    """LLM-influenced evidence must start after cutoff + 30 d ()."""
     errs = []
     if not isinstance(llm, dict):
         return ["llm-block-malformed"]
@@ -69,7 +69,7 @@ def validate(p):
         return errs
     if p["schema"] != SCHEMA:
         errs.append("schema")
-    for k in ("experiment_id", "family", "hypothesis", "sleeve", "signal"):
+    for k in ("experiment_id", "family", "hypothesis", "strategy", "signal"):
         if not isinstance(p[k], str) or not p[k].strip():
             errs.append("empty:" + k)
     if not isinstance(p["universe"], list) or not p["universe"] \
@@ -79,7 +79,7 @@ def validate(p):
     if not isinstance(v, list) or not v \
             or len({json.dumps(x, sort_keys=True) for x in v}) != len(v):
         errs.append("variants-must-be-nonempty-and-distinct")
-    if p["cost_model_version"] not in COST_MODELS:
+    if p["cost_model"] not in COST_MODELS:
         errs.append("cost-model-version")
     for name, keys in (("split", SPLIT_KEYS), ("holdout", HOLDOUT_KEYS),
                        ("decision", DECISION_KEYS)):

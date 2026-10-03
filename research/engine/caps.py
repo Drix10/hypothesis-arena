@@ -1,4 +1,4 @@
-"""D5 R15 runaway caps (doc 08 sec. 8.4, stdlib only).
+"""Research runaway caps.
 
 Enforced by the orchestrator and the supervisor independently. The graph
 checks the counters before every LLM/tool call.
@@ -95,7 +95,7 @@ class AbortCycle(Exception):
 class PlaneHealth:
     """Consecutive-abort tracking across symbols (supervisor side).
 
-    Two rules (doc 08 sec. 8.3a/8.4):
+    Two rules:
     - 3 consecutive aborts on one symbol pause that symbol; a success
       clears the count and unpauses.
     - a majority of watchlist symbols aborting within the trailing

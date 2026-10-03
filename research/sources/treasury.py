@@ -1,4 +1,4 @@
-"""Treasury FiscalData source adapter (doc 09 Tier A): auction results
+"""Treasury FiscalData source adapter: auction results
 (auctions_query, latest-first). No key; UA carries MIRO_CONTACT when set.
 
 record_date is the publication date and the sole source of observed_at_ns
@@ -26,7 +26,7 @@ PROVENANCE = ("https://fiscaldata.treasury.gov/datasets/"
               "treasury-securities-auctions-data/")
 
 UA_BASE = "MiroHedge/phase0"
-SYMBOLS = ["EURUSD", "USDJPY", "SPY"]  # operating config, not frozen
+SYMBOLS = ["TLT", "IEF", "SPY"]  # operating config, not frozen
 
 MIN_INTERVAL_S = 1.0
 RETRIES = 3
@@ -37,7 +37,7 @@ MAX_BODY_BYTES = 2 << 20
 MAX_RECORDS = 64
 
 CADENCE_S = 3600
-TTL_S = 18 * 3600  # frozen schema SOURCE_TTL_S[treasury_auctions]
+TTL_S = 18 * 3600  # fixed schema SOURCE_TTL_S[treasury_auctions]
 HEARTBEAT_VERSION = 1
 HEARTBEAT_MAX_BYTES = 65536
 SKEW_ALLOW_S = 300

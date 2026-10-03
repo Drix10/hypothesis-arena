@@ -1,23 +1,23 @@
-"""Production resolve+emit step (doc 08 sec. 8.5, stdlib only).
+"""Production resolve+emit step.
 
 The graph's emit node calls this (injected as deps["resolve_emit"]).
 Each fused advisory candidate is resolved against its canonical record
 (deps["canonical_for"](candidate) -> record dict or None; no record
 drops and counts the candidate). One committed bundle is emitted when
 at least one feature resolved; otherwise nothing is published
-(empty=True) and the last complete bundle stands, as after an R15 abort.
+(empty=True) and the last complete bundle stands, as after a research-caps abort.
 state["history"] (bounded dated per-source tails) passes to the bundle.
 
-Map identity (finding 22): deps supply map_path. The file bytes are read
+Map identity: deps supply map_path. The file bytes are read
 (bounded), hashed for the watermark, parsed (duplicate keys rejected) and
 that parsed map goes to the resolver, so watermark and resolver always
 use the same map. A corrupt map fails the whole emit closed.
 
-Reader cap (finding 19): the frozen reader accepts at most 64 features.
+Reader cap: the reader accepts at most 64 features.
 Features are ordered by (source_id, kind, canonical_hash); the first 64
 are emitted and the rest counted as dropped_over_cap.
 
-Feature identity (finding 20): feature_id is assigned here from trusted
+Feature identity: feature_id is assigned here from trusted
 lineage (sha256 of kind+symbols+value+effect+canonical_hash+observed_ns),
 never from candidate output. Identical lineage collapses to one feature
 (first wins, duplicates counted).
@@ -30,8 +30,8 @@ from . import emit as emit_mod
 from . import resolver
 from . import schema
 
-EMIT_MAX_FEATURES = 64  # frozen reader cap, enforced at the producer
-EMIT_MAX_SYMBOLS = 16  # frozen ctx MAX_SYMBOLS, enforced at producer
+EMIT_MAX_FEATURES = 64  # fixed reader cap, enforced at the producer
+EMIT_MAX_SYMBOLS = 16  # fixed ctx MAX_SYMBOLS, enforced at producer
 CURSOR_MAX_LEN = 256
 # producer-side input bounds; resolve_emit validates its own inputs
 WM_SOURCES_MAX = 64

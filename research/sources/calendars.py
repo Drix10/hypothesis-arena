@@ -1,4 +1,4 @@
-"""Fail-closed session calendar gate (doc 09 sec. 9.4, stdlib only).
+"""Fail-closed session calendar gate.
 
 A missing or corrupt calendar raises CalendarMissing: harvest yields no
 session-gated records and marks the source stale (R9). This only checks that
@@ -26,7 +26,7 @@ def load_calendar(path):
 
 
 def session_gated_ok(calendar_or_path, kind):
-    """True if kind may be harvested. Forex/macro kinds are never gated
+    """True if kind may be harvested. Macro kinds are never gated
     by the equity calendar; equity kinds require a loaded calendar."""
     if kind in ("macro_release", "calendar_ahead"):
         return True

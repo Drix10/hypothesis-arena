@@ -1,4 +1,4 @@
-"""Crash-durable R15 budget ledger (stdlib + sqlite3, doc 08 sec. 8.4).
+"""Crash-durable research-caps budget ledger (stdlib + sqlite3 sec. 8.4).
 
 Budgets stay out of LangGraph checkpoint state (checkpoints are resumable
 data, not spending authority), but in-memory budgets lose accounting on
@@ -38,14 +38,14 @@ import hashlib as _hashlib
 import json as _json
 
 from . import locks
-from . import r15
+from . import caps
 
 LEDGER_MAX_BYTES = 64 << 20
 LEDGER_RETAIN_DAYS = 7
 CYCLES_RETAIN_DAYS = 30
 SCHEMA_VERSION = 3
-TOKENS_ABSOLUTE_MAX = r15.TOKENS  # a single need can never exceed cap
-TOOLS_ABSOLUTE_MAX = r15.TOOL_CALLS
+TOKENS_ABSOLUTE_MAX = caps.TOKENS  # a single need can never exceed cap
+TOOLS_ABSOLUTE_MAX = caps.TOOL_CALLS
 
 _COUNTERS_DDL = (
     "CREATE TABLE IF NOT EXISTS counters (cycle TEXT, symbol TEXT, "
@@ -232,7 +232,7 @@ class LedgerCorrupt(AssertionError):
 
 
 def _abort(symbol, reason):
-    raise r15.AbortCycle(symbol, {"ledger": reason})
+    raise caps.AbortCycle(symbol, {"ledger": reason})
 
 
 def _storage_size(path):
@@ -746,7 +746,7 @@ class BudgetLedger:
         if (seen is not None and seen[0] >=
                 now_wall - LEDGER_RETAIN_DAYS * 86400):
             _abort(symbol, "counters-deleted")
-        if now_wall > time.time() + r15.CLOCK_SKEW_S:
+        if now_wall > time.time() + caps.CLOCK_SKEW_S:
             # start_wall derives from now_wall (a test/control parameter): a future
             # value would mint a future-dated authority, so refuse at write
             _abort(symbol, "future-start-wall")
@@ -801,7 +801,7 @@ class BudgetLedger:
         if r is None:
             if not create:
                 return None
-            if now_wall > time.time() + r15.CLOCK_SKEW_S:
+            if now_wall > time.time() + caps.CLOCK_SKEW_S:
                 _abort(symbol, "future-start-wall")
             con.execute(
                 "INSERT INTO counters VALUES (?,?,?,?,?,?,?,0)",
@@ -809,7 +809,7 @@ class BudgetLedger:
             return [0, 0, 0, 0, now_wall, 0]
         e = list(r)
         # semantic validation on every read (old DBs predate the DDL CHECKs and any
-        # file can be edited): negative counters would authorize beyond R15, a bad
+        # file can be edited): negative counters would authorize beyond research caps, a bad
         # dead flag would misroute, a non-finite wall would break retention math.
         # An invalid row aborts, never normalized or clamped.
         if (not all(type(v) is int and v >= 0 for v in e[:4])
@@ -818,7 +818,7 @@ class BudgetLedger:
                 or not math.isfinite(e[4]) or e[4] < 0
                 or type(e[5]) is not int or e[5] not in (0, 1)):
             _abort(symbol, "counters-corrupt")
-        if e[4] > now_wall + r15.CLOCK_SKEW_S:
+        if e[4] > now_wall + caps.CLOCK_SKEW_S:
             # a start in the future extends the wall-clock budget (now - start stays
             # negative, so wall-exhausted never fires): fail closed with a small skew allowance
             _abort(symbol, "future-start-wall")
@@ -827,10 +827,10 @@ class BudgetLedger:
     def _check_row(self, e, symbol, now_wall):
         if e[5]:
             _abort(symbol, "budget-dead")
-        if now_wall - e[4] > r15.WALL_S:
+        if now_wall - e[4] > caps.WALL_S:
             _abort(symbol, "wall-exhausted")
-        if (e[0] >= r15.LLM_CALLS or e[1] >= r15.TOOL_CALLS or
-                e[2] >= r15.TOKENS or e[3] >= r15.DEPTH):
+        if (e[0] >= caps.LLM_CALLS or e[1] >= caps.TOOL_CALLS or
+                e[2] >= caps.TOKENS or e[3] >= caps.DEPTH):
             _abort(symbol, "cap-exhausted")
 
     def _op(self, fresh_ok, fn, abort_symbol, *args):
@@ -850,7 +850,7 @@ class BudgetLedger:
                 except sqlite3.Error:
                     pass
                 raise
-        except r15.AbortCycle:
+        except caps.AbortCycle:
             raise
         except sqlite3.Error as e:
             _abort(abort_symbol, "ledger-io:%s" % e)
@@ -893,16 +893,16 @@ class BudgetLedger:
             e, first_wall = self._reserve_row(con, cycle_id, symbol,
                                               now_wall)
             self._check_row(e, symbol, now_wall)
-            if e[2] + token_need > r15.TOKENS:
+            if e[2] + token_need > caps.TOKENS:
                 _abort(symbol, "tokens-exhausted")
-            if e[1] + tool_need > r15.TOOL_CALLS:
+            if e[1] + tool_need > caps.TOOL_CALLS:
                 _abort(symbol, "tools-exhausted")
             e_old = list(e)
             e[0] += 1
             e[3] += 1
             e[2] += token_need
             e[1] += tool_need
-            if e[0] > r15.LLM_CALLS or e[3] > r15.DEPTH:
+            if e[0] > caps.LLM_CALLS or e[3] > caps.DEPTH:
                 _abort(symbol, "cap-exhausted")
             con.execute(
                 "UPDATE counters SET llm=?, tools=?, tokens=?, depth=?"
@@ -923,7 +923,7 @@ class BudgetLedger:
             return ({"lease_id": lease_id, "seq": e[0],
                     "reserved": token_need,
                     "tools_reserved": tool_need,
-                    "remaining_tokens": r15.TOKENS - e[2]},
+                    "remaining_tokens": caps.TOKENS - e[2]},
                     first_wall)
         out, first_wall = self._op(True, _res, symbol)
         if _storage_size(self.path) > LEDGER_MAX_BYTES:
@@ -933,7 +933,7 @@ class BudgetLedger:
 
     def settle_call(self, cycle_id, symbol, lease, actual_tokens):
         self._valid_need(actual_tokens, 10 ** 12, "tokens", symbol)
-        if actual_tokens > r15.TOKENS:
+        if actual_tokens > caps.TOKENS:
             # actual usage outside the legal cycle bound is an accounting defect
             _abort(symbol, "actual-exceeds-cycle-bound")
 

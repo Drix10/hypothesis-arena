@@ -1,13 +1,13 @@
-"""S6 deterministic directional resolver, table event_direction_v1.
+"""Deterministic directional resolver, table event_direction.
 
 Contract:
-- doc 03 state rules: `effect` comes from a deterministic table per
+- state rules: `effect` comes from a deterministic table per
   kind, never from model output; R14 disagreement is per symbol.
-- doc 08 sec. 8.5: table frozen with the schema; parser-assigned
+- sec. 8.5: table fixed with the schema; parser-assigned
   effects are carried when present, else unknown; LLM output never
   declares direction.
 - roadmap S6: unknown on ambiguity; output is CONTEXT until measured.
-- doc 09: non-price sources inform regime only, never trigger entry.
+-: non-price sources inform regime only, never trigger entry.
 
 Authority rules:
 - Direction is carried only for parser-owned observations (origin ==
@@ -33,10 +33,10 @@ observations are canonically sorted before evaluation.
 """
 from . import schema
 
-TABLE = "event_direction_v1"
+TABLE = "event_direction"
 VERSION = "v1"
 
-CLASSIFICATION = "CONTEXT"  # frozen until measured (never TRIGGER here)
+CLASSIFICATION = "CONTEXT"  # fixed until measured (never TRIGGER here)
 
 DIRECTIONAL = ("bullish", "bearish", "risk_up", "risk_down")
 

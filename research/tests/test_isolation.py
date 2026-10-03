@@ -1,4 +1,4 @@
-"""D6 isolation proof (doc 08 sec. 8.6, boundary-model level).
+"""D6 isolation proof.
 
 What this proves on ANY host (no daemon, no root needed):
 1. The writer confines every byte it creates to the supervisor-owned
@@ -88,7 +88,7 @@ if __name__ == "__main__":
         # Deployment-mode self-check: the CURRENT user must not be able
         # to write the protected paths (run under miroresearch via
         # setpriv; success = PermissionError on each).
-        protected = ["journal", "stage", "creds/broker", "creds/jev"]
+        protected = ["journal", "stage", "creds/broker"]
         denied = 0
         for rel in protected:
             p = os.path.join(args.tree, rel, ".probe")

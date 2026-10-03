@@ -1,4 +1,4 @@
-"""D4 deterministic evidence resolver (doc 08 sec. 8.5, stdlib only).
+"""Deterministic evidence resolver.
 
 LLM outputs are advisory candidates, never evidence. The resolver
 recomputes every load-bearing field from the canonical source record.

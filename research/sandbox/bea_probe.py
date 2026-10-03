@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""bea-probe.py — Phase-D BEA evidence (operator UserID).
+"""bea-probe.py — BEA readiness probe (operator UserID).
 
 Checks, with N=3 timed samples per call and no secret leakage:
   1. authenticated dataset listing (GETDATASETLIST -> datasets present);

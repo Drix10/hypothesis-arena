@@ -1,4 +1,4 @@
-"""D3 atomic bundle writer (doc 08 sec. 8.5, stdlib only).
+"""Atomic bundle writer.
 
 One emit writes one complete bundle: unique temp + fsync + atomic
 rename, plus a manifest row appended under the inter-process manifest
@@ -318,7 +318,7 @@ def _stage_snapshot(data):
 
 
 def read_latest(outdir, db_path, map_path, now_ts):
-    """Manifest -> newest verified generation -> frozen ctx reader, over a
+    """Manifest -> newest verified generation -> fixed ctx reader, over a
     private snapshot of the verified bytes. Returns the read_bundle()
     result dict, or None when no complete bundle exists."""
     # Local import: collector/ lives at repo root, not beside the plane.

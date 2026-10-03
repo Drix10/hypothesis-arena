@@ -30,7 +30,7 @@ def synth(symbols, start="2025-01-02", n=520, drift=0.0004):
 
 class Shadow(unittest.TestCase):
     def setUp(self):
-        self.specs = S.sleeve_specs()
+        self.specs = S.ledger_specs()
         syms = sorted({s for u, _, _ in self.specs.values() for s in u})
         self.prices, self.dates = synth(syms)
         self.fwd = self.dates[300]
@@ -41,14 +41,14 @@ class Shadow(unittest.TestCase):
         S.FORWARD_START = self._old
 
     def test_only_forward_sessions_recorded_and_rebased(self):
-        u, fac, _ = self.specs["core_passive_v1"]
-        rows = S.replay("core_passive_v1", self.prices, fac, u)
+        u, fac, _ = self.specs["passive_core"]
+        rows = S.replay("passive_core", self.prices, fac, u)
         self.assertEqual(rows[0]["date"], self.fwd)
         self.assertAlmostEqual(rows[0]["equity"], S.CASH0, places=2)
         self.assertTrue(all(r["date"] >= self.fwd for r in rows))
 
     def test_replay_is_deterministic_and_prefix_stable(self):
-        u, fac, _ = self.specs["core_passive_v1"]
+        u, fac, _ = self.specs["passive_core"]
         full = S.replay("s", self.prices, fac, u)
         cut = {s: {d: v for d, v in p.items() if d <= full[-40]["date"]}
                for s, p in self.prices.items()}
@@ -57,7 +57,7 @@ class Shadow(unittest.TestCase):
             self.assertAlmostEqual(a["equity"], b["equity"], places=4)
 
     def test_log_chain_append_once_and_tamper_detected(self):
-        u, fac, _ = self.specs["core_passive_v1"]
+        u, fac, _ = self.specs["passive_core"]
         rows = S.replay("core", self.prices, fac, u)
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "core.jsonl")
@@ -103,7 +103,7 @@ class Shadow(unittest.TestCase):
             u, fac, _ = self.specs[sid]
             rows = S.replay(sid, self.prices, fac, u)
             self.assertEqual(rows[0]["date"], self.fwd)
-            self.assertEqual(set(rows[0]), {"date", "sleeve", "equity", "ret",
+            self.assertEqual(set(rows[0]), {"date", "strategy", "equity", "ret",
                                             "target"})
             # one initial allocation in history, never a rebalance target
             px = {s: self.prices[s] for s in u}
@@ -122,24 +122,24 @@ class Shadow(unittest.TestCase):
                 self.assertEqual(bad, [])
                 for sid in S.BENCHMARKS:
                     self.assertIn(sid, summ)
-                    rows, _ = S.read_log(os.path.join(d, "sleeves", sid + ".jsonl"))
+                    rows, _ = S.read_log(os.path.join(d, "ledgers", sid + ".jsonl"))
                     self.assertTrue(rows)
         finally:
             S.fetch_prices = old
 
     def test_status_flags_drawdown_states(self):
         with tempfile.TemporaryDirectory() as d:
-            os.makedirs(os.path.join(d, "sleeves"))
+            os.makedirs(os.path.join(d, "ledgers"))
             for name, eqs in (("a", [100000, 90000]), ("b", [100000, 84000]),
                               ("c", [100000, 79000])):
-                rows = [{"date": "2026-10-0%d" % (i + 1), "sleeve": name,
+                rows = [{"date": "2026-10-0%d" % (i + 1), "strategy": name,
                          "equity": e, "ret": 0.0, "target": None}
                         for i, e in enumerate(eqs)]
-                S.append_rows(os.path.join(d, "sleeves", name + ".jsonl"), [], rows)
+                S.append_rows(os.path.join(d, "ledgers", name + ".jsonl"), [], rows)
             st = S.write_status(d)
             self.assertEqual([st[k]["state"] for k in "abc"],
                              ["ok", "soft", "hard"])
-            with open(os.path.join(d, "sleeves", "status.json")) as f:
+            with open(os.path.join(d, "ledgers", "status.json")) as f:
                 self.assertEqual(json.load(f)["c"]["state"], "hard")
 
 

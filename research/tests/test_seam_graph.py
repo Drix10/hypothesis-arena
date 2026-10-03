@@ -68,7 +68,7 @@ def production_runner(d, clock, lineage_db, outdir, hbdir=None,
 
 
 def read_production_bundle(testcase, out, lineage_db, now_ts, outdir):
-    """The graph's OWN emit output -> frozen ctx_read. No manual
+    """The graph's OWN emit output -> fixed ctx_read. No manual
     publisher invocation anywhere on this path. The cycle output
     carries the emitted bundle id; the bundle file is resolved from
     the production outdir (the same dir a fresh process recovers
@@ -154,7 +154,7 @@ class TestSeamGraph(unittest.TestCase):
         # build_production_runner -> Runner.run -> graph.run_cycle ->
         # seam.harvest -> graph nodes (seam parser_extract) ->
         # graph emit -> real publish.resolve_emit -> real emit_bundle
-        # -> frozen ctx_read. The bundle comes from Runner.run
+        # -> fixed ctx_read. The bundle comes from Runner.run
         # itself; this test never touches the publisher.
         d = tempfile.mkdtemp()
         clock = SEAM_T.FakeClock()
@@ -169,7 +169,7 @@ class TestSeamGraph(unittest.TestCase):
         self.assertIn("treasury_auctions", hist)
         # Authority re-verified on a GRAPH-PRODUCED feature (not a
         # manufactured publisher fixture): the emitted hash equals
-        # the frozen hash of the stored authoritative row.
+        # the fixed hash of the stored authoritative row.
         with open(bundle_path, encoding="utf-8") as fh:
             feats = json.load(fh)["features"]
         self.assertTrue(len(feats) > 0)

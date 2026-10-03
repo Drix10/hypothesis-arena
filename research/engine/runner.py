@@ -1,4 +1,4 @@
-"""Phase-2.5 production cycle composition (Track A wiring, no D/H1).
+"""Production cycle composition.
 
 Dependency composition:
 - The caller supplies the other graph dependencies: LLM providers

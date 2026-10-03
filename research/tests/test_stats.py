@@ -1,4 +1,4 @@
-"""Statistics standard tests (doc 11 §11.0b). Stdlib only; closed-form and
+"""Statistics standard tests. Stdlib only; closed-form and
 property fixtures."""
 import math
 import os

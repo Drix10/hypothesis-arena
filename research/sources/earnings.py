@@ -1,4 +1,4 @@
-"""EDGAR-derived earnings-event veto gate (doc 09 sec. 9.1 Tier A, veto side).
+"""EDGAR-derived earnings-event veto gate.
 
 Free tier, no key. Derives earnings event windows from EDGAR:
   symbol -> CIK via www.sec.gov/files/company_tickers.json (keyless)
@@ -11,7 +11,7 @@ has_event() returns True whenever anything is unresolvable (unknown symbol,
 fetch failure, empty filing data).
 
 Stdlib only. The fetcher is injectable for offline tests; the __main__ probe
-exercises the live path and records p50/p99 per doc 09 sec. 9.4.
+exercises the live path and records p50/p99 sec. 9.4.
 """
 import json
 import math
@@ -26,7 +26,7 @@ TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK%010d.json"
 WINDOW_DAYS = 3
 
-# doc 09 sec. 9.3/9.4: source is stale after 15 min; cadence 5 min, TTL = 3x
+# sec. 9.3/9.4: source is stale after 15 min; cadence 5 min, TTL = 3x
 # cadence. Heartbeats persist to JSON for cross-process reads: a missing file
 # is absent (not stale on first boot), an unreadable one is invalid -> stale.
 # The gate suppresses unless the source is provably fresh and event-free.

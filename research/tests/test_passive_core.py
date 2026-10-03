@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-from research.strategy.sleeves import core_passive as C
+from research.strategy import passive_core as C
 from ops import emit_candidates as E
 
 NOW = datetime.datetime(2026, 9, 29, 21, 0, tzinfo=datetime.timezone.utc)

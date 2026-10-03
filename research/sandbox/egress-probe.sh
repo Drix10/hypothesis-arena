@@ -1,5 +1,5 @@
 #!/bin/bash
-# egress-probe.sh — Phase-D deployment box 2 (doc 08 §8.6 egress).
+# egress-probe.sh — egress enforcement probe.
 #
 # Checks sandbox egress enforcement at the network layer (not the prompt):
 #  1. an allowlisted destination (www.sec.gov) transits the proxy

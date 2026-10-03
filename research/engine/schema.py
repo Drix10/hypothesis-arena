@@ -1,6 +1,6 @@
-"""Frozen f2 bundle/feature constants + builders (doc 08 sec. 8.5).
+"""Bundle and feature constants plus builders.
 
-Single source of truth for shape. Validity belongs to the frozen reader
+Single source of truth for shape. Validity belongs to the reader
 (collector/ctx_read.py); tests round-trip every emitted bundle through
 read_bundle(). Builders produce canonical-JSON-ready dicts.
 """
@@ -14,7 +14,7 @@ BUNDLE_KEYS = ("schema_version", "research_epoch", "bundle_id", "commit",
                "watermarks", "features")
 BUNDLE_OPTIONAL_KEYS = ("history",)
 
-# Feature-level keys (required + optional in ctx_read f2).
+# Feature-level keys (required + optional in ctx_read).
 FEATURE_REQUIRED = ("schema_version", "kind", "symbols", "value", "effect",
                     "evidence", "confidence_bucket", "source_id",
                     "canonical_hash", "observed_at_ns", "ttl_s")
@@ -29,7 +29,7 @@ EVIDENCE = ("source", "derived", "inference")
 CONFIDENCE = ("low", "medium", "high")
 VTYPES = ("enum", "bucket", "bool", "count")
 
-# Frozen emitter registry mirror (kind must be emittable by source_id).
+# Fixed emitter registry mirror (kind must be emittable by source_id).
 EMITTERS = {
     "edgar_8k": ("filing_event",),
     "fed_monetary": ("macro_release", "calendar_ahead"),
@@ -41,7 +41,7 @@ EMITTERS = {
     "bea_nipa_gdp": ("macro_release",),
 }
 
-# Frozen source reliability tier for confidence computation (doc 09 tiers).
+# Fixed source reliability tier for confidence computation.
 SOURCE_TIER = {
     "edgar_8k": "high",
     "fed_monetary": "high",
@@ -64,7 +64,7 @@ SOURCE_TTL_S = {
 
 
 def canon(obj):
-    """Canonical bytes: the frozen P3.2 form (sort_keys, compact)."""
+    """Canonical bytes: the fixed form (sort_keys, compact)."""
     return json.dumps(obj, sort_keys=True, separators=(",", ":"),
                       ensure_ascii=True).encode("utf-8")
 

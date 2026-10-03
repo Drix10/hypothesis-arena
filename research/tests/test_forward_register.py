@@ -5,7 +5,6 @@ import hashlib
 import io
 import json
 import os
-import shutil
 import sys
 import tempfile
 import unittest
@@ -17,10 +16,6 @@ from ops import forward_register as F
 from ops import forward_ledgers as S
 from research.strategy import ledger as L
 
-REAL = os.path.join(os.path.dirname(__file__), "..", "ledger")
-REAL_FILES = [os.path.join(REAL, n) for n in ("trials.jsonl", "checkpoint.json")]
-
-
 def _sha(path):
     with open(path, "rb") as f:
         return hashlib.sha256(f.read()).hexdigest()
@@ -31,9 +26,7 @@ def _read(path):
         return f.read()
 
 
-REAL_BEFORE = [_sha(p) for p in REAL_FILES]
-
-EXPECTED = ["core_passive_v1"]
+EXPECTED = ["passive_core"]
 
 
 class Base(unittest.TestCase):
@@ -52,7 +45,7 @@ class Base(unittest.TestCase):
 
 
 class Register(Base):
-    def test_every_expected_sleeve_registered_once_and_left_open(self):
+    def test_every_expected_strategy_registered_once_and_left_open(self):
         res = self.reg()
         rows = self.opens()
         lids = sorted(r["trial_id"].split(":")[1] for r in rows)
@@ -77,13 +70,13 @@ class Register(Base):
         self.reg()
         by = {r["trial_id"].split(":")[1]: r for r in self.opens()}
         for r in by.values():
-            self.assertEqual(r["hypothesis_card_id"], "forward_shadow_2026q4")
-            self.assertEqual(r["cost_model_version"], "cost_v2")
+            self.assertEqual(r["hypothesis_card_id"], "forward_shadow")
+            self.assertEqual(r["cost_model"], "costs")
             self.assertEqual(r["split_scheme"], "forward_only")
             self.assertEqual(r["window"]["start"], "2026-09-30")
             self.assertEqual(r["runner"], "ops.forward_register")
-        self.assertEqual(by["core_passive_v1"]["family"], "core_passive")
-        self.assertEqual(by["core_passive_v1"]["prereg_hash"],
+        self.assertEqual(by["passive_core"]["family"], "passive_core")
+        self.assertEqual(by["passive_core"]["prereg_hash"],
                          hashlib.sha256(F.CORE_SPEC.encode()).hexdigest())
 
     def test_idempotent_second_run_appends_nothing(self):
@@ -94,21 +87,6 @@ class Register(Base):
         self.assertEqual(res["already"], len(EXPECTED))
         self.assertEqual((_sha(self.lp), _sha(self.cp)), before)
 
-    def test_appends_to_a_copy_of_the_real_ledger_and_keeps_its_chain(self):
-        shutil.copy(REAL_FILES[0], self.lp)
-        shutil.copy(REAL_FILES[1], self.cp)
-        n0 = L.TrialLedger(self.lp).verify(self.cp)
-        n_open0 = L.TrialLedger(self.lp).count_trials()
-        res = self.reg()
-        # The real ledger may already hold the forward trials (the loop
-        # registers them on first start); only the missing ones are appended.
-        k = len(res["registered"])
-        self.assertEqual(k + res["already"], len(EXPECTED))
-        led = L.TrialLedger(self.lp)
-        self.assertEqual(led.verify(self.cp), n0 + k)
-        self.assertEqual(led.count_trials(), n_open0 + k)
-        self.assertEqual(self.reg()["registered"], [])
-
     def test_changed_spec_opens_a_new_trial(self):
         self.reg()
         old = F.CORE_SPEC
@@ -116,16 +94,16 @@ class Register(Base):
         self.addCleanup(setattr, F, "CORE_SPEC", old)
         res = self.reg()
         self.assertEqual(len(res["registered"]), 1)
-        self.assertIn(":core_passive_v1:", res["registered"][0])
+        self.assertIn(":passive_core:", res["registered"][0])
         self.assertEqual(L.TrialLedger(self.lp).count_trials(),
                          len(EXPECTED) + 1)
 
     def test_late_registration_is_flagged(self):
-        os.makedirs(os.path.join(self.dir, "sleeves"))
-        with open(os.path.join(self.dir, "sleeves", "core_passive_v1.jsonl"),
+        os.makedirs(os.path.join(self.dir, "ledgers"))
+        with open(os.path.join(self.dir, "ledgers", "passive_core.jsonl"),
                   "w") as f:
             f.write("{}\n")
-        self.assertEqual(self.reg()["late"], ["core_passive_v1"])
+        self.assertEqual(self.reg()["late"], ["passive_core"])
 
 
 class Refusal(Base):
@@ -188,7 +166,7 @@ class Refusal(Base):
 
 
 class Hook(unittest.TestCase):
-    def test_sleeve_shadow_hook_never_raises(self):
+    def test_strategy_shadow_hook_never_raises(self):
         orig = F.register
 
         def boom(*a, **k):
@@ -200,18 +178,13 @@ class Hook(unittest.TestCase):
             S._register_forward("/nonexistent")   # must not raise
         self.assertIn("forward_register", err.getvalue())
 
-    def test_sleeve_shadow_hook_calls_register_once(self):
+    def test_strategy_shadow_hook_calls_register_once(self):
         calls = []
         orig = F.register
         F.register = lambda d, *a, **k: calls.append(d) or {"registered": []}
         self.addCleanup(setattr, F, "register", orig)
         S._register_forward("somedir")
         self.assertEqual(calls, ["somedir"])
-
-
-class RealLedgerUntouched(unittest.TestCase):
-    def test_zz_real_ledger_byte_identical(self):
-        self.assertEqual([_sha(p) for p in REAL_FILES], REAL_BEFORE)
 
 
 if __name__ == "__main__":

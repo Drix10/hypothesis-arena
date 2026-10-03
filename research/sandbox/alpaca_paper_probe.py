@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""alpaca-paper-probe.py — Phase-D Alpaca paper evidence (operator key).
+"""alpaca-paper-probe.py — Alpaca paper readiness probe (operator key).
 
 Scope: API/account/data readiness only, not execution readiness (no order
-lifecycle exists yet; H1 remains open per plan/13). Checks, with N=3 timed
+lifecycle here; the kernel drills cover it). Checks, with N=3 timed
 samples per call and no secret leakage:
   1. authenticated paper account read (paper-api /v2/account -> paper
      account, buying_power present, live orders untouched);

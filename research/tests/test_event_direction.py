@@ -1,4 +1,4 @@
-"""S6 tests: event_direction_v1 frozen interpretation table (stdlib only).
+"""S6 tests: event_direction fixed interpretation table (stdlib only).
 
 1 carried-positive 2 carried-negative 3 risk-axes+clash 4 neutral-only
 5 conflict 6 missing-inputs 7 malformed-inputs 8 ts-ambiguity 9 duplicates
@@ -172,7 +172,7 @@ def test_12_context_only():
         o = _obs(pe=eff) if eff != "unknown" else _obs(v="zzz-unmapped")
         r = ed.resolve([o], ASOF, SYM)
         assert r["classification"] == "CONTEXT", (eff, r)
-        assert r["table"] == "event_direction_v1", (eff, r)
+        assert r["table"] == "event_direction", (eff, r)
     print("12 OK")
 
 
@@ -216,10 +216,10 @@ def test_15_no_foreign_capability():
 
 
 def test_16_table_pin():
-    assert ed.TABLE == "event_direction_v1", ed.TABLE
+    assert ed.TABLE == "event_direction", ed.TABLE
     assert ed.VERSION == "v1", ed.VERSION
     assert ed.CLASSIFICATION == "CONTEXT", ed.CLASSIFICATION
-    # Frozen content: v1 carries NO value rows (nothing has measured
+    # Fixed content: v1 carries NO value rows (nothing has measured
     # justification yet). Any added row needs a version bump + test
     # update (measured justification + promotion gate, never
     # per-record).
@@ -230,7 +230,7 @@ def test_16_table_pin():
 
 
 def test_17_unmapped_source_kind():
-    # edgar_8k cannot emit macro_release (frozen EMITTERS mirror).
+    # edgar_8k cannot emit macro_release (fixed EMITTERS mirror).
     r = ed.resolve([_obs(kind="macro_release", v="x",
                          source="edgar_8k")], ASOF, SYM)
     assert r["effect"] == "unknown", r
@@ -277,18 +277,18 @@ def test_19_origin_evidence_gate():
 
 
 def test_20_symbol_scope():
-    # AAPL bullish + EURUSD bearish must never become one conflict:
+    # AAPL bullish + TLT bearish must never become one conflict:
     # mixed scope voids.
     r = ed.resolve([_obs(v="a", pe="bullish", sym="AAPL"),
-                    _obs(v="b", pe="bearish", sym="EURUSD")],
+                    _obs(v="b", pe="bearish", sym="TLT")],
                    ASOF, "AAPL")
     assert r["effect"] == "unknown", r
     assert r["reasons"] == ["scope-mismatch"], r
     # correctly partitioned calls resolve independently.
     a = ed.resolve([_obs(v="a", pe="bullish", sym="AAPL")],
                    ASOF, "AAPL")
-    e = ed.resolve([_obs(v="b", pe="bearish", sym="EURUSD")],
-                   ASOF, "EURUSD")
+    e = ed.resolve([_obs(v="b", pe="bearish", sym="TLT")],
+                   ASOF, "TLT")
     assert (a["effect"], e["effect"]) == ("bullish", "bearish"), (a, e)
     print("20 OK")
 

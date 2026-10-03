@@ -1,4 +1,4 @@
-"""Phase 2.5 plane tests: emit (D3) + resolver (D4).
+"""Phase 2.5 plane tests: emit + resolver.
 
 Every emitted bundle round-trips through the FROZEN reader
 (collector/ctx_read.read_bundle) against a scratch canonical.db +
@@ -26,9 +26,9 @@ OBS_S = 1767625200
 OBS_NS = OBS_S * 10 ** 9
 NOW_S = OBS_S + 100
 HEXA = "a" * 64
-MAP = {"map_version": "entity-v1-test",
+MAP = {"map_version": "entity-map-test",
        "cik_to_ticker": {"0000320193": "AAPL"},
-       "macro_release_to_symbols": {"FOMC": ["EURUSD"]}}
+       "macro_release_to_symbols": {"FOMC": ["TLT"]}}
 
 
 def write_map(d):
@@ -184,14 +184,14 @@ class EmitTest(unittest.TestCase):
         # fed source emits two kinds: relabeling macro_release as
         # calendar_ahead with identical fields must not earn source.
         can = canonical(source_id="fed_monetary", kind="macro_release",
-                        symbols=["EURUSD"],
+                        symbols=["TLT"],
                         value={"type": "enum", "v": "hike-25"},
                         effect="risk_up", content_hash="b" * 64)
-        cand = {"kind": "calendar_ahead", "symbols": ["EURUSD"],
+        cand = {"kind": "calendar_ahead", "symbols": ["TLT"],
                 "value": {"type": "enum", "v": "hike-25"},
                 "effect": "risk_up", "feature_id": "k1"}
         fmap = {"cik_to_ticker": {},
-                "macro_release_to_symbols": {"FOMC": ["EURUSD"]}}
+                "macro_release_to_symbols": {"FOMC": ["TLT"]}}
         ok, out = resolver.resolve(cand, can, fmap)
         self.assertTrue(ok)
         self.assertEqual(out[0]["evidence"], "inference")
@@ -270,7 +270,7 @@ class EmitTest(unittest.TestCase):
         self.assertEqual(res["stats"]["reasons"], {"ok": 1})
 
     def test_read_consumes_verified_snapshot(self):
-        # The frozen reader consumes staged verified bytes: even if
+        # The fixed reader consumes staged verified bytes: even if
         # every publication file is replaced between verification and
         # consumption, the result stands.
         ok, (feat, _) = resolver.resolve(candidate(), canonical(), MAP,
@@ -295,7 +295,7 @@ class EmitTest(unittest.TestCase):
         self.assertEqual(res["stats"]["reasons"], {"ok": 1})
 
     def test_r12_future_dropped_by_ctx(self):
-        # writer -> real frozen reader path and is dropped there.
+        # writer -> real fixed reader path and is dropped there.
         fut = (NOW_S + 3600) * 10 ** 9
         feat = schema.build_feature(
             "filing_event", ["AAPL"],
@@ -352,7 +352,7 @@ class EmitTest(unittest.TestCase):
         self.assertEqual(publish._load_map(_write(bad_keys))[1],
                          "map-keys")
         bad_macro = dict(MAP)
-        bad_macro["macro_release_to_symbols"] = {"FOMC": "EURUSD"}
+        bad_macro["macro_release_to_symbols"] = {"FOMC": "TLT"}
         self.assertEqual(publish._load_map(_write(bad_macro))[1],
                          "map-macro-value")
         bad_note = dict(MAP)

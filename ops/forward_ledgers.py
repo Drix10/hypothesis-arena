@@ -1,21 +1,20 @@
-"""Forward shadow ledgers for every sleeve that is not routed to the broker.
+"""Forward shadow ledgers for every strategy that is not routed to the broker.
 
 Log-only: no orders, no broker calls beyond the read-only SIP daily bars. Each
-sleeve runs through the same settled-cash engine and cost_v2 model the A-gate
+strategy runs through the same settled-cash engine and cost model the backtest gate
 uses, decided at each close and filled at the next open. One append-only,
-hash-chained line per sleeve per session lands in <dir>/sleeves/<sleeve>.jsonl.
+hash-chained line per strategy per session lands in <dir>/ledgers/<strategy>.jsonl.
 
-Only sessions on or after FORWARD_START are recorded, so the frozen
-pre-registered holdouts (all end before it) are never reported. Earlier bars
-warm up the signal only.
+Only sessions on or after FORWARD_START are recorded, so a backtest holdout
+that ends before it is never reported. Earlier bars warm up the signal only.
 
     python3 ops/forward_ledgers.py <dir>            # append missing sessions
     python3 ops/forward_ledgers.py <dir> --verify   # replay must equal the log
     python3 ops/forward_ledgers.py <dir> --loop     # re-run every hour
 
-Benchmark ledgers (BENCHMARKS) ride along in sleeve_specs; ops/forward_eval.py
-judges every other ledger against them (read-only, writes sleeves/eval.json).
-A new sleeve joins by adding its entry to sleeve_specs after its A-gate.
+Benchmark ledgers (BENCHMARKS) ride along in ledger_specs; ops/forward_eval.py
+judges every other ledger against them (read-only, writes ledgers/eval.json).
+A new strategy joins by adding its entry to ledger_specs after its backtest gate.
 
 --verify is the fidelity gate: a logged row that a fresh replay cannot
 reproduce means look-ahead or revised data, and exits 1.
@@ -33,7 +32,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from research.strategy import portfolio, sip_fetch
 
-FORWARD_START = "2026-09-30"   # first session recorded (after every holdout)
+FORWARD_START = "2026-09-30"   # first session recorded
 HISTORY_START = "2016-01-01T00:00:00Z"
 CASH0 = 100000.0
 SIP_DELAY_MIN = 16
@@ -43,10 +42,10 @@ PREREG = os.path.join(ROOT, "research", "prereg")
 
 CORE_WEIGHTS = {"VTI": 0.6, "IEF": 0.4}
 
-# Benchmark / control ledgers (same engine, schema and chain as the sleeves,
-# plan/12 section 12.6). Buy-and-hold: one allocation, no rebalance.
-BENCH_CASH = "bench_cash_bil_v1"
-BENCH_SPY = "bench_spy_v1"
+# Benchmark / control ledgers (same engine, schema and chain as the strategies,
+# plan/validation.md). Buy-and-hold: one allocation, no rebalance.
+BENCH_CASH = "bench_cash_bil"
+BENCH_SPY = "bench_spy"
 BENCHMARKS = (BENCH_CASH, BENCH_SPY)
 
 
@@ -71,10 +70,10 @@ def core_fn():
     return hold_fn(CORE_WEIGHTS)
 
 
-def sleeve_specs():
+def ledger_specs():
     """id -> (universe incl. cash leg, factory(sessions) -> target_fn, spec)."""
     return {
-        "core_passive_v1": (list(CORE_WEIGHTS), lambda s: core_fn(),
+        "passive_core": (list(CORE_WEIGHTS), lambda s: core_fn(),
                             "60/40 buy and hold"),
         BENCH_CASH: (["BIL"], lambda s: hold_fn({"BIL": 1.0}),
                      "benchmark: 100% BIL buy and hold"),
@@ -119,7 +118,7 @@ def common_sessions(prices):
     return sorted(dates or ())
 
 
-def replay(sleeve, prices, spec_factory, symbols):
+def replay(strategy, prices, spec_factory, symbols):
     """Rows for every session >= FORWARD_START, from a full-history run."""
     px = {s: prices[s] for s in symbols}
     sessions = common_sessions(px)
@@ -134,7 +133,7 @@ def replay(sleeve, prices, spec_factory, symbols):
     rows, prev = [], None
     for i in idx:
         eq = CASH0 * res["equity"][i] / base
-        rows.append({"date": sessions[i], "sleeve": sleeve,
+        rows.append({"date": sessions[i], "strategy": strategy,
                      "equity": round(eq, 4),
                      "ret": 0.0 if prev is None else round(eq / prev - 1, 8),
                      "target": targets.get(sessions[i])})
@@ -180,7 +179,7 @@ def append_rows(path, rows, new):
 
 def _settle(d, sid, fresh, spec, verify, bad, summary):
     """Fidelity-check the log against `fresh`, append what is missing."""
-    path = os.path.join(d, "sleeves", sid + ".jsonl")
+    path = os.path.join(d, "ledgers", sid + ".jsonl")
     rows, _ = read_log(path)
     by_date = {r["date"]: r for r in fresh}
     for r in rows:  # fidelity: the log must equal what a replay gives now
@@ -195,10 +194,10 @@ def _settle(d, sid, fresh, spec, verify, bad, summary):
 
 
 def run(d, now, verify=False, http_get=sip_fetch.default_http_get):
-    specs = sleeve_specs()
+    specs = ledger_specs()
     symbols = sorted({s for u, _, _ in specs.values() for s in u})
     prices = fetch_prices(symbols, now, http_get)
-    os.makedirs(os.path.join(d, "sleeves"), exist_ok=True)
+    os.makedirs(os.path.join(d, "ledgers"), exist_ok=True)
     bad, summary = [], {}
     for sid, (universe, factory, spec) in specs.items():
         fresh = replay(sid, prices, factory, universe)
@@ -207,15 +206,14 @@ def run(d, now, verify=False, http_get=sip_fetch.default_http_get):
     return bad, summary
 
 
-# Per-sleeve kill limits (plan/appendix/10 section 7): a sleeve run at a 10%
-# annual volatility target halves at -1.5x and freezes at -2x that volatility
-# from its own peak. Shadow ledgers cannot be halted, so the state is reported
-# (sleeves/status.json, monitor) for the operator and for promotion decisions.
+# Per-strategy kill limits: a strategy run at a 10% annual volatility target
+# halves at -1.5x and freezes at -2x that volatility from its own peak. Shadow ledgers cannot be halted, so the state is reported
+# (ledgers/status.json, monitor) for the operator and for promotion decisions.
 SOFT_DD, HARD_DD = 0.15, 0.20
 
 
 def write_status(d):
-    sd = os.path.join(d, "sleeves")
+    sd = os.path.join(d, "ledgers")
     out = {}
     for name in sorted(os.listdir(sd)) if os.path.isdir(sd) else []:
         if not name.endswith(".jsonl"):
@@ -242,7 +240,7 @@ def write_status(d):
 
 
 def _evaluate(d):
-    """Refresh sleeves/eval.json after write_status. Read-only w.r.t. the
+    """Refresh ledgers/eval.json after write_status. Read-only w.r.t. the
     ledgers; any failure is logged and can never stop the loop."""
     try:
         from ops import forward_eval
@@ -282,7 +280,7 @@ def main(argv, now=None):
             if "--loop" not in argv:
                 return 2
         else:
-            print(json.dumps({"sleeves": summary, "mismatch": bad}))
+            print(json.dumps({"ledgers": summary, "mismatch": bad}))
             if "--loop" in argv:
                 _evaluate(args[0])
             if bad and "--loop" not in argv:
