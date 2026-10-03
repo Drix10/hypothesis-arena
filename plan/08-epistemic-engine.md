@@ -320,6 +320,11 @@ kinds and keeps every f2 rule:
 - `ripple_hypothesis`: `value = {"direction": "up|down", "horizon":
   "5|21|63", "mechanism": <enum>, "source_event": <event_id>}`,
   `evidence = inference`, `canonical_hashes` = the verified evidence rows.
+- Lifetimes: `link_signal` carries `ttl_s` = 432000 (5 days) and
+  `ripple_hypothesis` 345600 (4 days), so a Friday or pre-holiday emission
+  is still fresh at the next session; a feature that expires before its
+  sleeve acts means no trade (absent, never neutral), and the expiry is
+  counted.
 
 Hard rules on every record:
 - **Bundle vs feature ownership.** Bundle-level: `schema_version`,

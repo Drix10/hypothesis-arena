@@ -152,6 +152,14 @@ time. Runs name their manifest hashes; a run that cannot is void.
   affected window.
 
 Data-quality rules:
+- **CIK to ticker, point in time:** the graph is keyed by CIK and prices by
+  ticker. EDGAR's `company_tickers.json` is current only. The mapping at a
+  past date comes from, in order: the XBRL cover-page `dei:TradingSymbol`
+  of the latest filing before that date (reliable from 2019), the broker's
+  symbol-change corporate actions, and EDGAR former names matched to the
+  broker's asset list. A firm-date that none of them resolves is excluded
+  and counted like a missing price (the 5% rule). Measured first by the
+  data coverage probe (doc 07 §7.2).
 - **Survivorship:** the free feed may lack history for delisted symbols.
   Every run reports excluded-event counts; more than 5% excluded voids an
   event or single-stock sleeve run.

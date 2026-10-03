@@ -37,6 +37,10 @@ with evidence (commit and test output, or a report path).
 
 ## Alpha (doc 07 §7.2, critical path)
 
+- [ ] **Data coverage probe**: 300 firms with 10-Ks filed 2016-2018; share
+      with Alpaca SIP bars through their last trading day, and share that
+      map CIK→ticker point in time (doc 09 §9.1a). Below 95% on either →
+      paid-data trigger now.
 - [ ] **Shorts in the harness**: short side and margin ledger, `cost_v3`,
       `constraint_set` and `contamination_class` in the prereg validator,
       $25,000 whole-share book, spanning test + FF5/momentum diagnostics,

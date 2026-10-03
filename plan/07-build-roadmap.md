@@ -52,6 +52,13 @@ the sign-off log.
 
 ## 7.2 Track A - Alpha (critical path)
 
+- [ ] **Data coverage probe** (first, about a day): on a random sample of
+      300 firms that filed a 10-K in 2016-2018, measure (a) how many have
+      Alpaca SIP daily bars through their last trading day, including
+      firms since delisted or renamed, and (b) how many map from CIK to the
+      ticker they traded under at each date (doc 09 §9.1a mapping rule).
+      If either falls below 95%, the single-stock sleeves meet the
+      paid-data trigger now, before the link graph is built.
 - [ ] **Shorts in the harness** (`research/strategy/`): short side and
       margin ledger (Reg T, maintenance, borrow, no short rebate, short
       dividends, margin interest), `cost_v3` (doc 14 §14.10),
