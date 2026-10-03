@@ -1,4 +1,6 @@
-# CI runs on every push, PR and manual dispatch:
+# CI runs on every pull request, on pushes to main, nightly on main and on
+# manual dispatch. Branch pushes without a PR do not run it (agents open a PR
+# for every change); a newer push to a PR cancels its superseded run.
 #  1. stdlib: collector suites only (mocked IO, no network, no third-party deps).
 #  2. evidence: engine isolation and sources suites, stdlib only, separate from
 #     the collector job so neither masks the other.
@@ -14,8 +16,15 @@ name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 3 * * *"   # nightly full run on main (03:17 UTC)
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
