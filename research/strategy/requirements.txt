@@ -1,2 +1,0 @@
-# Strategy-harness test deps (exact pins).
-pytest==8.3.4
