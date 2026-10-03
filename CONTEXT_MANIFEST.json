@@ -371,7 +371,7 @@
     },
     {
       "name": "research",
-      "command": "for t in test_alert_relay test_baseline test_bea test_bls test_costs_v2 test_costs_v3 test_edgar test_forward_register test_fred test_gates test_form4 test_isolation test_jev_filter test_ledger test_earnings_surprise test_portfolio test_prereg test_settlement test_sip_fetch test_forward_eval test_forward_ledgers test_source_seam test_stats test_tier_a test_treasury; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
+      "command": "for t in test_alert_relay test_baseline test_bea test_bls test_costs_v2 test_costs_v3 test_deploy_check test_edgar test_forward_register test_fred test_gates test_form4 test_isolation test_jev_filter test_ledger test_earnings_surprise test_portfolio test_prereg test_settlement test_sip_fetch test_forward_eval test_forward_ledgers test_source_seam test_stats test_tier_a test_treasury; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
       "timeout_seconds": 1800
     },
     {
@@ -381,6 +381,26 @@
         "linux"
       ],
       "timeout_seconds": 600
+    },
+    {
+      "name": "engine",
+      "command": "for t in test_engine test_hardening test_emit test_seam_graph test_event_direction; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
+      "timeout_seconds": 1800
+    },
+    {
+      "name": "research-pytest",
+      "command": "python3 -m pytest -q research/tests/test_candidate.py",
+      "timeout_seconds": 300
+    },
+    {
+      "name": "collector-soak",
+      "command": "MIRO_CONTACT=gate@example.invalid python3 collector/tests/test_soak_check.py",
+      "timeout_seconds": 300
+    },
+    {
+      "name": "deploy-scripts",
+      "command": "bash ops/deploy/test_run.sh && bash ops/tests/test_start_preflight.sh",
+      "timeout_seconds": 300
     },
     {
       "name": "freeze-check",
@@ -474,6 +494,10 @@
   ],
   "pipeline": {
     "max_review_rounds": 2,
-    "auto_merge_low_risk": true
+    "auto_merge_low_risk": true,
+    "models": {
+      "high_reasoning": "claude-opus-5-5"
+    },
+    "max_cost_usd": 10
   }
 }
