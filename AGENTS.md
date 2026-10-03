@@ -21,10 +21,10 @@
    the critical path is open. Ask "does this change the probability the
    fund makes or loses money?" before every task.
 10. Legality first: nothing live beyond the constraint set the stage
-    manifest names (doc 01 §1.2): C1 is cash-account, long-only, 1×,
+    manifest names (doc 01 §1.2): the India set is cash-account, long-only, 1×,
     allowlisted US stocks/ETFs (R18/R19) and is what the kernel enforces;
-    C2 (US margin, long and short) is the research target; the kernel
-    enforces it only after doc 07 K-C2. Paper evidence outside the target
+    US set (US margin, long and short) is the research target; the kernel
+    enforces it only once kernel short selling (doc 07) is built. Paper evidence outside the target
     set is research, not promotion evidence.
 11. Every backtest goes through the harness and the trial ledger
     (doc 11 §11.0a). LLM-involved evaluations follow their contamination

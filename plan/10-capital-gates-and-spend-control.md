@@ -18,7 +18,7 @@ human act and the runtime state are therefore separate objects:
   `intended_capital_usd`, `allocated_capital_usd`, `policy_version`,
   `plan_hash`, `approved_at`, `evidence_hash`, `signer_id`,
   `approved_sleeves` (sleeve id + version + filter policy),
-  `constraint_set` (C1 | C2), `instrument_allowlist` (R19),
+  `constraint_set` (india | us), `instrument_allowlist` (R19),
   `jurisdiction_evidence_hash`
   (§10.1a, G1+), plus an Ed25519 `signature` over all of it. The process
   verifies (valid signature, known signer key, correct plan version,
@@ -51,7 +51,7 @@ attest_hash:  <sha256 of "stage|approved_by|approved_at|capital_usd|prev_attest"
   `risk_capital = min(intended, allocated, current_equity)` at snapshot.
 - Alerts mean: append to `alerts.jsonl` + non-zero exit where the process
   stops + the outbound-only alert adapter (doc 06 §6.4). Unattended
-  operation (G0b included) is blocked until that adapter exists; chat
+  operation (paper trading included) is blocked until that adapter exists; chat
   gateways remain banned (doc 01).
 - The research plane, factory, and sleeve engine cannot read or write the
   stage chain (R11).
@@ -64,7 +64,7 @@ A broker API does not make a deployment legal. Before any G1 promotion the
 operator attaches, as `jurisdiction_evidence_hash`, a signed evidence
 bundle for the constraint set the manifest names (doc 01 §1.2).
 
-**C1 (India-resident):**
+**India set (India-resident):**
 1. Operator residency and the funding route (RBI LRS, USD 250,000 per
    financial year), with bank confirmation that the remittance purpose
    code is overseas portfolio investment.
@@ -83,7 +83,7 @@ bundle for the constraint set the manifest names (doc 01 §1.2).
    good-faith/free-riding, day-trade rules at their effective dates)
    reviewed and signed.
 
-**C2 (US-resident):**
+**US set (US-resident):**
 1. Operator US residency and tax status (resident alien or citizen; W-9
    with the broker), and any visa or employer trading restriction,
    confirmed in writing by a qualified US tax or securities professional.
@@ -95,7 +95,7 @@ bundle for the constraint set the manifest names (doc 01 §1.2).
 4. The `broker_compliance_policy` rows (Reg T, maintenance, Rule 201,
    borrow and buy-in handling, day-trade rules at their effective dates)
    reviewed and signed.
-5. Written professional confirmation of the C2 allowlist (doc 05 R19).
+5. Written professional confirmation of the US set allowlist (doc 05 R19).
 
 The gate is re-checked before every promotion and whenever a rule's
 effective date passes. This plan summarizes public sources; it is not
@@ -110,11 +110,11 @@ and never scales the rules - R1–R20 always apply.
 
 | | G0_PAPER | G1_TINY | G2_SCALED | G3_FULL |
 |---|---|---|---|---|
-| Capital (C1) | paper only | ≤ 2% of intended capital | ≤ 25% | 100% |
-| Capital (C2) | paper only | first funded account | full account | full account |
-| Gross (C2) | per R2 | 50% of the sleeve's target gross, half the names | 75% | 100% |
-| Sleeves in kernel | 1 champion (+ all others in G0a shadow) | 1 promoted sleeve | ≤ 2 (after universe-cap change) | per G3 manifest |
-| Symbols | per R1 | C1: 1 liquid US ETF; C2: the sleeve's universe | C1: ≤ 3; C2: per R1 | per R1 |
+| Capital (India set) | paper only | ≤ 2% of intended capital | ≤ 25% | 100% |
+| Capital (US set) | paper only | first funded account | full account | full account |
+| Gross (US set) | per R2 | 50% of the sleeve's target gross, half the names | 75% | 100% |
+| Sleeves in kernel | 1 champion (+ all others in shadow testing) | 1 promoted sleeve | ≤ 2 (after universe-cap change) | per G3 manifest |
+| Symbols | per R1 | India set: 1 liquid US ETF; US set: the sleeve's universe | India set: ≤ 3; US set: per R1 | per R1 |
 | R-multiplier | 1.0 | 0.25 | 0.5 | 1.0 |
 | Max daily loss | n/a | 1% of stage capital | 1.5% | 2% |
 | Max position | per R2 | R2 × 0.25 | R2 × 0.5 | R2 |
@@ -124,14 +124,14 @@ and never scales the rules - R1–R20 always apply.
 Day-boundary rule (locked): every "daily" limit uses the UTC calendar day;
 settlement dates use the exchange calendar (R18).
 
-**G1 under C1:** the single G1 symbol is a highly liquid US ETF
+**G1 under the India set:** the single G1 symbol is a highly liquid US ETF
 (SPY/QQQ/IWM-class) traded by the promoted sleeve; a sleeve with several
 symbols goes live on its most liquid one, with the evidence recomputed for
 that restriction.
 
-**G1 under C2:** at a first capital under $25,000, 2% of capital cannot
+**G1 under the US set:** at a first capital under $25,000, 2% of capital cannot
 hold a cross-sectional book and one ETF cannot express a long-short
-sleeve, so C2 scales risk by gross exposure instead of capital. Scaling
+sleeve, so the US set scales risk by gross exposure instead of capital. Scaling
 gross alone would shrink each name below a tradable whole-share size
 (25% of target gross at $25,000 is about $235 a name), so G1 runs at 50%
 of target gross with half the registered names a side (the most extreme
@@ -143,9 +143,9 @@ evidence is recomputed for that restricted book before G1 is signed.
 Every criterion must be met and a human must then sign. Meeting the
 criteria grants the right to ask, nothing more.
 
-**G0 → G1** - the champion sleeve passed A-gate and B-gate (doc 11
+**G0 → G1** - the champion sleeve passed backtest gate and shadow gate (doc 11
 §11.3a) and its evidence is transferable (produced under the manifest's
-constraint set); 30 consecutive clean G0b days; zero R-rule violations;
+constraint set); 30 consecutive clean paper-trading days; zero R-rule violations;
 replay determinism green every week (D1); tracking within the sleeve's
 pre-registered band; AI spend within the G0 cap; kill-switch, reconcile,
 settlement, and isolation drills passed; port-on-promotion vectors green
@@ -153,7 +153,7 @@ settlement, and isolation drills passed; port-on-promotion vectors green
 `filter = jev`, JEV calibration ≥ base rate over ≥ 200 decisions.
 
 **G1 → G2** - 30 consecutive live days at G1; zero R-rule violations;
-realized implementation shortfall within 1.5× the modeled cost (`cost_v2` C1, `cost_v3` C2); live-vs-shadow
+realized implementation shortfall within 1.5× the modeled cost (`cost_v2` India set, `cost_v3` US set); live-vs-shadow
 divergence within the S3 band; AI-spend ratio computed daily in SHADOW
 (G1 has no ratio cap to enforce) with 30 days of computed-passing
 readings; calibration still ≥ baseline where applicable.
@@ -172,8 +172,8 @@ drawdown < 5% over the window; ≥ 100 closed trades.
 | Determinism/replay failure (D1) | Demote to G0_PAPER immediately |
 | Journal hash-chain break | Demote to G0_PAPER, HARD kill, forensics before restart |
 | Spend circuit breaker at tier 3 (§10.4) | Entries halted, demote one stage |
-| Broker-reported good-faith / free-riding violation (R18, C1) | HARD-class compliance incident, demote to G0_PAPER, human review |
-| Broker margin call or margin buffer breach (R18, C2) | MEDIUM kill, gross cut to half the sleeve target, demote one stage |
+| Broker-reported good-faith / free-riding violation (R18, India set) | HARD-class compliance incident, demote to G0_PAPER, human review |
+| Broker margin call or margin buffer breach (R18, US set) | MEDIUM kill, gross cut to half the sleeve target, demote one stage |
 | Short position the broker marks hard-to-borrow, recalled or bought in (R20) | Close next session, entries for that symbol HOLD, alert |
 | Live order outside the instrument allowlist reaching the broker (R19) | HARD kill, demote to G0_PAPER, forensics |
 
@@ -197,7 +197,7 @@ Rules that hold at every level:
   read `features.jsonl`, and does not wait on the network for its decision.
 - MEDIUM and HARD are reachable from a physical operator action (file + signal) in
   under 5 seconds, and that path is drilled monthly.
-- MEDIUM flatten state machine (frozen, implemented in P3.5): the kill
+- MEDIUM flatten state machine (frozen, implemented in the kernel build): the kill
   switch persists exactly one of `MEDIUM_ACTIVE` (entries stopped, flatten
   not yet achieved), `FLATTEN_PENDING` (flatten ordered, awaiting broker
   ack), `FLATTENED` (broker confirms flat), `PROTECTION_ONLY` (venue or
@@ -365,7 +365,7 @@ and blocks future spend until a supervisor reconciles.
 - Projection/tier plumbing: `tier_state.json` (hourly evaluation
   cache + 6-hour anti-flap counter), `tier_journal.jsonl` (every
   transition with its projection), `ratio_journal.jsonl` (daily ratio
-  evaluations). The T2 SOFT-kill and T3 MEDIUM-kill signals are
+  evaluations). The tier-2 SOFT-kill and tier-3 MEDIUM-kill signals are
   durable sentinel files plus supervisor-hook events; the trading-side
   kill state machine that consumes them is Slice-D+ work - the plane
   signals, it never acts on capital. Until the trailing-90d profit
@@ -480,7 +480,7 @@ file exists and verifies, nothing starts - there is no default stage.
 - [ ] Demotion drill: forced R-rule violation in paper → automatic
       demotion, journaled, alerted (outbound adapter).
 - [ ] SOFT / MEDIUM / HARD drills pass, exits alive under all three;
-      MEDIUM flatten = SELL-to-close longs and, under C2, BUY-to-cover
+      MEDIUM flatten = SELL-to-close longs and, under the US set, BUY-to-cover
       shorts.
 - [ ] Spend counter survives restart; tier transitions journaled.
 - [ ] A forced spend spike walks tier 0 → 1 → 2 → 3 with the documented
@@ -495,11 +495,11 @@ file exists and verifies, nothing starts - there is no default stage.
 
 The goal of offering the strategy to ordinary investors is a legal
 undertaking with its own gates. Nothing here is built until the operator's
-own C2 account has a live record, and every step needs US counsel. This
+own US-set account has a live record, and every step needs US counsel. This
 section records the public rules that shape the path; it is not legal
 advice.
 
-1. **Own capital (C2, G1-G3).** The track record is the operator's own
+1. **Own capital (US set, G1-G3).** The track record is the operator's own
    account. Backtests and paper results are "hypothetical performance"
    under the SEC Marketing Rule (Rule 206(4)-1) and cannot be advertised to
    a general retail audience.
@@ -537,8 +537,8 @@ $175,000) for claiming AI capabilities they did not have.
   Demotion is automatic and cannot be vetoed.
 - Corruption, doubt, and failure resolve toward paper.
 - Three kill levels; none reachable by an agent; exits never blocked.
-- Live scope is the manifest's constraint set (C1: 1×, cash, long only,
-  one liquid ETF at G1; C2: margin, long and short, half the names at 50%
+- Live scope is the manifest's constraint set (India set: 1×, cash, long only,
+  one liquid ETF at G1; US set: margin, long and short, half the names at 50%
   of target gross at G1). Jurisdiction evidence for that set is signed before G1.
 - Outside capital only through §10.6, never by a stage promotion.
 - Only manifest-approved sleeves may reach the kernel.

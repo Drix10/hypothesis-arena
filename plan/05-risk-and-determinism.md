@@ -4,11 +4,11 @@ Violation of any numbered rule halts paper trading until human review and
 demotes a live stage (doc 10 §10.2). No auto-override exists, and no agent
 can reach any of these rules.
 
-Rules apply per constraint set (doc 01 §1.2). Where a rule has a C1 and a
-C2 value, the stage manifest's constraint set selects it. The kernel's
-implementation status of each set is tracked in doc 07 (K-C2).
+Rules apply per constraint set (doc 01 §1.2). Where a rule has an India-set value and a
+US-set value, the stage manifest's constraint set selects it. The kernel's
+implementation status of each set is tracked in doc 07 (kernel short selling).
 
-| Rule | C1 (cash, long only) | C2 (margin, long and short) |
+| Rule | India set (cash, long only) | US set (margin, long and short) |
 |---|---|---|
 | R1 concurrent positions | ≤ 5 (`EXEC_UNIVERSE_MAX`) | ≤ the sleeve's registered count, at most 50 |
 | R2 single position | ≤ 25% of equity | long ≤ 10%, short ≤ 5% of equity |
@@ -24,32 +24,32 @@ implementation status of each set is tracked in doc 07 (K-C2).
 - R1. Concurrent positions per the table above. One open position per
   symbol: a second intent on a held symbol is HOLD until the first
   closes. A long-only book controls concentration through R2, R7, and the
-  sleeve/portfolio risk budget; a C2 book also through the R2 net band.
+  sleeve/portfolio risk budget; a US-set book also through the R2 net band.
   Exposure math counts filled
   exposure plus pending executable exposure (unfilled entries reserve
   budget). Account inputs come from the broker adapter: equity, settled
   cash, unsettled proceeds, open-order notional, realized/unrealized PnL.
-  Snapshot-time formulas (K6, frozen): `pending_notional` = sum of
+  Snapshot-time formulas (frozen): `pending_notional` = sum of
   open-order notional (entry + unacked); `reserved_risk` = pending_notional
-  × per-symbol risk fraction. In a C1 account `margin_requirement` = 0
+  × per-symbol risk fraction. In an India-set account `margin_requirement` = 0
   and available buying power = settled cash − pending buy notional; in a
-  C2 account buying power and `margin_requirement` come from the broker's
-  margin data and R18 (C2). Pending exposure counts toward every cap below.
+  US-set account buying power and `margin_requirement` come from the broker's
+  margin data and R18 (US set). Pending exposure counts toward every cap below.
 - R2. Position and total limits per the table above. (Notional = size ×
   price, absolute for shorts; equity at snapshot time; both frozen in the
-  snapshot, never re-read at send. Pending counts.) The C1 75% cap also
-  keeps a cash buffer for T+1 settlement timing. A C2 book drifts between
+  snapshot, never re-read at send. Pending counts.) The India-set 75% cap also
+  keeps a cash buffer for T+1 settlement timing. A US-set book drifts between
   rebalances (stop-outs, price moves): past the hard net band, new
   entries HOLD and the larger leg is trimmed proportionally by exits only;
   stopped-out slots stay empty until the next rebalance.
 - R3. Fills per day per the table above (a 40-name monthly rebalance
-  needs up to 80 orders plus stop replacements, so C2 rebalance sessions
+  needs up to 80 orders plus stop replacements, so US-set rebalance sessions
   carry their own registered cap; partial fills count once per order).
   Max 3 trades/symbol/hour (anti-churn). A "trade" = a broker-acknowledged
   fill.
 - R4. Symmetric flip-lock: LONG→SHORT→LONG or SHORT→LONG→SHORT completions
   within 1 h on one symbol → force HOLD 2 h on that symbol. (Inert in a
-  C1 book.)
+  India-set book.)
 - R5. Drawdown > 10% from peak → HALT all entries (exits only) until
   review. Peak = max(daily_close_hwm, intraday_hwm), both persisted;
   evaluated on snapshot equity each cycle. Sleeve volatility targets
@@ -86,19 +86,19 @@ implementation status of each set is tracked in doc 07 (K-C2).
   has removed PDT restrictions and dropped the `daytrade_count` and
   related account fields (by 2026-07-06) in favor of an intraday margin
   framework. It is a table row with effective dates, not a code path; the
-  adapter must not depend on the removed fields. Shorts: HOLD under C1 (R19); under C2 they pass
+  adapter must not depend on the removed fields. Shorts: HOLD under the India set (R19); under the US set they pass
   R20. Corporate actions (splits, dividends, ticker changes,
   mergers, halts) normalize BEFORE the feature engine; until the
   adjustment layer exists, any symbol with a pending corporate event is
   untradeable. Before any live stage: the LIVE JURISDICTION GATE (doc 10
   §10.1a).
 - R18. **Account rule.**
-  C1 (settled cash): every buy must be funded by settled cash net of
+  India set (settled cash): every buy must be funded by settled cash net of
   pending buys; a lot bought with unsettled proceeds may not be sold
   before those proceeds settle (good-faith rule); no buy whose payment
   depends on selling the same security (free-riding). Settlement dates
   come from the exchange calendar (T+1 for US equities).
-  C2 (margin buffer): every order is checked against Reg T initial margin
+  US set (margin buffer): every order is checked against Reg T initial margin
   (50%; 150% deposit on a short sale) and the broker's maintenance
   requirements (`broker_compliance_policy`; Alpaca: longs 30% above $6,
   shorts the greater of $5/share or 30% at $5 and above). After the order,
@@ -110,12 +110,12 @@ implementation status of each set is tracked in doc 07 (K-C2).
   *Default:* HOLD.
 - R19. **Jurisdiction instrument allowlist.** Live orders only for
   instruments on the signed allowlist attached to the stage manifest:
-  US-listed common stock and ETFs, long only under C1, long and short under
-  C2; never options, futures, FX spot/CFD, leveraged/inverse products or
+  US-listed common stock and ETFs, long only under the India set, long and short under
+  US set; never options, futures, FX spot/CFD, leveraged/inverse products or
   crypto. Anything else is HOLD at candidate admission and again at veto.
   Paper books that count as promotion evidence obey the same allowlist.
   *Owner:* stage manifest + `broker_compliance_policy`. *Default:* HOLD.
-- R20. **Short-sale controls (C2).** A short entry requires, at order
+- R20. **Short-sale controls (US set).** A short entry requires, at order
   time, the broker's `shortable` and `easy_to_borrow` flags; hard-to-borrow
   names are HOLD. No short while the symbol is under the Rule 201
   short-sale restriction, has a pending corporate event, or has a pending
@@ -202,11 +202,11 @@ must reproduce every existing verdict bit-identically before landing.
 
 ## 5.2 Leverage / stop table (locked)
 
-- C1: 1×, cash account, long only. C2: margin account, gross ≤ 150%,
+- India set: 1×, cash account, long only. US set: margin account, gross ≤ 150%,
   shorts under R20. No other leverage in any set.
 - Research books may simulate instruments outside the target set only
   when labeled non-promotable research; they never feed a promotion.
-- Flatten (doc 10 §10.3) means SELL-to-close longs and, under C2,
+- Flatten (doc 10 §10.3) means SELL-to-close longs and, under the US set,
   BUY-to-cover shorts; exits and covers are never blocked.
 - Every order intent carries broker-native protection or it is rejected by
   `risk/veto.cpp`. Exit profiles are versioned per sleeve:
@@ -296,7 +296,7 @@ transitions are journaled):
   constants.
 - Agents cannot read, write, or influence any rule in this document.
 - Absent data is never treated as neutral data, anywhere in the system.
-- Live scope is the manifest's constraint set: C1 = 1×, cash, long only;
-  C2 = margin, long and short, gross ≤ 150%, easy-to-borrow shorts
+- Live scope is the manifest's constraint set: India set = 1×, cash, long only;
+  US set = margin, long and short, gross ≤ 150%, easy-to-borrow shorts
   (R18/R19/R20).
 - Any limit change = doc edit + version bump + fresh paper window.

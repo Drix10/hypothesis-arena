@@ -62,7 +62,7 @@ first live account after moving to the US. Until then everything is
 paper. Each stage manifest names the constraint set it runs under; only
 evidence produced under that set promotes it (doc 11 §11.0d).
 
-| | C1 - India-resident | C2 - US-resident (research target) |
+| | India set (India-resident) | US set (US-resident, research target) |
 |---|---|---|
 | Funding | RBI LRS (USD 250,000 per financial year) | US bank account |
 | Account | cash, T+1 settled cash (R18) | margin (Reg T), at least $2,000 equity |
@@ -73,11 +73,11 @@ evidence produced under that set promotes it (doc 11 §11.0d).
 | Excluded | margin, shorts, options, futures, FX, leveraged/inverse ETFs, crypto | options, futures, FX, leveraged/inverse ETFs, crypto |
 | First capital | n/a (paper) | expected under $25,000 |
 
-- C1 binds because LRS prohibits remittances for margin trading and for
+- The India set binds because LRS prohibits remittances for margin trading and for
   foreign-exchange trading abroad. It governs any live funding made while
   India-resident.
-- C2 rules are in doc 05 (R1, R2, R18, R19, R20 C2 rows). Research books
-  and G0a shadow run under C2 at $25,000.
+- The US-set rules are in doc 05 (R1, R2, R18, R19, R20 US-set rows). Research books
+  and shadow testing run under the US set at $25,000.
 - Tax and reporting items for either set are jurisdiction-gate evidence,
   not code (doc 10 §10.1a).
 - This section summarizes public sources for planning. It is not legal or
@@ -172,7 +172,7 @@ never see equity or PnL. The boundary is enforced by OS permissions
 
 ## 1.7 Success criteria (G0 paper)
 
-- **Economic:** at least one sleeve passes the doc 11 A-gate and B-gate:
+- **Economic:** at least one sleeve passes the doc 11 backtest gate and shadow gate:
   net-of-all-cost Sharpe with a lower confidence bound above zero, beats
   cash, positive spanning alpha against the reference book, survives 2×
   cost stress, trial-count-adjusted.
@@ -184,7 +184,7 @@ never see equity or PnL. The boundary is enforced by OS permissions
 - **Determinism:** same logged context replayed → same decision (weekly).
 - **Risk:** zero trades violating doc 05. One violation = halt.
 - **Latency (local, excl. network):** snapshot → order intent < 1 ms.
-- **Autonomy:** 30 consecutive G0b days with no required human
+- **Autonomy:** 30 consecutive paper-trading days with no required human
   intervention; every intervention logged with its cause.
 - **Cost:** AI spend within the stage cap; cost per closed trade and per
   sleeve reported daily (doc 10 §10.4).
@@ -197,14 +197,14 @@ never see equity or PnL. The boundary is enforced by OS permissions
 - The edge hypothesis is linked-firm information diffusion at T3
   horizons, tested sleeve by sleeve under doc 11.
 - Instruments live: US-listed equities and ETFs under the stage's
-  constraint set (C1 or C2). No crypto, no forex spot, no derivatives.
+  constraint set (India or US). No crypto, no forex spot, no derivatives.
 - Venue: Alpaca (paper G0, live from G1 after the jurisdiction gate).
 - Data: free for core operation; primary sources first; social signals
   quarantined (doc 09).
-- Capital mode: paper until G0b's 30 clean days + passed sleeve gate +
+- Capital mode: paper until 30 clean paper-trading days + passed sleeve gate +
   human sign-off. Four stages (G0_PAPER → G1_TINY → G2_SCALED → G3_FULL),
   human-signed, never auto-promoted; demotion automatic and unvetoable.
-- Candidate pipeline: engine features (and, for L3, verified ripple
+- Candidate pipeline: engine features (and, for Event Ripple, verified ripple
   hypotheses) → deterministic sleeve → candidate c1 → optional JEV filter
   → C++ risk engine sizes → runner executes.
 - Not HFT: T3 strategies on a fast deterministic core (§1.4).

@@ -12,9 +12,9 @@ reading and connecting is.
 
 ## Files (read in order)
 
-1. `01-vision-and-scope.md` - thesis, operator path, constraint sets C1/C2,
+1. `01-vision-and-scope.md` - thesis, operator path, constraint sets India/US,
    latency tiers, what we do not build.
-2. `02-strategy-book.md` - the sleeves (L1-L4), controls, and the record
+2. `02-strategy-book.md` - the sleeves (the four sleeves), controls, and the record
    of retired sleeves.
 3. `03-jev-decision-layer.md` - the optional calibrated filter (JEV), one
    candidate-bound contract.
@@ -29,7 +29,7 @@ reading and connecting is.
    ripple reasoning, verifier, isolation, feature contract, research
    factory.
 9. `09-osint-and-free-data.md` - every source, ranked and licensed, with
-   failure defaults; social-signal quarantine; data phases D1/D2.
+   failure defaults; social-signal quarantine; free and paid data phases.
 10. `10-capital-gates-and-spend-control.md` - stages, jurisdiction gates,
     kill switches, AI spend control, path to outside capital.
 11. `11-calibration-and-self-improvement.md` - validation standard,
@@ -68,15 +68,15 @@ records; never authority).
 
 - Deterministic code owns sizing, risk, execution and exits. A
   pre-registered sleeve may take its direction from a verified LLM ripple
-  hypothesis (doc 02 L3, doc 08 §8.4); the hypothesis is a typed feature,
+  hypothesis (doc 02 Event Ripple, doc 08 §8.4); the hypothesis is a typed feature,
   the sleeve engine turns it into a candidate by frozen rules, and no
   model output sizes, orders, or touches an exit.
 - Alpha-first. No engineering beyond what the current stage needs until a
   sleeve has passed its gate (doc 11). Audit reopening follows the doc 06
   AUDIT STOP RULE classes only.
 - Legality first. Live scope is what the operator may lawfully trade under
-  the stage's constraint set (doc 01 §1.2: C1 cash, long only, 1× while
-  India-resident; C2 US margin, long and short, after the move). Paper
+  the stage's constraint set (doc 01 §1.2: the India set is cash, long only, 1× while
+  India-resident; the US set is a US margin account, long and short, after the move). Paper
   evidence counts toward promotion only if produced under that same set.
 - Every LLM-involved evaluation is contamination-controlled (doc 11
   §11.0c): deterministic signals use history freely; span-verified,

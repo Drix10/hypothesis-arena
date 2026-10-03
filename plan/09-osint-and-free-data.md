@@ -43,7 +43,7 @@ Consequences:
 | Alpaca real-time IEX | quotes/trades/bars (IEX venue only) | streaming | free w/ account | order pricing, staleness/spread vetoes | stale > 30 s → entries vetoed |
 | Alpaca SIP history | consolidated bars/trades/quotes, ≥ 15 min delayed | on request | free (Basic) | every signal, backtest, `cost_v3` spreads | missing bar → signal UNAVAILABLE → HOLD |
 | Alpaca account/positions/orders/assets | account state, settled cash, margin, `shortable`/`easy_to_borrow` flags | streaming + REST | free | execution authority, R18/R20 inputs | outage → entries stop (S9) |
-| SEC EDGAR submissions, filing index, documents | 10-K/10-Q/8-K full text, exhibits, former names, acceptance times | < 1 s index | free, UA required | MLG `sc`/`tx` edges, events, L2 | source `stale` after 15 min → features expire |
+| SEC EDGAR submissions, filing index, documents | 10-K/10-Q/8-K full text, exhibits, former names, acceptance times | < 1 s index | free, UA required | MLG `sc`/`tx` edges, events, Filing Change | source `stale` after 15 min → features expire |
 | SEC EDGAR XBRL (`companyfacts`, financial-statement sets) | actuals, shares outstanding | per filing | free | SUE, point-in-time market cap | last value, marked stale |
 | SEC EDGAR Form 4 / 13F | insider trades; quarterly institutional holdings | per filing / quarterly | free | MLG `ow` edges; insider events | as above |
 | FRED/ALFRED KEY, Treasury, BLS, BEA KEY | rates, curve, credit, macro releases, vintages | per release | free | macro context, event calendar | last vintage, marked stale |
@@ -71,7 +71,7 @@ before any TRIGGER use.
 |---|---|---|
 | Bluesky (AT Protocol Jetstream) | free public WebSocket, ~850 MB/day of posts | NULL: cashtag and firm-name counts and buckets only |
 | Reddit | API; commercial use needs a paid agreement | excluded until terms are verified in writing |
-| X | official pay-per-use API ($0.005 per post read, $0.010 per user object, no free tier, 2026) | NULL: the `xcorr_v1` corroboration test only (§9.1c); the earlier X-lists signal system is HISTORICAL / NON-PRODUCTION (`appendix/02-x-lists-archive.md`) |
+| X | official pay-per-use API ($0.005 per post read, $0.010 per user object, no free tier, 2026) | NULL: the `x_corroboration_v1` corroboration test only (§9.1c); the earlier X-lists signal system is HISTORICAL / NON-PRODUCTION (`appendix/02-x-lists-archive.md`) |
 
 Quarantine rules (locked):
 - A social signal never triggers alone. It may only attach to an existing
@@ -140,7 +140,7 @@ time. Runs name their manifest hashes; a run that cannot is void.
   daily firm co-mention counts after entity resolution. The raw history is
   terabytes: the backfill streams one 15-minute file at a time, keeps only
   the firm-pair counts, and deletes the raw file; its download volume and
-  run time are measured on one month before the full run (A15). Querying
+  run time are measured on one month before the full run (news co-mention step). Querying
   the BigQuery public copy instead must stay inside the free monthly
   query allowance, chunked by month.
 - **Ken French data library:** daily FF5 + momentum factors and industry
@@ -166,23 +166,23 @@ Data-quality rules:
 
 ## 9.1b Data phases
 
-- **D1 (free, now):** everything in §9.1 Tier A/B and §9.1a.
-- **D2 (paid, research only):** bought only on a written trigger, by an
+- **Free data (now):** everything in §9.1 Tier A/B and §9.1a.
+- **Paid research data:** bought only on a written trigger, by an
   amendment to this section naming the trigger, dataset, license and cost:
   - survivorship-free US daily prices with delisting returns (late 1990s+,
-    ≤ $100/month) when a sleeve's A-gate is void or underpowered for a data
+    ≤ $100/month) when a sleeve's backtest gate is void or underpowered for a data
     reason (excluded events > 5%, or history shorter than MinTRL) and its
     point estimate clears the haircut bar;
-  - X pay-per-use reads for `xcorr_v1` (§9.1c), capped at $50/month,
-    once `ripple_det_v1` candidates run forward and the test is
+  - X pay-per-use reads for `x_corroboration_v1` (§9.1c), capped at $50/month,
+    once `event_ripple_rules_v1` candidates run forward and the test is
     pre-registered;
   - a news archive with entity tags only if the GDELT co-mention source
     passes edge validation (doc 14 §14.7) and its coverage is the binding
     limit.
-  A failure with an economic cause never triggers D2.
-- Live operation never depends on D2 data.
+  A failure with an economic cause never triggers a paid-data purchase.
+- Live operation never depends on paid research data.
 
-## 9.1c X corroboration test (`xcorr_v1`)
+## 9.1c X corroboration test (`x_corroboration_v1`)
 
 Question: does a bot-filtered burst of X posts about a firm, seen before
 the decision, make a ripple candidate more likely to resolve in its
@@ -209,11 +209,11 @@ already exists (doc 08 §8.3); it never creates an event or a candidate.
   share of posts removed is reported per event; an event where more than
   half were removed is tagged `manipulation_suspect` and counts as not
   corroborated.
-- **Corroboration flag (deterministic, class A):** at least 10 surviving
+- **Corroboration flag (deterministic, deterministic class):** at least 10 surviving
   posts from at least 5 distinct accounts, and a surviving count at least
   3× the firm's trailing 30-day daily mean. The flag is a bool feature; no
   model reads post text in this test.
-- **Design:** a filter test on `ripple_det_v1` candidates (and L3
+- **Design:** a filter test on `event_ripple_rules_v1` candidates (and Event Ripple
   candidates once running), forward only, because no free point-in-time X
   history exists. Arm 1 = all candidates; arm 2 = candidates whose source
   event is corroborated. Judged as a doc 11 §11.3b filter: the corroborated
@@ -223,7 +223,7 @@ already exists (doc 08 §8.3); it never creates an event or a candidate.
   underperform, that is evidence for the bot filter's value.
 - **Budget:** X lookups for the 3 largest events per day only, about
   $1.65/day (50 post reads + about 30 new author objects per event), under
-  a $50/month D2 cap approved in the sign-off log. At that rate the test
+  a $50/month paid-data cap approved in the sign-off log. At that rate the test
   needs on the order of a year; a larger budget is a separate decision.
 - **Storage:** raw posts are deleted after the counts are computed; only
   per-event counts, filter tallies and post ids are kept, and deletions
@@ -310,6 +310,6 @@ already exists (doc 08 §8.3); it never creates an event or a candidate.
 - Social signals never trigger alone and pass bot filters first.
 - Research datasets are manifest-hashed and never committed.
 - No live signal depends on data that is not freely available point in
-  time; D2 data only extends research history.
+  time; paid research data only extends research history.
 - Primary sources first; estimated timestamps permanently CONTEXT-capped.
 - Public-system lessons are research-factory input, never a live signal.

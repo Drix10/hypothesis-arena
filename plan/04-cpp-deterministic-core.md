@@ -38,8 +38,8 @@ jurisdiction allowlist (doc 10 §10.1a) ─────┤     │
 - Cadence: snapshot on every feed update; decision cycles on each sleeve's
   schedule (link sleeves monthly, event sleeves on signal) plus a 60 s
   housekeeping cycle for exits/reconcile/watchdogs.
-- Execution universe per R1 (`EXEC_UNIVERSE_MAX`: 5 under C1; the
-  sleeve's registered count, at most 50, under C2).
+- Execution universe per R1 (`EXEC_UNIVERSE_MAX`: 5 under the India set; the
+  sleeve's registered count, at most 50, under the US set).
   The universe is minted by the kernel from the champion sleeve's
   candidates and open positions; it is the end of a funnel.
 - Boundary law: `features.jsonl` is the only research artifact that may
@@ -81,11 +81,11 @@ jurisdiction allowlist (doc 10 §10.1a) ─────┤     │
    c1 schema, recomputes the CID (mismatch = reject), checks the sleeve
    id against the stage manifest's approved-sleeve list, symbol against the
    jurisdiction allowlist (R19), freshness (created within the sleeve's
-   declared window of the snapshot), and side policy (C1: BUY-to-open or
-   SELL-to-close; C2 adds SELL-short-to-open and BUY-to-cover, K-C2). Candidates are low-rate and validated off the tick
+   declared window of the snapshot), and side policy (India set: BUY-to-open or
+   SELL-to-close; the US set adds SELL-short-to-open and BUY-to-cover after kernel short selling is built). Candidates are low-rate and validated off the tick
    path, so this gate may allocate (std::string/vector); the caller bounds each line to 4 KiB and
    the tick-path zero-allocation gate is unchanged.
-   c1 wire record (K6, frozen with the code): one JSON object per line,
+   c1 wire record (frozen with the code): one JSON object per line,
    keys exactly `schema` (`"c1"`), `created_ns` (decimal string), and
    `candidate` - an object whose 12 CID-recipe fields (doc 12 / `candidate.py`
    `_ID_FIELDS`, in that order) plus `cid` are ALL JSON strings holding the
@@ -96,8 +96,8 @@ jurisdiction allowlist (doc 10 §10.1a) ─────┤     │
    failure wins: shape/unknown-key → schema → CID (`sha256("|".join(12))`
    equals `cid`) → sleeve approved → symbol on the R19 allowlist →
    `snapshot_ts_ns` ≤ now and now − snapshot_ts_ns ≤ `window_s` (a future
-   stamp is rejected) → side policy (C1: `BUY` = open; `SELL` only when
-   the symbol is currently held; anything else rejected. C2, K-C2: a
+   stamp is rejected) → side policy (India set: `BUY` = open; `SELL` only when
+   the symbol is currently held; anything else rejected. US set, after kernel short selling is built: a
    `SELL` on a symbol not held is a short open and must pass R20; a `BUY`
    on a held short is a cover). `created_ns` is
    informational and must parse as a non-negative int64. Every reject is
@@ -145,7 +145,7 @@ jurisdiction allowlist (doc 10 §10.1a) ─────┤     │
    units (whole shares for protected orders), partials, precision,
    sessions, MOC cutoff, rate limits. The `FXBrokerAdapter` interface is
    retired from v1 (OANDA BLOCKED, forex not a live target).
-5b. Transport (doc 13 P3.5-T) - a vetted TLS HTTP/WebSocket client behind
+5b. Transport (doc 13 the kernel build-T) - a vetted TLS HTTP/WebSocket client behind
    the transport seam: libcurl + system TLS linked into the kernel
    (`broker/http_curl.cpp`; the trade_updates WebSocket client in
    `broker/ws_stream.cpp`). `runner/main.cpp` keeps a null transport
@@ -155,13 +155,13 @@ jurisdiction allowlist (doc 10 §10.1a) ─────┤     │
    rate-limit aware (200/min). Writing TLS from scratch is forbidden. An
    alternative gateway process under the same `mirotrade` identity was
    considered and not chosen.
-5c. Account ledger - C1: per-lot trade date, settlement date (T+1 by
+5c. Account ledger - India set: per-lot trade date, settlement date (T+1 by
    the exchange calendar), funding source (settled vs unsettled),
    supporting R18: no buy with unsettled funds whose position could be sold
    before settlement; no sale of a lot bought with unsettled funds before
-   that funding settles. C2 (K-C2): margin requirement, maintenance buffer,
+   that funding settles. US set (after kernel short selling is built): margin requirement, maintenance buffer,
    borrow status, accrued margin interest and short dividends, supporting
-   R18 (C2) and R20. Rebuilt from the journal + broker account on
+   R18 (US set) and R20. Rebuilt from the journal + broker account on
    recovery; disagreement = HOLD + reconcile.
 5d. Universe service - deterministic eligibility/liquidity/spread/
    allowlist filters → the executable symbols per epoch (R1). Kernel-owned:
@@ -169,7 +169,7 @@ jurisdiction allowlist (doc 10 §10.1a) ─────┤     │
 6. `log/journal.cpp` - append-only per-decision row + hash chain. Nothing
    trades without a journal row (emergency-exit exception: doc 06).
 
-Port-on-promotion rule: a sleeve may drive G0b paper through the
+Port-on-promotion rule: a sleeve may drive paper trading paper through the
 Python sleeve engine. Before G1 (real capital), the champion sleeve's
 signal logic is re-implemented in C++ inside the kernel and proven
 bit-identical to the Python reference on the full backtest history via
@@ -178,7 +178,7 @@ covers the sleeve's deterministic rule, not the engine: its inputs stay
 engine features (`link_signal` buckets or the link-matrix snapshot hash,
 `ripple_hypothesis` records) plus prices. At G1+ the kernel recomputes the
 champion's candidates from those inputs itself; `candidates.jsonl` becomes
-a cross-check (mismatch = HOLD + alert). For L3 the direction originates in
+a cross-check (mismatch = HOLD + alert). For Event Ripple the direction originates in
 a verified hypothesis; the kernel decides whether and how much to trade.
 
 ## 4.3 Data rules
@@ -191,7 +191,7 @@ a verified hypothesis; the kernel decides whether and how much to trade.
 - Resource rules: static allocation at startup; zero malloc on the tick
   path; fixed rings; SQLite only in sidecars (pruned > 90 d); journal
   rolls daily, retained 90 d. The canonical live journal's unbounded
-  growth is a tracked G0b operational item (doc 13), never a silent
+  growth is a tracked paper trading operational item (doc 13), never a silent
   rotation. A 24 h soak must show flat RSS or the build fails.
 
 ## 4.4 Latency budget (local, excl. network/API)
@@ -225,7 +225,7 @@ protect positions even if the host is gone.
 - [ ] Always-take path proven equal to the filtered path where the filter
       passes, and unable to read an AnswerSet.
 - [ ] Settlement ledger: GFV and free-riding scenarios HOLD by test.
-- [ ] Transport wired (P3.5-T) and proven against Alpaca paper: submit,
+- [ ] Transport wired (the kernel build-T) and proven against Alpaca paper: submit,
       protect, query, cancel, reconcile, MOC, 429 back-off.
 - [ ] Isolation proven: research and strategy users cannot write the
       journal, `HALT`, or stage chain, and cannot read broker credentials.

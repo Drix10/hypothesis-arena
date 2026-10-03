@@ -13,8 +13,8 @@ they read are built by the engine (doc 08).
 ```
 hypothesis (human, research factory, or engine) → pre-registration
 (frozen spec + variant count + data window + holdout + contamination
-class) → A-gate: historical backtest, trial-ledgered, net of costs →
-B-gate: G0a shadow on live data → champion candidate → G0b paper orders
+class) → backtest gate: historical backtest, trial-ledgered, net of costs →
+Shadow gate: shadow testing on live data → champion candidate → paper orders
 through the kernel → G0→G1 human gate → G1 live
 ```
 
@@ -41,13 +41,13 @@ Published effects are haircut by 50% for planning (McLean-Pontiff: about
 should persist) · universe · data (dataset + manifest hash) ·
 contamination class (doc 11 §11.0c) · signal (exact) · schedule (signal
 time, order time, order type) · exit profile · sizing · turnover/capacity ·
-account mechanics (C1 settlement or C2 margin/borrow) · AI involvement and
+account mechanics (India-set settlement or US-set margin and borrow) · AI involvement and
 its no-AI twin · known failure modes · kill criteria · minimum evaluation
 windows · status.
 
 ## 2.3 Sleeves
 
-### L1 `link_momentum_v1` - connected-firm momentum on the Market Link Graph
+### Link Momentum (`link_momentum_v1`): connected-firm momentum on the Market Link Graph
 
 - **Hypothesis:** a firm's next-month return follows the past-month return
   of the firms it is linked to, because investors process linked-firm news
@@ -82,13 +82,15 @@ windows · status.
   0.4-0.6%/month before costs is the planning case, against roughly
   0.3%/month of costs at $25,000 (doc 14 §14.10). The margin is thin; the
   sleeve can fail on costs alone.
-- **Registered variants (3 trials):** V0 edges (a)+(b)+(d), deterministic,
-  2016+; V1 adds (c) GDELT; V2 = V1 with the peer return measured
+- **Registered variants (3 trials):** `filings` uses edges (a)+(b)+(d),
+  deterministic, 2016+; `news` adds (c) GDELT; `intraday` is `news` with
+  the peer return measured
   intraday only (Wang, JFQA 2025: peer intraday returns continue, peer
   overnight returns reverse).
-- **AI twin:** `link_momentum_ai_v1` replaces the regex customer extractor
-  with the reader-tier extractor (anonymized, span-verified; contamination
-  class B). Judged by the doc 11 §11.3b paired delta against V1.
+- **AI twin:** `link_momentum_llm_v1` replaces the regex customer extractor
+  with the reader-tier extractor (anonymized, span-verified; extraction
+  class). Judged by the doc 11 §11.3b paired delta against the `news`
+  variant.
 - **Schedule:** signal from the month-end close; trades the next session;
   monthly rebalance; 20 names a side at $25,000.
 - **Exit `exit_link_v1`:** signal exit at rebalance; broker-native GTC
@@ -99,10 +101,10 @@ windows · status.
   momentum-style crashes in sharp market rebounds, when the short leg
   (recent losers' links) rallies hardest (Daniel-Moskowitz, JFE 2016),
   partly contained by the 10% volatility target and the R2 net band.
-- **Kill:** A-gate fail; or B-gate tracking outside band; or drawdown over
+- **Kill:** backtest gate fail; or shadow gate tracking outside band; or drawdown over
   1.5× the backtest's worst 12-month drawdown.
 
-### L2 `text_change_v1` - changes in periodic filings
+### Filing Change (`filing_change_v1`): changes in periodic filings
 
 - **Hypothesis:** firms whose 10-K/10-Q text changes substantially against
   the same filing a year earlier underperform; firms that barely change
@@ -114,13 +116,13 @@ windows · status.
 - **Signal:** deterministic similarity of each filing to its prior-year
   counterpart, section by section (risk factors, MD&A); quintiles; monthly
   rebalance; a name is held about 3 months after its filing.
-- **Universe:** as L1, excluding the 100 largest firms by market cap.
+- **Universe:** as Link Momentum, excluding the 100 largest firms by market cap.
 - **Contamination class:** A (deterministic).
 - **Known risk:** firms that later delist are short-leg winners; missing
-  prices for them trigger the 5% void rule and the D2 trigger (doc 09
+  prices for them trigger the 5% void rule and the paid-data trigger (doc 09
   §9.1b).
 
-### L3 `ripple_event_v1` - LLM ripple reasoning on events
+### Event Ripple (`event_ripple_v1`): LLM ripple reasoning on events
 
 - **Hypothesis:** when a material event hits one firm, a model that reads
   the event and the firm's link neighborhood identifies which linked firms
@@ -148,24 +150,24 @@ windows · status.
   direction since the event (already priced). Hold for the horizon;
   `exit_event_v1` (time exit + catastrophe stop); equal risk slots; at most
   10 concurrent positions; one position per target.
-- **Deterministic twin `ripple_det_v1`:** same events, one-hop propagation
+- **Deterministic twin, Event Ripple rules (`event_ripple_rules_v1`):** same events, one-hop propagation
   with the sign table of doc 14 §14.5, same entry and exit. The twin is
-  deterministic (class A) and runs its own A-gate on history.
+  deterministic (deterministic class) and runs its own backtest gate on history.
 - **Contamination class:** C for the brain (post-cutoff only, doc 11
   §11.0c). Pre-cutoff runs with chronologically consistent models are
   research, never promotion evidence.
 - **AI cost:** at most 20 events/day reach the brain; cost per event and
   per closed trade is reported (doc 10 §10.4).
-- **X corroboration (`xcorr_v1`, doc 09 §9.1c):** a separate filter test on
-  the twin's (and later L3's) candidates: does a bot-filtered X burst
+- **X corroboration (`x_corroboration_v1`, doc 09 §9.1c):** a separate filter test on
+  the twin's (and later Event Ripple's) candidates: does a bot-filtered X burst
   before the decision improve them? X never creates an event or a
   candidate.
-- **Kill:** paired delta (L3 − twin) fails at the power-based minimum
+- **Kill:** paired delta (Event Ripple − twin) fails at the power-based minimum
   sample (doc 11 §11.3b, about 1,000 resolved candidates per arm), or the
   kill-only monitor shows harm earlier → the brain is removed; the twin
   continues on its own merits.
 
-### L4 `tsmom_ls_v1` - time-series momentum on ETFs, long and short
+### ETF Trend (`etf_trend_ls_v1`): time-series momentum on ETFs, long and short
 
 - **Hypothesis:** an asset's 12-month excess-return sign predicts its next
   month (Moskowitz-Ooi-Pedersen, JFE 2012). The published strategy is
@@ -176,10 +178,10 @@ windows · status.
 - **Signal:** sign of the 12-month return minus T-bills; inverse-volatility
   weights to a 10% annual target; monthly.
 - **Role:** a low-correlation diversifier for the link sleeves and the
-  cheapest test of the C2 harness.
+  cheapest test of the US-set harness.
 - **Caveat:** 2016-2026 includes a holdout already seen by the retired
   long-only trend sleeve, so the report is labeled `seen-window` and the
-  B-gate minimum doubles to 6 rebalances.
+  shadow gate minimum doubles to 6 rebalances.
 
 ### Controls
 
@@ -188,32 +190,35 @@ windows · status.
 
 ## 2.4 Portfolio construction
 
-- G0b runs exactly one champion sleeve through the kernel at a time; every
-  other sleeve runs in G0a shadow with harness fills on live data.
+- paper trading runs exactly one champion sleeve through the kernel at a time; every
+  other sleeve runs in shadow testing with harness fills on live data.
 - Shadow book (research, for planning G2): sleeve risk budgets by equal
   risk contribution on trailing 12-month shadow returns, no sleeve above
   50% of risk, rebalanced monthly; gross within the constraint set.
 - Multi-sleeve live allocation needs the netting router and a versioned
   universe-cap change (doc 13).
-- Order of testing (not a promise of promotion): L4 → L1 (V0, V1, V2) →
-  L2 → L3 twin; L3 brain forward shadow starts as soon as the engine
-  produces verified hypotheses, because its evidence is forward-only.
+- Order of testing (not a promise of promotion): ETF Trend → Link
+  Momentum (filings, news, intraday) → Filing Change → Event Ripple
+  rules. The Event Ripple brain's forward shadow starts as soon as the
+  engine produces verified hypotheses, because its evidence is
+  forward-only.
 
 ## 2.5 Retired sleeves (record)
 
-All ran their A-gate on the 2023-09-01..2026-08-31 holdout under C1 and
+All ran their backtest gate on the 2023-09-01..2026-08-31 holdout under the India set and
 failed (`plan/reviews/2026-09-29-alpha-results.md`, `research/reports/`).
-They run as forward ledgers only (`plan/appendix/10-sleeve-integration-plan.md`).
+Their forward ledgers ran from 2026-09-30 and stopped on 2026-10-03, when
+the sleeves were retired; their code is in git history.
 
 | Sleeve | Result |
 |---|---|
-| T1 `trend_etf_v1` (long or cash) | Sharpe about equal to passive; excess over cash, DSR, MinTRL fail |
-| T2 `sector_mom_v1` | same pattern, weaker |
-| I1 `intraday_mom_v1` | negative net Sharpe, negative at 2× cost |
-| E1 `insider_buy_v1` | below passive, 27% drawdown, 7.9% events unpriced |
-| E2-det `earnings_reader_v1` | no drift in tradable names |
-| M1 `vol_target_overlay_v1` | not tested (no survivor to overlay) |
-| X1 `fx_carry_mom_research_v1` | research only; forex is not a live target |
+| ETF trend, long or cash (`trend_etf_v1`) | Sharpe about equal to passive; excess over cash, DSR, MinTRL fail |
+| Sector momentum (`sector_mom_v1`) | same pattern, weaker |
+| Intraday momentum (`intraday_mom_v1`) | negative net Sharpe, negative at 2× cost |
+| Insider purchases (`insider_buy_v1`) | below passive, 27% drawdown, 7.9% events unpriced |
+| Post-earnings drift (`earnings_reader_v1`) | no drift in tradable names |
+| Volatility-target overlay (`vol_target_overlay_v1`) | not tested (no survivor to overlay) |
+| FX carry and momentum (`fx_carry_mom_research_v1`) | research only; forex is not a live target |
 
 The X-lists signal system is HISTORICAL / NON-PRODUCTION; its record is
 `appendix/02-x-lists-archive.md`. X input is not used in production.
@@ -228,7 +233,7 @@ The X-lists signal system is HISTORICAL / NON-PRODUCTION; its record is
 - Live sleeves obey the constraint set named in their stage manifest
   (doc 01 §1.2).
 - AI enters a sleeve as engine features verified deterministically
-  (L1-ai) or as verified ripple hypotheses (L3). Every AI sleeve has a
+  (the Link Momentum LLM variant) or as verified ripple hypotheses (Event Ripple). Every AI sleeve has a
   deterministic twin on the same events, and the AI stays only if the
   paired test proves incremental value net of its cost.
-- One champion sleeve in G0b at a time; everything else in shadow.
+- One champion sleeve in paper trading at a time; everything else in shadow.

@@ -43,7 +43,7 @@ What propagates is the unexpected part of a firm's news, measured as:
   UNAVAILABLE), from XBRL actuals; available at the 10-Q/10-K or 8-K item
   2.02 acceptance time, whichever carries the number first.
 - **Text change:** `Δ_i = 1 − cos(v_i,y, v_i,y−1)` between term-frequency
-  vectors of the same filing section in consecutive years (L2).
+  vectors of the same filing section in consecutive years (Filing Change).
 - **News burst:** daily count `n_i,t` of distinct outlets in GDELT naming
   firm `i`; burst score `b_i,t = (n_i,t − μ_i) / sqrt(μ_i)` against a
   60-day trailing Poisson mean `μ_i` (floor 1). An event fires at
@@ -78,7 +78,7 @@ that counts as trials.
 
 ## 14.4 Propagation signals
 
-- **One hop (L1):** `link_ret_i,m = Σ_j W[i, j] · R_j,m−1`, where `R_j,m−1` is
+- **One hop (Link Momentum):** `link_ret_i,m = Σ_j W[i, j] · R_j,m−1`, where `R_j,m−1` is
   `j`'s return over the past month. The firm's own return is excluded by
   construction (`W[i, i] = 0`).
 - **Neutralization:** the cross-sectional regression
@@ -92,11 +92,11 @@ that counts as trials.
 - **Multi-hop (research variant):** `s = Σ_{k≥1} α^(k−1) W^k x = (I − αW)^(−1) W x`
   with `0 ≤ α < 1/ρ(W)` (Katz form). `α = 0` is one hop. A non-zero `α` is
   a separate registered variant.
-- **Intraday/overnight split (L1 V2):** `R = R^intraday + R^overnight`
+- **Intraday/overnight split (intraday variant):** `R = R^intraday + R^overnight`
   from open and close prices; V2 uses `R^intraday` of linked firms only
   (Wang, JFQA 2025).
 
-## 14.5 Event propagation (L3 twin and ripple scoring)
+## 14.5 Event propagation (Event Ripple twin and ripple scoring)
 
 For an event at source `j` with signed magnitude `x_j` (standardized
 abnormal return, SUE, or burst-weighted tone), the deterministic twin
@@ -114,7 +114,7 @@ over past competitor-labeled events; if `|t| < 2` the competitor edge
 produces no trade. Targets are ranked by `W[i, j] · |x_j|` and the top 5
 become candidates, matching the brain's limit.
 
-Ripple resolution (used to score both L3 and its twin): a hypothesis
+Ripple resolution (used to score both Event Ripple and its twin): a hypothesis
 `(i, direction d, horizon h)` resolves to the cumulative abnormal return
 `CAR_i(t+1, t+h) = Σ e_i,τ`; hit = `sign(CAR) = d`. Reported per mechanism
 and per confidence bucket: hit rate, mean signed CAR, and Brier score of
@@ -153,7 +153,7 @@ source earns a place by transmitting shocks it could not have predicted:
 3. **Source ablation:** each edge source is dropped in turn and the
    change in signal Sharpe is reported (diagnostic, not a selection step).
 
-Edge-validation results are reported with every A-gate of a graph sleeve.
+Edge-validation results are reported with every backtest gate of a graph sleeve.
 
 ## 14.8 Event intensity
 
@@ -164,13 +164,13 @@ process, `λ_i(t) = μ_i + Σ_j Σ_{t_k^j < t} α_ij · exp(−κ (t − t_k^j))
 (contagion spreading through the graph) and for de-duplicating events that
 are echoes of an earlier one: a burst whose excess intensity is explained
 by a linked firm's event within 2 days is tagged as an echo and does not
-trigger L3. The trigger itself is the simpler Poisson burst score of §14.2.
+trigger Event Ripple. The trigger itself is the simpler Poisson burst score of §14.2.
 
 ## 14.9 Portfolio construction
 
 - **Ranks:** each month, rank the eligible universe on the signal. The
   research measure is the full top-minus-bottom quintile portfolio; the
-  tradable book (the one the A-gate judges) holds the 20 most extreme names
+  tradable book (the one the backtest gate judges) holds the 20 most extreme names
   a side at $25,000 (*registered*). Both are reported; a gap between them
   is a concentration finding, not a choice.
 - **Share-price tilt:** at about $940 per name, a name is eligible only
@@ -188,7 +188,7 @@ trigger L3. The trigger itself is the simpler Poisson burst score of §14.2.
   wider spreads priced in.
 - **Neutrality:** equal dollar weights within each leg; dollar-neutral at
   rebalance (net within ±10% of equity); realized beta to VTI reported;
-  |β| ≤ 0.3 is an A-gate condition (doc 11 §11.3a).
+  |β| ≤ 0.3 is an backtest gate condition (doc 11 §11.3a).
 - **Sizing:** sleeve gross scaled so the ex-ante annual volatility (60-day
   EWMA covariance, sector-shrunk) targets 10%, capped by the constraint
   set's gross limit. Whole shares; a name is eligible only if one share is
@@ -202,8 +202,8 @@ Per trade of `q` shares at price `p`:
 
 ```
 cost = q·p · ( spread/2 + fee_sec31 + fee_taf + η · σ_d · sqrt(q / ADV) )
-     + borrow_rate · |short value| · days / 360          (C2 shorts)
-     + margin_rate · max(0, debit balance) · days / 360  (C2)
+     + borrow_rate · |short value| · days / 360          (US set shorts)
+     + margin_rate · max(0, debit balance) · days / 360  (US set)
      + dividends owed on shorts
 ```
 
@@ -244,10 +244,10 @@ Definitions are in doc 11 §11.0b and §11.3a; the quantities used:
   Sharpe over `T` years is about `sqrt((1 + SR²/2) / T)`. Over a 3-year
   holdout a CI lower bound above zero needs an annual Sharpe near 1.15;
   over the 9-10 years of free SIP history it needs about 0.65. The planning
-  prior for a graph sleeve is 0.3-0.6. Therefore the A-gate is computed on
+  prior for a graph sleeve is 0.3-0.6. Therefore the backtest gate is computed on
   the whole pre-registered evaluation window (doc 11 §11.3a), the holdout
   is a consistency check, and a sleeve with a positive but underpowered
-  estimate is a D2 candidate (doc 09 §9.1b), not a pass.
+  estimate is a paid-data candidate (doc 09 §9.1b), not a pass.
 
 ## 14.12 Decay monitoring
 
@@ -263,6 +263,6 @@ haircut expectation. These can only pause or kill a sleeve (doc 11
   learned graphs are trials.
 - An edge source is validated by the exogenous-shock and placebo-graph
   tests, not by a model's causal narrative.
-- `cost_v3` includes borrow, margin interest and short dividends for C2;
+- `cost_v3` includes borrow, margin interest and short dividends for the US set;
   capacity below 4× stage capital blocks promotion.
 - Decay monitors only pause or kill.

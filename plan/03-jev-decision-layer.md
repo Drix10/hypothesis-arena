@@ -185,8 +185,7 @@ State rules (locked):
   re-rendered on the identity path.
 - `stage` selects the spend cap and is not part of the decision key.
 - Market fields the caller cannot measure are sent as the literal string
-  `"unknown"`, never guessed. The shadow logger (`ops/jev_shadow.py`) does
-  this for spread, session and regime.
+  `"unknown"`, never guessed.
 - `edge_family` in the answer must equal the candidate's `proposed_family`:
   family fit cannot substitute a different strategy.
 - A state carrying a non-finite number, a non-string market field or a cid
@@ -442,8 +441,8 @@ nominates, the engine's independently validated conditions authorize, and the
   kernel path may require an AnswerSet to exit, and no champion may require
   one to enter unless that gate passed.
 - Candidate sides follow the stage's constraint set: BUY-to-open or
-  SELL-to-close under C1; C2 adds SELL-short-to-open and BUY-to-cover once
-  the kernel implements R20 (doc 07 K-C2). For a short candidate the
+  SELL-to-close under the India set; US set adds SELL-short-to-open and BUY-to-cover once
+  the kernel implements R20 (doc 07 kernel short selling). For a short candidate the
   coherence check is TP < entry < stop.
 - Artifacts carry model/revision/provider metadata (signed into the
   payload), and the C++ filter gate runs in `kernel/build.sh` and CI.

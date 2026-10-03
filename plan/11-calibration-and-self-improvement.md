@@ -35,7 +35,7 @@ the journal (doc 05 §5.5). Rows are never edited or deleted.
   sampling variance of one Sharpe estimate, because a handful of variants
   cannot estimate it.
 - Metrics: DAILY portfolio returns (as §11.3), net of the set's cost model
-  (`cost_v2` C1, `cost_v3` C2), with
+  (`cost_v2` India set, `cost_v3` US set), with
   stationary-bootstrap confidence intervals; Sharpe inference with HAC
   standard errors; max drawdown; turnover; exposure.
 - Effective number of trials: the raw ledger count overstates the search
@@ -65,40 +65,40 @@ C. Every pre-registration declares one contamination class for each model
 component, where C is the role pin's recorded knowledge cutoff (doc 08
 §8.10; an undisclosed cutoff is taken as the model's public release date):
 
-- **Class A - deterministic.** No model output enters the signal. History
+- **Deterministic class.** No model output enters the signal. History
   is usable without restriction.
-- **Class B - extraction.** A model extracts facts that already exist in a
+- **Extraction class.** A model extracts facts that already exist in a
   dated document, with firm identities anonymized and every fact verified
   by a deterministic exact-span match (doc 08 §8.2a). The extracted fact is
   checkable against the document, so the model cannot add a fact from the
   future; what remains is selection bias (memory of what mattered). History
-  before C is usable for the A-gate, the report is labeled
-  `contamination: B`, and promotion additionally requires the B-gate on
+  before C is usable for the backtest gate, the report is labeled
+  `contamination: extraction`, and promotion additionally requires the shadow gate on
   live data. Selection-bias check: a random sample of at least 200
   filings dated before C is re-extracted by a pinned model whose own
   cutoff precedes each filing; edge-set agreement (Jaccard) is reported,
-  and agreement below 0.8 downgrades the component to class C.
-- **Class C - judgment.** A model judges direction, magnitude or outcome
-  (the L3 brain, JEV, any forecast). Only data timestamped after C + 30
+  and agreement below 0.8 downgrades the component to judgment class.
+- **Judgment class.** A model judges direction, magnitude or outcome
+  (the Event Ripple brain, JEV, any forecast). Only data timestamped after C + 30
   days counts. Pre-cutoff runs are labeled contaminated and carry zero
   promotion weight, including runs with chronologically consistent models
   (research only).
 
-A model upgrade restarts the clock for class C and requires a fresh
-precision audit for class B. Every class B or C component is judged
+A model upgrade restarts the clock for judgment class and requires a fresh
+precision audit for extraction class. Every extraction- or judgment-class component is judged
 against its deterministic twin (§11.3b).
 
 ### 11.0d Transferability
 
 Promotion evidence counts only if produced under the constraint set of
-the target stage (doc 01 §1.2) with its account ledger simulated: C1 is
-long only, cash account, settlement ledger, 1×, `cost_v2`; C2 is long and
-short in a margin account with the doc 05 C2 limits, margin, borrow and
+the target stage (doc 01 §1.2) with its account ledger simulated: the India set is
+long only, cash account, settlement ledger, 1×, `cost_v2`; the US set is long and
+short in a margin account with the doc 05 US-set limits, margin, borrow and
 short-dividend ledger, `cost_v3` (doc 14 §14.10), at the registered book
 size. Both require allowlisted instruments and the signal/data timing the
 live sleeve will have (SIP availability delays included). Evidence from
 books outside the target set is research, never promotion evidence, and
-C2 evidence never promotes a C1 stage or the reverse.
+US-set evidence never promotes an India-set stage or the reverse.
 
 ## 11.1 Calibration tracking (online, automatic)
 
@@ -261,24 +261,30 @@ Everything not live runs in shadow, permanently:
   logged. Making money by taking more risk than permitted is not a
   result.
 
-## 11.2a Forward replication ledgers (additive to §11.2)
+## 11.2a Forward ledgers (additive to §11.2)
 
-When no champion exists, built sleeves that failed their A-gate may still run
-as log-only forward replication ledgers against paired benchmarks: registered
-in the trial ledger before results, one pooled Holm over the family, fixed
-weights, kill-only sequential rules, and "eligible for review" (never
-promotion) at 504 sessions. They are research observations, not challengers,
-so the §11.2 cap of three challengers does not apply to them. Full protocol:
-`plan/appendix/10-sleeve-integration-plan.md`.
+Forward ledgers run each sleeve in shadow and each benchmark as a log-only
+virtual book on live data with harness fills. Every ledger is registered in
+the trial ledger before any result, keeps fixed weights, and is judged as a
+paired daily difference against its benchmark: WARMUP under 60 sessions,
+KILL-FUTILE from 126 sessions when the 95% CI upper bound of the active
+return is below zero (kill-only sequential rule), and "eligible for review"
+(never promotion) at 504 sessions. They are research observations, not
+challengers, so the §11.2 cap of three challengers does not apply.
 
-The same machinery runs the B-gate and forward shadow of the doc 02
-sleeves: forward ledgers (`ops/sleeve_shadow.py`), the paired evaluator
-and checkpoints (`ops/sleeve_eval.py`), and the `--verify` fidelity
-replay (every logged row reproduced within 20 bp), extended for C2
-(shorts, margin, borrow, short dividends, `cost_v3`). Multiple-testing
-families are kept apart so dead hypotheses do not tax new ones: the
-retired C1 sleeves form one Holm family, the doc 02 program another, and
-AI-component tests (JEV twins, L1-ai, L3 vs twin, `xcorr_v1`) a third.
+The machinery is `ops/sleeve_shadow.py` (ledgers), `ops/sleeve_eval.py`
+(paired evaluator and checkpoints), `ops/forward_register.py` (trial
+registration) and the `--verify` fidelity replay (every logged row
+reproduced within 20 bp); it is extended for the US set (shorts, margin,
+borrow, short dividends, `cost_v3`) before a US-set sleeve enters shadow.
+Multiple-testing families are kept apart so one hypothesis does not tax an
+unrelated one: the doc 02 sleeves form one Holm family; AI-component tests
+(the Link Momentum LLM variant, Event Ripple against its rules twin,
+`x_corroboration_v1`, any JEV filter test) form another.
+
+The retired sleeves' forward ledgers ran from 2026-09-30 to 2026-10-03;
+their trials are closed in the ledger as abandoned. The original protocol is
+recorded in `plan/appendix/10-sleeve-integration-plan.md`.
 
 ## 11.3 The promotion gate (the only path into the live decision path)
 
@@ -347,7 +353,7 @@ tools, or skills, and any change to R1–R20 by anything other than a doc edit.
 
 ## 11.3a Sleeve gates (`val_v2`) - how a sleeve becomes a champion candidate
 
-A-gate (historical, harness): all of the following on the frozen
+Backtest gate (historical, harness): all of the following on the frozen
 pre-registration, recorded in the trial ledger. Statistics 1-3 are
 computed on the evaluation window: every date after the last date used
 to fit anything (all of it for literature sleeves with frozen parameters).
@@ -355,7 +361,7 @@ A 3-year holdout alone cannot detect the Sharpe ratios these sleeves can
 plausibly earn (doc 14 §14.11); the holdout is the consistency check in
 item 7.
 1. Net Sharpe (daily, the target set's cost model at 1×: `cost_v2`
-   for C1, `cost_v3` for C2) with 95% stationary-bootstrap CI lower
+   for the India set, `cost_v3` for the US set) with 95% stationary-bootstrap CI lower
    bound > 0; point estimate > 0 at 2× cost.
 2. Excess return over cash (T-bill leg) CI lower bound > 0.
 3. Spanning test against the reference book: regress the sleeve's daily
@@ -383,8 +389,8 @@ item 7.
    estimate and lie inside the 5th-95th percentile band of
    block-bootstrapped evaluation-window paths of equal length.
 
-B-gate (G0a shadow on live data): the sleeve runs forward with harness
-fills from the day it passes A-gate. Minimum window: 60 sessions and
+Shadow gate (shadow testing on live data): the sleeve runs forward with harness
+fills from the day it passes backtest gate. Minimum window: 60 sessions and
 30 trades for daily-frequency sleeves; 3 rebalances for monthly sleeves
 (judged on tracking, not Sharpe). Passing: realized shadow results inside
 the pre-registered tracking band (default: between the 5th and 95th
@@ -392,7 +398,7 @@ percentiles of block-bootstrapped backtest paths of equal length),
 modeled costs within 1.5× of live-quote cost estimates, zero operational
 anomalies unexplained in the journal.
 
-Champion selection: among B-gate passers, the human picks the G0b
+Champion selection: among shadow gate passers, the human picks the paper trading
 champion using the pre-registered primary metric; ties break toward the
 simpler sleeve (fewer parameters, lower turnover).
 
@@ -403,12 +409,12 @@ identical inputs, net of the component's own AI cost:
 
 - **Filters** (JEV, an ensemble): the filtered policy beats always-take on
   identical post-cutoff candidates.
-- **Class B extraction** (e.g. L1-ai link edges): the sleeve on the
+- **Class B extraction** (e.g. the Link Momentum LLM variant link edges): the sleeve on the
   model-extracted graph beats the sleeve on the deterministic graph over
   the same months; history is allowed per §11.0c, and the delta must hold
-  again in the B-gate window.
-- **Class C ripple reasoning** (L3): the brain's candidates beat the
-  deterministic twin `ripple_det_v1` on the same events after C + 30 days.
+  again in the shadow gate window.
+- **Class C ripple reasoning** (Event Ripple): the brain's candidates beat the
+  deterministic twin `event_ripple_rules_v1` on the same events after C + 30 days.
   Both are scored by ripple resolution (doc 14 §14.5) and by sleeve
   returns; the twin is the benchmark, not cash.
 
@@ -424,7 +430,7 @@ For ripple candidates with a 21-session CAR standard deviation near 9% and
 a minimum effect of 1 percentage point, that is on the order of 1,000
 resolved candidates per arm, i.e. about a year at the 20-event daily cap.
 Filters keep the floor of 100 resolved candidates where their power
-analysis allows it; class B extraction needs ≥ 24 months. Before the
+analysis allows it; extraction class extraction needs ≥ 24 months. Before the
 minimum is reached, sequential monitoring may only stop the component
 for harm (kill-only, §11.2a), never promote it.
 
@@ -448,7 +454,7 @@ Doc 06 §6.2 writes an auto-field reflection row per closed trade. On top:
       MinTRL, stationary bootstrap, HAC Sharpe - each with fixture tests.
 - [ ] Contamination guard: an LLM-involved evaluation window that
       starts before cutoff + 30 d is rejected by the harness.
-- [ ] A-gate and B-gate report generators with the `val_v2` spanning test
+- [ ] backtest gate and shadow gate report generators with the `val_v2` spanning test
       and contamination-class labels.
 - [ ] Calibration harness scores `enter` and `latent_risk` including
       counterfactual HOLDs (needed only once a `jev` sleeve exists).
@@ -465,7 +471,7 @@ Doc 06 §6.2 writes an auto-field reflection row per closed trade. On top:
   search-adjusted evidence, beaten controls, and a human signature. No
   exceptions, no automation.
 - Model evidence follows its contamination class (§11.0c): judgment
-  (class C) counts only after the model's knowledge cutoff + embargo.
+  (judgment class) counts only after the model's knowledge cutoff + embargo.
 - DSR/PBO/MinTRL are necessary, never sufficient.
 - An AI component must beat the same sleeve without it (paired delta) or
   be removed rather than tuned.

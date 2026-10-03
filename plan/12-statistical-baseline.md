@@ -74,7 +74,7 @@ Computed on the same window, calendar and cost model, on daily returns:
    is at matched volatility by de-risking whichever is riskier).
 3. 60/40 (SPY/IEF monthly rebalanced) as a sanity reference.
 4. The same sleeve without its AI component (paired; doc 11 §11.3b): the
-   deterministic graph for L1-ai, `ripple_det_v1` for L3.
+   deterministic graph for the Link Momentum LLM variant, `event_ripple_rules_v1` for Event Ripple.
 5. `baseline_v1` - negative control and harness regression check: its
    frozen S2 numbers must reproduce bit-for-bit from the same manifests.
 6. The reference book for the spanning test (doc 11 §11.3a): the
@@ -98,9 +98,9 @@ costs on a near-random walk. A successor to `baseline_v1` needs a
 horizon-consistent exit profile, which is a new versioned strategy (a
 doc 02 sleeve), never an edit of v1.
 
-S2 closure (doc 07 A1): rerun on SIP bars + SIP quotes so the primary
-ledger exists; record the numbers; the FX leg is dropped (forex is
-research-only). A recorded negative result closes S2.
+Closing the measurement (parked until Checkpoint 1, doc 07 §7.2): rerun on
+SIP bars + SIP quotes so the primary ledger exists; record the numbers; the FX leg is dropped (forex is
+research-only). A recorded negative result closes the measurement.
 
 ## Locked decisions
 
@@ -116,7 +116,7 @@ research-only). A recorded negative result closes S2.
   vol-matched passive benchmark is always reported.
   An AI layer that loses to its own no-AI variant is removed, not tuned.
 - No control or live sleeve signal may depend on data that is not freely
-  available point in time; paid D2 research data (doc 09 §9.1b) may only
+  available point in time; paid research data (doc 09 §9.1b) may only
   extend a backtest's history (the point-in-time S&P-500 constituent artifact required
   by §12.1 is not free; `baseline_v1` equity runs therefore state their
   universe hash and its survivorship limitation explicitly).

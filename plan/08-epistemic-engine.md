@@ -55,7 +55,7 @@ type (customer|supplier|competitor|partner|licensor|text_peer|
       co_mention|common_owner|learned) |
 weight | valid_from | valid_to | known_at |
 evidence_ids (accession + span offsets | GDELT doc ids | 13F accession) |
-extractor (det|reader:<pin>) | contamination_class (A|B|C)
+extractor (det|reader:<pin>) | contamination_class (deterministic|extraction|judgment)
 ```
 
 Edge sources (weights and normalization: doc 14 §14.3):
@@ -63,7 +63,7 @@ Edge sources (weights and normalization: doc 14 §14.3):
 | Source | Built from | Cadence | Extractor |
 |---|---|---|---|
 | `sc` supply chain | 10-K/10-Q customer and supplier disclosures, 8-K material agreements | on acceptance | deterministic patterns first; reader tier for the rest (§8.2a) |
-| `tx` text peers | 10-K Item 1 business descriptions | on each 10-K | deterministic term vectors (class A); an embedding model trained on later text can encode future knowledge, so an embedding variant is class B unless it uses a chronologically consistent model (e.g. ChronoBERT) |
+| `tx` text peers | 10-K Item 1 business descriptions | on each 10-K | deterministic term vectors (deterministic class); an embedding model trained on later text can encode future knowledge, so an embedding variant is extraction class unless it uses a chronologically consistent model (e.g. ChronoBERT) |
 | `nw` news co-mention | GDELT GKG organization lists | daily aggregate of 15-min batches | deterministic name→CIK resolution |
 | `ow` common ownership | 13F holdings | quarterly | deterministic |
 | `lr` learned | return lead-lag (doc 14 §14.6) | monthly | deterministic; research only until validated |
@@ -101,7 +101,7 @@ soak, like the kernel.
   for the GDELT `nw` source, where short or common names (e.g. "Delta",
   "Apple") are ambiguous: an organization name that maps to more than one
   candidate is dropped unless a ticker or location disambiguates it.
-- Reader edges are contamination class B (doc 11 §11.0c).
+- Reader edges are extraction-class contamination (doc 11 §11.0c).
 
 ## 8.3 Event pipeline (Dynamic Event Units)
 
@@ -175,7 +175,7 @@ Every call logs the model pin, prompt hash, retrieved-context hash, output
 and verifier output. Replay never re-calls a model. Hypotheses are scored
 on resolution (doc 14 §14.5) whether or not a sleeve trades them.
 
-## 8.4a Model cost budget (planning; measured in A18/A19)
+## 8.4a Model cost budget (planning; measured in engine-reasoning and LLM-link steps)
 
 Token arithmetic decides what the engine can afford under the doc 10 caps
 ($150 per 30 days at G0/G1):
@@ -184,7 +184,7 @@ Token arithmetic decides what the engine can afford under the doc 10 caps
 |---|---|---|
 | Router + brain + verifier | ≤ 20 events/day × ~24k tokens | ~10M |
 | Reader, forward filings | ~2,500 filings/month × ~5 snippets × 2k | ~25M |
-| Reader, class B backfill 2016-2026 (one-off) | ~65k 10-Ks × ~10k | ~650M once |
+| Reader, extraction class backfill 2016-2026 (one-off) | ~65k 10-Ks × ~10k | ~650M once |
 
 - At open-weights prices (well under $1 per million input tokens) the
   forward paths fit the cap with room; at frontier prices they do not.
@@ -248,7 +248,7 @@ forbidden on any host that can reach trading credentials, the journal,
    per-target evidence, R2 caps, the 20-event daily cap, the deterministic
    twin as a standing comparison.
 3. Temporal contamination: pinned cutoffs, anonymization, post-cutoff
-   evaluation for class C (doc 11 §11.0c).
+   evaluation for judgment class (doc 11 §11.0c).
 4. Entity-resolution errors: unresolved names are dropped, never guessed;
    the precision audit gates each edge source.
 5. Human sign-off fatigue: fixed ≤ 15-minute checklist reviews.
@@ -339,7 +339,7 @@ Hard rules on every record:
   `inference` = model-produced: CONTEXT-only until the producing *rule*
   earns promotion by measured track record (doc 11), never the individual
   claim. `ripple_hypothesis` is read only by a sleeve that pre-registered
-  it (L3), in shadow until that sleeve passes its gates.
+  it (Event Ripple), in shadow until that sleeve passes its gates.
 - **`effect` is assigned by a deterministic interpretation table per
   kind**, never invented per record. C++ derives `disagreement` from
   opposite TRIGGER effects (doc 03 §3.4).
@@ -415,7 +415,7 @@ sees them; outputs pass the same thresholds as human research.
    mounts). The harness loads data, applies costs, splits windows and
    computes statistics, so generated code cannot leak the holdout or
    choose its own costs.
-4. **Gate** - the harness runs the A-gate and writes the report and ledger
+4. **Gate** - the harness runs the backtest gate and writes the report and ledger
    rows. A failed pre-registration is never rerun with new parameters.
 5. **Triage** - humans see gate-passing reports plus the weekly failure
    count.
@@ -434,7 +434,7 @@ no network; LLM-derived signals follow doc 11 §11.0c.
 - The verifier comes from a different model family than the brain.
 - Prefer open-weights models pinned by exact weights hash for the brain
   and verifier: a hosted model that is retired or silently updated restarts
-  the class C clock (doc 11 §11.0c), and the L3 test needs about a year of
+  the judgment class clock (doc 11 §11.0c), and the Event Ripple test needs about a year of
   uninterrupted forward data. Weights that can be self-hosted keep the
   clock running even if a provider drops the model.
 - Selection is a measured bake-off per role on a fixed post-cutoff set:
