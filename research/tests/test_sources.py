@@ -303,7 +303,7 @@ class CalendarTest(unittest.TestCase):
 
     def test_seed_loads(self):
         cal = calendars.load_calendar(
-            os.path.join(ROOT, "..", "collector",
+            os.path.join(ROOT, "..", "ops", "deploy",
                          "session_calendar.json"))
         self.assertTrue(cal["fail_closed"])
 

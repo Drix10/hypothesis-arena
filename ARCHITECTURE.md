@@ -90,7 +90,7 @@ earnings veto gate.
 - `collect.py`: the poller. User-Agent-bearing fetch, per-source TTL and
   heartbeat, key gating, stale means expire (absent is not neutral), and more
   than 50% poll failure over 24 hours disables a source and alerts. Reads
-  `sources.json`, `session_calendar.json` and config; writes `data/signals/`.
+  `sources.json` and config; writes `data/signals/`.
 - `config.py`: the canonical env loader and `load()` states (`CONFIG_OK`,
   `MISSING_REQUIRED_CONFIG` exit 2, per-source `SKIPPED_OPTIONAL_CONFIG`).
 - `classify.py`, `pregrade.py`: TRIGGER, CONTEXT and NULL classification and
@@ -99,7 +99,7 @@ earnings veto gate.
   here (`research/engine/schema.py` never re-validates).
 - `soak.py`, `soak_check.py`, `audit.py`: the soak harness, its acceptance check
   and a self-audit helper.
-- `entity_map.json`, `sources.json`, `session_calendar.json`: config.
+- `entity_map.json`, `sources.json`: config.
 - `tests/`: `test_collect`, `test_config`, `test_ctx`, `test_env_loading`,
   `test_pipeline`, `test_soak_check`. Mocked I/O, no network.
 
@@ -195,7 +195,7 @@ The paper run and the forward ledgers; see `ops/deploy/README.md`.
 
 - `deploy/`: `start.sh` (builds, asks for the sign-off phrase, starts the loop and
   the forward ledgers), `run.sh` (supervisor), `check.py` (run check),
-  `session_calendar.json` (2026-2028, with early closes), `approved.json.example`.
+  `session_calendar.json` (2026-2028, with early closes; also read by `research/sources/tier_a.py`), `approved.json.example`.
 - `emit_candidates.py`: passive-core candidates from SIP daily bars.
 - `forward_ledgers.py`: log-only virtual books for the passive core, the
   benchmarks and any strategy in shadow; `--verify` is the fidelity replay.

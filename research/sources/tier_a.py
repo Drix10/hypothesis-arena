@@ -29,7 +29,7 @@ from sources import calendars
 
 UA = "MiroHedge/phase0 contact=research-plane-tier-a"
 SOURCES_JSON = os.path.join(ROOT, "..", "collector", "sources.json")
-CALENDAR = os.path.join(ROOT, "..", "collector", "session_calendar.json")
+CALENDAR = os.path.join(ROOT, "..", "ops", "deploy", "session_calendar.json")
 
 
 def measure(url, timeout=30):

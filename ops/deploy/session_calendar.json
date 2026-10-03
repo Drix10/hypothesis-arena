@@ -1,4 +1,23 @@
 {
+ "calendar_version": "nyse-2026-2028-seed",
+ "calendar_generated_at": "2026-09-18",
+ "calendar_source": "NYSE (hand-seeded)",
+ "calendar_verified_at": null,
+ "fail_closed": true,
+ "live_eligible": false,
+ "stocks_window": "09:30-16:00 America/New_York",
+ "note": "NYSE full-day closures, seeded by hand: verify against the exchange notice before the tiny stage. Extend before the last year ends: the loop refuses to trade in a year with no listed holiday. A missing calendar means no entries. early_close_YYYY lists 13:00 ET closes (optional; unlisted ones only make the data-age gate stricter).",
+ "early_close_2026": [
+  "2026-11-27",
+  "2026-12-24"
+ ],
+ "early_close_2027": [
+  "2027-11-26"
+ ],
+ "early_close_2028": [
+  "2028-07-03",
+  "2028-11-24"
+ ],
  "holidays_2026": [
   "2026-01-01",
   "2026-01-19",
@@ -33,17 +52,5 @@
   "2028-09-04",
   "2028-11-23",
   "2028-12-25"
- ],
- "note": "NYSE full-day closures. Extend before the last year ends: the loop refuses to trade in a year with no listed holiday. early_close_YYYY lists 13:00 ET closes (optional; unlisted ones only make the data-age gate stricter).",
- "early_close_2026": [
-  "2026-11-27",
-  "2026-12-24"
- ],
- "early_close_2027": [
-  "2027-11-26"
- ],
- "early_close_2028": [
-  "2028-07-03",
-  "2028-11-24"
  ]
 }

@@ -14,7 +14,7 @@ namespace runner {
 // {"strategies":[{"id":"etf_trend","window_s":3600}],"allowlist":["VTI"]}
 bool ParseApproved(const std::string& json, ingest::CandidateTables* out);
 
-// collector/session_calendar.json: every "holidays_YYYY" array of ISO dates.
+// ops/deploy/session_calendar.json: every "holidays_YYYY" array of ISO dates.
 // Needs at least one holiday list and a valid date for every entry.
 bool ParseCalendar(const std::string& json, std::set<int64_t>* holidays);
 

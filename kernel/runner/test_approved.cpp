@@ -50,8 +50,8 @@ int main(int argc, char** argv) {
         CHECK("calendar-bad", !ParseCalendar(bad, &h));
     if (argc == 2) {
         std::string real;
-        CHECK("real-calendar-reads", ReadFile(std::string(argv[1]) + "/collector/session_calendar.json", &real));
-        CHECK("real-calendar-parses", ParseCalendar(real, &h) && h.size() == 10);
+        CHECK("real-calendar-reads", ReadFile(std::string(argv[1]) + "/ops/deploy/session_calendar.json", &real));
+        CHECK("real-calendar-parses", ParseCalendar(real, &h) && h.size() >= 10);
     }
     {
         std::set<int64_t> e;
