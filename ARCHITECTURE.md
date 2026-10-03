@@ -50,8 +50,8 @@ is git-ignored.
   `sign-stage.sh` (human STAGE sign-off) sit beside it.
 - `.github/workflows/ci.yml` - seven jobs on every push, pull request and
   manual dispatch: `stdlib` (collector suites), `evidence` (isolation,
-  sources, adapters, seam, strategy and ops suites), `plane` (plane, hardening,
-  emit, seam-graph), `kernel` (`WITH_CURL=1 build.sh` + freeze-check),
+  sources, adapters, seam, strategy and ops suites), `plane` (engine, hardening,
+  emit, seam-graph, event direction), `kernel` (`WITH_CURL=1 build.sh` + freeze-check),
   `kernel-sanitizer` (ASan+UBSan), `secrets` (gitleaks over full history), `agent-flow` (doctor +
   audit-risk against the baseline).
 

@@ -49,8 +49,8 @@
 - `plan/`: source of truth; 14 docs, `plan/system-manifest.yaml`, `plan/appendix/`. [HIGH CONFIDENCE: ARCHITECTURE.md §2]
 - `kernel/`: C++17 deterministic core (broker, exec, risk, kill, runner, stage), tests co-located. [HIGH CONFIDENCE: `kernel/build.sh`]
 - `collector/`: Python stdlib data collection and JEV; tests in `collector/tests/`. [HIGH CONFIDENCE]
-- `research/`: evidence and strategy plane, trial ledger, preregistrations, reports; pinned deps in `research/requirements.txt`. [HIGH CONFIDENCE]
-- `ops/`: shadow ledgers, monitor, alert relay; paper run scripts in `ops/deploy/`. [HIGH CONFIDENCE: file names, `ops/deploy/README.md`]
+- `research/`: the epistemic engine (`research/engine/`), backtest harness and event data (`research/strategy/`), data adapters (`research/sources/`), sandbox probes, trial ledger, preregistrations, reports; pinned deps in `research/requirements.txt`. [HIGH CONFIDENCE]
+- `ops/`: forward ledgers (`ops/forward_ledgers.py`), their evaluator (`ops/forward_eval.py`) and trial registration (`ops/forward_register.py`), candidate emitter, monitor, alert relay; paper run scripts in `ops/deploy/`. [HIGH CONFIDENCE: file names, `ops/deploy/README.md`]
 - `scripts/`: `scripts/freeze-check.sh`, `scripts/pre-commit-secrets.sh`, `scripts/sign-stage.sh`. [HIGH CONFIDENCE]
 
 ## Commands
@@ -60,7 +60,7 @@ From `.github/workflows/ci.yml` unless noted. [HIGH CONFIDENCE]
 - `./kernel/build.sh [normal|hardened|sanitize]`: builds and runs every C++ suite and the grep-gates.
 - `scripts/freeze-check.sh`: the repo must match `plan/system-manifest.yaml`.
 - `python3 collector/tests/<name>.py`: collector suites; `test_soak_check` needs `MIRO_CONTACT` set.
-- `PYTHONWARNINGS=error python3 research/tests/<name>.py`: evidence and plane suites (the full list is in the `evidence` and `plane` jobs).
+- `PYTHONWARNINGS=error python3 research/tests/<name>.py`: evidence and engine suites (the full list is in the `evidence` and `plane` CI jobs).
 - `python3 -m pytest -q research/tests/test_candidate.py`: needs `research/strategy/requirements.txt` installed.
 
 ## Local traps
@@ -69,5 +69,7 @@ From `.github/workflows/ci.yml` unless noted. [HIGH CONFIDENCE]
 - `sanitize` mode needs a Linux toolchain; on the MinGW box use `hardened`. [HIGH CONFIDENCE: `kernel/build.sh`]
 - `test_config` asserts a clean environment; `test_soak_check` needs `MIRO_CONTACT`. Scope the override to one command. [HIGH CONFIDENCE: ci.yml]
 - `.env` holds real values; `collector/config.py` is its only loader. [HIGH CONFIDENCE: ARCHITECTURE.md §1]
-- `research/sandbox/langfuse/docker-compose.yml` hardcodes local sandbox secrets and stays flagged by the scanners until cleaned up. [HIGH CONFIDENCE]
+- `research/sandbox/langfuse/docker-compose.yml` reads its secrets from `LANGFUSE_*` environment variables and refuses to start without them; never put values in the file. [HIGH CONFIDENCE: the compose file]
+- Protected paths (`CONTEXT_MANIFEST.json` `protected_paths`) are committed only by a human: the pre-commit hook needs `AGENT_FLOW_ALLOW_PROTECTED=1` (PowerShell: `$env:AGENT_FLOW_ALLOW_PROTECTED = "1"`), and agents are blocked. [HIGH CONFIDENCE: `.agent-flow-runtime/bin/agent-flow.js`]
+- On Windows, `research/tests/test_core_passive.py` fails on `import fcntl` and `test_sources.py` fails one concurrent-write case; both pass on Linux (CI, WSL). [HIGH CONFIDENCE: run 2026-10-03]
 - Live trading paths: [NEEDS VERIFICATION] read the plan docs, not the code, before touching them.

@@ -2,9 +2,9 @@
   "$schema": "./.agent-flow-runtime/schemas/context-manifest.schema.json",
   "version": "2",
   "repo": "hypothesis-arena",
-  "generated_by": "agent-flow@1.1.6 manifest sync",
+  "generated_by": "agent-flow@1.2.1 manifest sync",
   "generated_at": "2026-10-01T13:47:33.323Z",
-  "last_full_scan": "2026-10-01T14:14:53.926Z",
+  "last_full_scan": "2026-10-03T06:52:42.586Z",
   "default_branch": "main",
   "staleness_threshold_days": 30,
   "context_files": [
@@ -14,138 +14,180 @@
         {
           "path": "plan/00-INDEX.md",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "plan/07-build-roadmap.md",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "plan/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "plan/appendix/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "scripts/sign-stage.sh",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "plan/system-manifest.yaml",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/build.sh",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "collector/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "collector/tests/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "research/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/engine/",
+          "type": "directory",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/strategy/",
+          "type": "directory",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/sources/",
+          "type": "directory",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "research/requirements.txt",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "ops/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "ops/forward_ledgers.py",
+          "type": "file",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "ops/forward_eval.py",
+          "type": "file",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "ops/forward_register.py",
+          "type": "file",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "ops/deploy/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "ops/deploy/README.md",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "scripts/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "scripts/freeze-check.sh",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "scripts/pre-commit-secrets.sh",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": ".github/workflows/ci.yml",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "research/strategy/requirements.txt",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "collector/config.py",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "research/sandbox/langfuse/docker-compose.yml",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/tests/test_core_passive.py",
+          "type": "file",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         }
       ],
       "confidence_markers": {
-        "high_confidence": 5,
+        "high_confidence": 4,
         "inferred": 0,
         "needs_verification": 1
       }
@@ -165,67 +207,67 @@
         {
           "path": "kernel/exec/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/broker/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/kill/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/risk/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/build.sh",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/ingest/test_noalloc.cpp",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/jev_vectors/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "research/strategy/gen_jev_vectors.py",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "scripts/freeze-check.sh",
           "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/log/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "kernel/stage/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         }
       ],
@@ -239,21 +281,63 @@
       "path": "research/AGENTS.md",
       "references": [
         {
-          "path": "research/tests/test_candidate.py",
-          "type": "file",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "path": "research/engine/",
+          "type": "directory",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/strategy/",
+          "type": "directory",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/sources/",
+          "type": "directory",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/sandbox/",
+          "type": "directory",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "research/ledger/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         },
         {
           "path": "research/prereg/",
           "type": "directory",
-          "last_verified": "2026-10-01T13:47:33.323Z",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/reports/",
+          "type": "directory",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/tests/test_candidate.py",
+          "type": "file",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/",
+          "type": "directory",
+          "last_verified": "2026-10-03T06:52:42.586Z",
+          "exists": true
+        },
+        {
+          "path": "research/tests/test_emit.py",
+          "type": "file",
+          "last_verified": "2026-10-03T06:52:42.586Z",
           "exists": true
         }
       ],
