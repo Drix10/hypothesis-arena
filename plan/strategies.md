@@ -206,6 +206,13 @@ pre-registration (`engine.md`, Research factory).
   (Coval-Stafford 2007). Horizon of days to weeks, so cost is the binding
   question. Judged as above; it overlaps the short-term reversal factor, which
   every report already controls for.
+- **Binary level contracts.** Short-dated "price above level at expiry"
+  contracts on equities, metals and rates, fair value from the underlying's
+  implied volatility; the question is whether quoted prices show a
+  favorite-longshot bias after fees and spread. Outside every constraint set
+  (offshore venue, derivative), so any evidence is research, not promotion
+  evidence (`vision.md`). A venue's testnet or vault figures are marketing, not
+  data; only settled, fee-inclusive prices count.
 - Post-earnings announcement drift is not carded: it has disappeared in recent
   years, in microcaps too (Martineau 2022).
 
