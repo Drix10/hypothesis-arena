@@ -91,6 +91,10 @@ Facts an agent or a session asserted that nobody has checked.
 - `text_peers.text_peer_edges` compares every pair and sorts inside the cosine:
   fine for fixtures, too slow for a few thousand 10-Ks. Needs a sparse inverted
   index before it runs on a real cohort.
+- `backtest.run_backtest` needs SPY and IEF bars for the 60/40 benchmark
+  (`plan/validation.md`, Controls), whether or not the strategy trades them; the
+  ETF Trend universe has VTI, not SPY, so the bar loader must add SPY. It has run
+  only on synthetic bars.
 - The coverage probe's 11% unverified end is a bar-data statement, not a
   confirmed delisting rate.
 
@@ -143,6 +147,11 @@ Open:
         `shortable` and `easy_to_borrow` flags, fractional shorts, the paper
         balance setting.
 - [ ] **ETF Trend test** (`etf_trend`): prereg (`seen-window`) and backtest gate.
+      Built: the draft `research/prereg/etf_trend.json`, the signal
+      (`strategy/etf_trend.py`) and the runner (`strategy/backtest.py`), all on
+      synthetic data. Waits on the operator's answers to the draft's
+      `open_questions`, and on a bar loader that reads `sip_fetch` datasets into
+      `prices[sym][date] = (open, close)` and adds SPY for the benchmark.
 - [ ] **EDGAR corpus:** 10-K, 10-Q and 8-K full-text fetch with manifests, and
       the collectors that feed the pure modules below. Built and tested on
       fixtures only: `filing_sections`, `ticker_map`, `shares_outstanding`,

@@ -190,7 +190,10 @@ loaded twice.
   account runs), `tranches` (monthly tranches over a caller's weights),
   `benchmarks`, `stats`, `gates` (strategy gates and the `breadth` report),
   `prereg`, `placebo` (degree-preserving rewiring test), `universe` (the
-  point-in-time eligible universe from the sources modules).
+  point-in-time eligible universe from the sources modules), `backtest`
+  (`run_backtest`: validates a prereg, opens the ledger trial before any
+  result, runs the holdout at 1x and 2x cost, applies the gate and closes the
+  trial; bars are passed in, with SPY and IEF required for the 60/40 benchmark).
 - Strategies: `etf_trend` (the ETF Trend signal as a `target_fn`).
 - Market data: `sip_fetch` (SIP datasets with manifests; `load_alpaca_env`) and
   `bulk_bars` (throttled many-symbol fetch).
@@ -206,8 +209,9 @@ checkpoint), `reports/` (backtest gate reports), `lessons/lessons.jsonl` and
 `prereg/` holds `etf_trend.json`, a draft with an `open_questions` list that the
 operator answers before it is registered.
 
-Not yet wired: nothing calls `universe`, `tranches`, `etf_trend` or the engine
-edge builders from a runner, and no collector feeds the pure `sources/` modules.
+Not yet wired: `backtest` has only run on synthetic bars; nothing loads real
+bars into it, nothing calls `universe` or the engine edge builders from a runner,
+and no collector feeds the pure `sources/` modules.
 `TODO.md` lists the next steps.
 
 ### sandbox/
@@ -225,7 +229,7 @@ Suites for the engine (`test_engine`, `test_hardening`, `test_emit`,
 sources, each adapter, the harness (`test_stats`, `test_ledger`, `test_gates`,
 `test_costs`, `test_settlement`, `test_portfolio`, `test_prereg`,
 `test_candidate_wire`, `test_passive_core`, `test_tranches`, `test_placebo`,
-`test_universe`, `test_etf_trend`, `test_etf_trend_prereg`), the event data
+`test_universe`, `test_etf_trend`, `test_etf_trend_prereg`, `test_backtest`), the event data
 modules (`test_form4`, `test_earnings_surprise`, `test_french_factors`,
 `test_ticker_map`, `test_ticker_observations`, `test_shares_outstanding`,
 `test_form13f`, `test_last_trade`, `test_end_events`, `test_filing_sections`,
