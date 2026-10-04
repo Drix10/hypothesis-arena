@@ -82,8 +82,8 @@ Open:
   - [x] `constraint_set` and `contamination_class` in the prereg validator.
   - [x] The whole-share book at the registered size ($100,000 for paper) and the
         monthly-tranche portfolio (a 3-month hold, one third re-ranked a month).
-  - [x] Borrow stress grid of 0.5%, 2% and 5% a year in the cost model (the code
-        has one flat stress rate).
+  - [x] Borrow stress grid of 0.5%, 2% and 5% a year in the cost model
+        (`costs.BORROW_STRESS_GRID`).
   - [ ] Gate report additions: net alpha per decade, the Fama-French plus
         momentum alpha, the correlation with each promoted strategy and the
         effective number of independent signals (`plan/strategies.md`, Breadth).
