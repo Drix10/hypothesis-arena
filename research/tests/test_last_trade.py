@@ -21,11 +21,11 @@ def _ev(form, d, accession="0001-20-000001", **kw):
 class ResolveTest(unittest.TestCase):
     def test_confirmed_by_common_form_25(self):
         r = last_trade.resolve(
-            BARS, [_ev("25", date(2020, 3, 10), security_class="common")], END)
+            BARS, [_ev("25", date(2020, 3, 9), security_class="common")], END)
         self.assertEqual(r["status"], "confirmed")
         self.assertEqual(r["last_bar_date"], date(2020, 3, 4))
         self.assertEqual(r["event"], {"type": "delisting",
-                                      "date": date(2020, 3, 10),
+                                      "date": date(2020, 3, 9),
                                       "accession": "0001-20-000001"})
 
     def test_confirmed_by_form_15_and_acquisition(self):
@@ -58,19 +58,39 @@ class ResolveTest(unittest.TestCase):
         for kw in ({"security_class": "preferred"}, {"security_class": "bond"},
                    {}):
             r = last_trade.resolve(
-                BARS, [_ev("25", date(2020, 3, 10), **kw)], END)
+                BARS, [_ev("25", date(2020, 3, 5), **kw)], END)
             self.assertEqual(r["status"], "unverified")
 
-    def test_event_before_last_bar_does_not_confirm(self):
-        r = last_trade.resolve(
-            BARS, [_ev("25", date(2020, 3, 3), security_class="common")], END)
+    def test_form_25_before_last_bar_window(self):
+        common = {"security_class": "common"}
+        r = last_trade.resolve(BARS, [_ev("25", date(2020, 2, 23), **common)], END)
+        self.assertEqual(r["status"], "confirmed")
+        r = last_trade.resolve(BARS, [_ev("25", date(2020, 1, 24), **common)], END)
         self.assertEqual(r["status"], "unverified")
         self.assertIsNone(r["event"])
+
+    def test_acquisition_after_last_bar_window(self):
+        r = last_trade.resolve(
+            BARS, [_ev("8-K", date(2020, 3, 7), items=["2.01"])], END)
+        self.assertEqual(r["status"], "confirmed")
+        r = last_trade.resolve(
+            BARS, [_ev("8-K", date(2020, 4, 3), items=["2.01"])], END)
+        self.assertEqual(r["status"], "unverified")
+
+    def test_item_3_01_long_before_last_bar_does_not_confirm(self):
+        r = last_trade.resolve(
+            BARS, [_ev("8-K", date(2018, 9, 4), items=["3.01"])], END)
+        self.assertEqual(r["status"], "unverified")
 
     def test_earliest_event_wins(self):
         r = last_trade.resolve(BARS, [
             _ev("15-12B", date(2020, 3, 9), accession="b"),
             _ev("15-12B", date(2020, 3, 6), accession="a")], END)
+        self.assertEqual(r["event"]["accession"], "a")
+        r = last_trade.resolve(BARS, [
+            _ev("15-12B", date(2020, 3, 6), accession="b"),
+            _ev("25", date(2020, 2, 25), accession="a",
+                security_class="common")], END)
         self.assertEqual(r["event"]["accession"], "a")
 
     def test_unrelated_8k_ignored(self):
