@@ -21,11 +21,13 @@ class MarginTerms:
     maint_short_pct: float = 0.30
     maint_short_floor: float = 5.0  # USD per share
     gross_max: float = 1.5
+    buffer: float = 2.0  # equity must stay above this multiple of maintenance
 
     def __post_init__(self):
         for v in (self.margin_rate, self.borrow_rate, self.initial,
                   self.maint_long, self.maint_short_pct,
-                  self.maint_short_floor, self.gross_max):
+                  self.maint_short_floor, self.gross_max,
+                  self.buffer):
             if not (isinstance(v, (int, float)) and math.isfinite(v)
                     and v >= 0):
                 raise MarginError("bad-terms")
@@ -54,16 +56,20 @@ class MarginLedger:
     def initial_requirement(self, px):
         return self.terms.initial * self.gross(px)
 
-    def maintenance_requirement(self, px):
+    def maintenance_requirement(self, px, shares=None):
         t = self.terms
         req = 0.0
-        for s, q in self.shares.items():
+        for s, q in (self.shares if shares is None else shares).items():
             if q > 0:
                 req += t.maint_long * q * px[s]
             else:
                 req += -q * max(t.maint_short_floor,
                                 t.maint_short_pct * px[s])
         return req
+
+    def below_buffer(self, px):
+        """True when equity is at or below `buffer` times maintenance."""
+        return bool(self.shares) and self.equity(px)             <= self.terms.buffer * self.maintenance_requirement(px)
 
     def trade(self, sym, signed_qty, cash_delta):
         """Apply a fill: `signed_qty` > 0 buys, < 0 sells; `cash_delta` is the

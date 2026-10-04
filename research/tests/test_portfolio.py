@@ -208,7 +208,7 @@ class Margin(unittest.TestCase):
                                r["carry_usd"], places=6)
 
     def test_maintenance_breach_flattens_and_halts(self):
-        sess, px = mkrally()
+        sess, px = mkrally(g=1.6)  # a gap past the buffer straight to a breach
         calls = []
 
         def fn(d, h):
@@ -221,6 +221,50 @@ class Margin(unittest.TestCase):
         self.assertEqual([t[2] for t in r["trades"]], ["SELL", "BUY"])
         self.assertGreater(r["trades"][1][0], breach)
         self.assertLess(calls[-1], breach)
+
+    def test_order_leaving_equity_under_the_buffer_is_refused(self):
+        led = M.MarginLedger(100000.0, TERMS)
+        px = {"S": 10.0}  # maintenance is the $5 floor, half the price
+        self.assertFalse(P._initial_ok(led, px, "S", -10000, 100000.0))
+        self.assertTrue(P._initial_ok(led, px, "S", -8000, 80000.0))
+        sess, _ = mkdata()
+        flat = {"S": {d: (10.0, 10.0) for d in sess}}
+        r = P.run(sess, flat, lambda d, h: {"S": -1.0} if d == sess[0]
+                  else None, margin=TERMS)
+        qty = r["trades"][0][3]
+        self.assertTrue(7000 < qty < 10000)
+        self.assertEqual(r["buffer_cuts"], [])
+        self.assertEqual(r["breaches"], [])
+
+    def test_buffer_breach_cuts_to_half_gross_and_holds_entries(self):
+        sess, px = mkrally()
+        calls = []
+
+        def fn(d, h):
+            calls.append(d)
+            return {"CCC": -1.0} if d == sess[0] else None
+        r = P.run(sess, px, fn, margin=TERMS)
+        cut = r["buffer_cuts"][0]
+        self.assertEqual(r["breaches"], [])
+        self.assertNotIn(cut, calls)
+        short = r["trades"][0][3]
+        after = [t for t in r["trades"] if t[0] > cut]
+        self.assertTrue(after)
+        self.assertTrue(all(t[2] == "BUY" for t in after))
+        left = short - sum(t[3] for t in after)
+        self.assertTrue(0 < left < short / 2)
+        self.assertTrue(all(t[0] > cut for t in r["trades"][1:]))
+        self.assertEqual(r["trades"][1][0], sess[sess.index(cut) + 1])
+
+    def test_cut_resumes_the_strategy_once_restored(self):
+        sess, px = mkrally()
+        calls = []
+
+        def fn(d, h):
+            calls.append(d)
+            return {"CCC": -1.0} if d == sess[0] else None
+        r = P.run(sess, px, fn, margin=TERMS)
+        self.assertGreater(calls[-1], r["buffer_cuts"][0])
 
     def test_requirements_and_refusals(self):
         led = M.MarginLedger(100000.0, TERMS)

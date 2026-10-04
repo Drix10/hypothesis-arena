@@ -164,18 +164,22 @@ def _run_margin(sessions, prices, target_fn, cash0, spread_bps, mult, vol,
     """Margin-account run. Idle credit cash earns nothing (no short rebate), so
     `cash_returns` is refused. A close with equity below the maintenance
     requirement is a breach: the book is flattened at the next open and the
-    strategy is not consulted again."""
+    strategy is not consulted again. A close at or below the buffer multiple
+    of maintenance cuts the book to half the last target at the next open; the
+    strategy is not consulted and no entry is made until equity is back above
+    the buffer."""
     if cash_returns is not None:
         raise PortfolioError("cash-returns-need-cash-account")
     if len(sessions) < 2 or list(sessions) != sorted(set(sessions)):
         raise PortfolioError("sessions-must-be-sorted-unique")
     led = MarginLedger(cash0, terms)
     hist = {s: [] for s in prices}
-    equity, rets, trades, wlog, breaches = [], [], [], [], []
+    equity, rets, trades, wlog, breaches, cuts = [], [], [], [], [], []
     cost_total = carry_total = 0.0
     prev_eq = float(cash0)
     pending = None
-    halted = False
+    halted = held_down = False
+    last_w = {}
     for i, d in enumerate(sessions):
         if i > 0:
             prev = {s: _last(prices[s], sessions, i - 1) for s in led.shares}
@@ -187,7 +191,7 @@ def _run_margin(sessions, prices, target_fn, cash0, spread_bps, mult, vol,
         if pending is not None and i < len(sessions) - 1:
             cost, unfinished = _rebalance_margin(
                 led, prices, d, pending, spread_bps, mult, vol, min_usd,
-                min_pct, trades)
+                min_pct, trades, held_down)
             cost_total += cost
             if not unfinished:
                 pending = None
@@ -205,15 +209,24 @@ def _run_margin(sessions, prices, target_fn, cash0, spread_bps, mult, vol,
             pending = {"w": {}, "want": None}
         if halted:
             continue
+        was_down, held_down = held_down, led.below_buffer(px)
+        if held_down:
+            if not was_down:
+                cuts.append(d)
+            pending = {"w": {s: x / 2.0 for s, x in last_w.items()},
+                       "want": None}
+            continue
         w = target_fn(d, {s: list(v) for s, v in hist.items()})
         if w is None:  # hold; an unfinished earlier target stays pending
             continue
         _check_signed_weights(w, prices, terms.gross_max)
         pending = {"w": w, "want": None}
+        last_w = w
         wlog.append((d, dict(w)))
     return {"returns": rets, "equity": equity, "trades": trades,
             "cost_usd": cost_total, "weights": wlog,
-            "carry_usd": carry_total, "breaches": breaches}
+            "carry_usd": carry_total, "breaches": breaches,
+            "buffer_cuts": cuts}
 
 
 def _check_signed_weights(w, prices, gross_max):
@@ -231,10 +244,12 @@ def _check_signed_weights(w, prices, gross_max):
 
 
 def _rebalance_margin(led, prices, d, pending, spread_bps, mult, vol, min_usd,
-                      min_pct, trades):
+                      min_pct, trades, reduce_only):
     """Execute one session of the signed target; returns (cost, unfinished).
     Orders that cut exposure run first; an order that would leave equity below
-    the Reg T initial requirement is shrunk, and the target is retried."""
+    the Reg T initial requirement or at or below the maintenance buffer is
+    shrunk, and the target is retried. `reduce_only` drops every order that
+    adds exposure."""
     total = 0.0
     unfinished = False
     px_open = {s: prices[s][d][0] for s in prices if d in prices[s]}
@@ -257,7 +272,7 @@ def _rebalance_margin(led, prices, d, pending, spread_bps, mult, vol, min_usd,
             continue
         else:
             dq = int(abs(diff) / px_open[s]) * (1 if diff > 0 else -1)
-        if dq != 0:
+        if dq != 0 and not (reduce_only and abs(q + dq) > abs(q)):
             orders.append((abs(q + dq) >= abs(q), s, dq))
     for _, s, dq in sorted(orders):
         o = px_open[s]
@@ -284,7 +299,7 @@ def _rebalance_margin(led, prices, d, pending, spread_bps, mult, vol, min_usd,
 
 def _initial_ok(led, px, sym, dq, cash_delta):
     """True when the trade cuts gross or leaves equity at or above the Reg T
-    initial requirement."""
+    initial requirement and above the maintenance buffer."""
     q = led.shares.get(sym, 0)
     if abs(q + dq) < abs(q):
         return True
@@ -292,4 +307,7 @@ def _initial_ok(led, px, sym, dq, cash_delta):
     held[sym] = px[sym]
     gross = led.gross(held) + (abs(q + dq) - abs(q)) * px[sym]
     eq = led.equity(held) + cash_delta + dq * px[sym]
-    return eq >= led.terms.initial * gross - 1e-9
+    after = {s: n for s, n in {**led.shares, sym: q + dq}.items() if n}
+    maint = led.maintenance_requirement(held, after)
+    return (eq >= led.terms.initial * gross - 1e-9
+            and eq > led.terms.buffer * maint)

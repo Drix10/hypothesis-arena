@@ -75,9 +75,10 @@ Open:
   - [x] Short positions and the margin ledger in the backtester
         (`research/strategy/margin.py`, `portfolio.run(margin=...)`), tested in
         `test_portfolio`.
-  - [ ] The margin ledger's buffer rule: `plan/risk.md` requires equity above 2×
-        the maintenance requirement after every order, and half gross below it;
-        `portfolio._run_margin` flags only equity below 1× maintenance.
+  - [x] The margin ledger's buffer rule (`MarginTerms.buffer`,
+        `portfolio._run_margin`): orders that leave equity at or below 2×
+        maintenance are shrunk, a book at or below it is cut to half the last
+        target and entries HOLD until restored, tested in `test_portfolio`.
   - [ ] `constraint_set` and `contamination_class` in the prereg validator.
   - [ ] The whole-share book at the registered size ($100,000 for paper) and the
         monthly-tranche portfolio (a 3-month hold, one third re-ranked a month).
