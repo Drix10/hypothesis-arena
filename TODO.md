@@ -88,6 +88,9 @@ Facts an agent or a session asserted that nobody has checked.
 - Modules under `research/sources/` import each other as `sources.x` in their
   tests, while `research/strategy/` uses `research.strategy.x`; one module can be
   loaded twice under two names. `universe.py` (wave 4) is told to settle which.
+- `text_peers.text_peer_edges` compares every pair and sorts inside the cosine:
+  fine for fixtures, too slow for a few thousand 10-Ks. Needs a sparse inverted
+  index before it runs on a real cohort.
 - The coverage probe's 11% unverified end is a bar-data statement, not a
   confirmed delisting rate.
 
