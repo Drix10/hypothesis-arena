@@ -9,7 +9,10 @@ import math
 SCHEMA = "prereg"
 REQUIRED = ("schema", "experiment_id", "family", "hypothesis", "strategy",
             "universe", "signal", "variants", "cost_model",
-            "split", "holdout", "decision", "created")
+            "split", "holdout", "decision", "created",
+            "constraint_set", "contamination_class")
+CONSTRAINT_SETS = ("us",)
+CONTAMINATION_CLASSES = ("deterministic", "extraction", "judgment")
 SPLIT_KEYS = ("scheme", "n_splits", "label_horizon_days", "embargo_days")
 HOLDOUT_KEYS = ("start", "end", "rule")
 DECISION_KEYS = ("min_net_sharpe", "max_drawdown_pct", "min_cost_multiple",
@@ -79,6 +82,13 @@ def validate(p):
     if not isinstance(v, list) or not v \
             or len({json.dumps(x, sort_keys=True) for x in v}) != len(v):
         errs.append("variants-must-be-nonempty-and-distinct")
+    if p["constraint_set"] not in CONSTRAINT_SETS:
+        errs.append("constraint-set")
+    cls = p["contamination_class"]
+    if cls not in CONTAMINATION_CLASSES:
+        errs.append("contamination-class")
+    elif cls != "deterministic" and p.get("llm") is None:
+        errs.append("missing:llm")
     if p["cost_model"] not in COST_MODELS:
         errs.append("cost-model-version")
     for name, keys in (("split", SPLIT_KEYS), ("holdout", HOLDOUT_KEYS),
@@ -126,14 +136,17 @@ def validate(p):
                                          else None))
         if _safe_before(p["holdout"]["start"], p["llm"]):
             errs.append("contaminated:holdout-starts-before-cutoff+30d")
+        if cls == "judgment" and not errs and _safe_before(
+                p["llm"]["evidence_start"], p["llm"], 1):
+            errs.append("contaminated:judgment-evidence-not-after-cutoff+30d")
     return errs
 
 
-def _safe_before(start, llm):
+def _safe_before(start, llm, extra_days=0):
     try:
         cutoff = _date(llm.get("knowledge_cutoff"))
         return _date(start) < cutoff + datetime.timedelta(
-            days=CUTOFF_MARGIN_DAYS)
+            days=CUTOFF_MARGIN_DAYS + extra_days)
     except (ValueError, AttributeError):
         return False
 
