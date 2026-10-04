@@ -156,7 +156,7 @@ probes use direct `urllib`; worker containers egress only through Squid.
 ### strategy/ (the backtest harness)
 
 - Harness: `ledger` (the hash-chained trial ledger), `costs`, `settlement`,
-  `portfolio`, `benchmarks`, `stats`, `gates`, `prereg`.
+  `margin`, `portfolio`, `benchmarks`, `stats`, `gates`, `prereg`.
 - Market data: `sip_fetch` (SIP datasets with manifests; `load_alpaca_env`) and
   `bulk_bars` (throttled many-symbol fetch).
 - Event data for the engine: `form4` (insider filings), `earnings_surprise` (SUE

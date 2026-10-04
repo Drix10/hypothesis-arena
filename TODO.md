@@ -14,8 +14,8 @@ test output, or a report path).
   No strategy has passed a gate.
 - Harness: trial ledger, cost model with short terms, statistics (walk-forward,
   CPCV, PBO, DSR, MinTRL, bootstrap, HAC, spanning test), prereg validator,
-  settlement simulation, benchmarks, gate reports. No short positions or margin
-  ledger in the backtester, no decay monitors, no tranche portfolio.
+  settlement simulation, short positions and a margin ledger, benchmarks, gate
+  reports. No decay monitors, no tranche portfolio.
 - Data coverage: measured (`research/strategy/coverage_probe.py`,
   `research/reports/coverage_probe.json`). At a $500M cover public float, 97.3%
   of 300 random 2016-2018 10-K filers map to a ticker with gap-free SIP bars; the
@@ -72,8 +72,9 @@ Open:
   - [x] The cost model's short terms (`research/strategy/costs.py`: square-root
         impact, borrow, margin interest, short dividends) and the spanning test
         (`stats.spanning_alpha`), tested in `test_costs` and `test_stats`.
-  - [ ] Short positions and the margin ledger in the backtester
-        (`research/strategy/portfolio.py` is long-only).
+  - [x] Short positions and the margin ledger in the backtester
+        (`research/strategy/margin.py`, `portfolio.run(margin=...)`), tested in
+        `test_portfolio`.
   - [ ] `constraint_set` and `contamination_class` in the prereg validator.
   - [ ] The whole-share book at the registered size ($100,000 for paper) and the
         monthly-tranche portfolio (a 3-month hold, one third re-ranked a month).
