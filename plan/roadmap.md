@@ -254,3 +254,8 @@ MANIFEST HASH: <sha256>
   stop rule that separates economic failure from underpowered; decade stability
   reported; a borrow stress grid; insider opportunistic buys and forced-seller
   liquidity provision recorded as research cards. Approved in chat, 2026-10-03.
+- Pre-registrations declare the US constraint set only: paper trading runs from
+  India, but the evidence and the strategies are for the US set. Approved in chat,
+  2026-10-04.
+- Research-card "Binary level contracts" added to `strategies.md`. Approved in
+  chat, 2026-10-04.
