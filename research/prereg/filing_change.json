@@ -1,0 +1,59 @@
+{
+  "schema": "prereg",
+  "experiment_id": "filing_change",
+  "family": "filing_change",
+  "created": "2026-10-04",
+  "constraint_set": "us",
+  "contamination_class": "deterministic",
+  "hypothesis": "Firms whose 10-K or 10-Q text changes substantially against the same filing a year earlier underperform; firms that barely change outperform (Cohen-Malloy-Nguyen), on mid caps outside the 100 largest firms.",
+  "strategy": "filing_change",
+  "universe": [
+    "US common stock",
+    "price at least $5",
+    "60-day median dollar volume at least $10M",
+    "market cap at least $500M",
+    "at least one link from two different edge sources",
+    "excluding the 100 largest firms",
+    "short side: market cap at least $1B and passes the short crowding filter"
+  ],
+  "signal": "For each 10-K or 10-Q, delta = 1 - cos(v_y, v_y-1) between term-frequency vectors of the same section (risk factors, MD&A) in consecutive years (plan/math.md, Text change). Quintiles of delta; the high-change quintile is short and the low-change quintile is long. Rebalance monthly; a name is held about 3 months after its filing. Fills per plan/execution.md.",
+  "variants": [
+    {"name": "risk_factors", "sections": ["risk_factors"]},
+    {"name": "risk_factors_mda", "sections": ["risk_factors", "mda"]}
+  ],
+  "cost_model": "costs",
+  "split": {
+    "scheme": "walk_forward",
+    "n_splits": 2,
+    "label_horizon_days": 63,
+    "embargo_days": 0
+  },
+  "holdout": {
+    "start": "2023-01-01",
+    "end": "2026-10-04",
+    "rule": "unseen-window: no earlier filing-text test touched this window; the plan names no holdout dates"
+  },
+  "decision": {
+    "min_net_sharpe": 1e-06,
+    "max_drawdown_pct": 20.0,
+    "min_cost_multiple": 2.0,
+    "min_days": 1,
+    "new_signal_tstat_min": 3.0
+  },
+  "open_questions": [
+    "universe: the plan says 'as Link Momentum, excluding the 100 largest firms'; the two-edge-source link requirement is carried over and may not apply to a text-only signal.",
+    "variants: the plan allows at most 2 Filing Change trials and names none; the two section sets are a proposal.",
+    "signal: the plan names the sections (risk factors, MD&A) but not the tokenization, stop words or section parser.",
+    "signal: the plan gives no book size (names a side) or gross exposure for Filing Change.",
+    "signal: the plan gives no treatment of quintile ties or filings with a missing prior-year counterpart.",
+    "split.label_horizon_days: 63 is a 3-month hold in sessions; the plan gives no number.",
+    "split.n_splits: the plan states no walk-forward split count; 2 is the validator minimum.",
+    "split.embargo_days: the plan gives no number; 0 is a placeholder.",
+    "holdout: the plan gives no dates; the free EDGAR feed starts in 2016, and 2023-2026 is a placeholder window.",
+    "decision.min_net_sharpe: the plan requires the 95% bootstrap CI lower bound above 0 and states no numeric floor; 1e-06 stands for 'above 0'.",
+    "decision.min_days: the plan states no minimum evaluation length for the backtest gate; 1 is a placeholder (MinTRL is computed by the harness).",
+    "decision.max_drawdown_pct: 20 is a placeholder; the plan states no Filing Change limit.",
+    "decision.new_signal_tstat_min: Filing Change is from the literature, so 3.0 is the validator floor, not a plan requirement.",
+    "model involvement: none; if any model component is added the class becomes extraction and an llm block with model pin and knowledge cutoff is required."
+  ]
+}
