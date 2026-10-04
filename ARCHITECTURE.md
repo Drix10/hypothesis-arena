@@ -142,8 +142,19 @@ engine trades.
 - `schema.py`: feature constants and builders (validity owned by
   `collector/ctx_read.py`).
 
-The link graph, event pipeline, router, brain and verifier (`plan/engine.md`) are
-not built yet.
+The link graph (`plan/engine.md`) has its store and two deterministic edge
+builders; the event pipeline, router, brain and verifier are not built yet.
+
+- `link_store.py`: the bitemporal, append-only, hash-chained edge store.
+  `LinkStore.add`, `supersede` and `retire` append; `edges(as_of_valid,
+  as_of_known)` answers as-of queries; `verify` detects tampering. Times are
+  integers, `YYYYMMDD` by convention across the edge builders.
+- `text_peers.py`: `text_peer_edges` turns 10-K Item 1 text (from
+  `sources/filing_sections`) into `text_peer` edges by TF-IDF cosine over one
+  fiscal-year cohort. Quadratic in the cohort size.
+- `ownership_edges.py`: `ownership_edges` turns 13F rows (from
+  `sources/form13f`) into `common_owner` edges by holdings overlap, comparing
+  only issuer pairs that share a filer.
 
 ### sources/
 
@@ -153,10 +164,34 @@ Adapters `edgar.py`, `fred.py`, `treasury.py`, `bls.py`, `bea.py`, plus `tier_a.
 `tier_a_evidence.json` (a committed measurement, not runtime input). Host-side
 probes use direct `urllib`; worker containers egress only through Squid.
 
+Pure modules built on fixtures, with no collector wired to them yet:
+
+- `edgar_filings`: lists a submissions JSON's 10-K, 10-Q and 8-K filings and
+  fetches primary documents through an injected transport into a hashed manifest.
+- `filing_sections`: Items 1, 1A, 2, 7, 7A and 8 of a 10-K with character offsets.
+- `form13f`: the 13F information table parser and holdings overlap; the value
+  unit follows the filing date (dollars from 2023-01-03).
+- `shares_outstanding`: cover-page shares and public float from companyfacts JSON.
+- `ticker_map`: the point-in-time CIK to ticker answer over dated observations;
+  `ticker_observations` builds those observations from cover pages, Form 4
+  rows, corporate actions and former names.
+- `last_trade` and `end_events`: the dated last trading day of a delisted firm;
+  `end_events` extracts Form 25, Form 15 and 8-K events from a submissions JSON.
+- `french_factors`: daily Fama-French five factors and momentum as decimals.
+
+In tests these import each other as `sources.x`; `research/strategy` code uses
+`research.sources.x`. Use the second form in new code, so one module is not
+loaded twice.
+
 ### strategy/ (the backtest harness)
 
 - Harness: `ledger` (the hash-chained trial ledger), `costs`, `settlement`,
-  `margin`, `portfolio`, `benchmarks`, `stats`, `gates`, `prereg`.
+  `margin` (the US-set margin ledger), `portfolio` (cash account or margin
+  account runs), `tranches` (monthly tranches over a caller's weights),
+  `benchmarks`, `stats`, `gates` (strategy gates and the `breadth` report),
+  `prereg`, `placebo` (degree-preserving rewiring test), `universe` (the
+  point-in-time eligible universe from the sources modules).
+- Strategies: `etf_trend` (the ETF Trend signal as a `target_fn`).
 - Market data: `sip_fetch` (SIP datasets with manifests; `load_alpaca_env`) and
   `bulk_bars` (throttled many-symbol fetch).
 - Event data for the engine: `form4` (insider filings), `earnings_surprise` (SUE
@@ -167,8 +202,13 @@ probes use direct `urllib`; worker containers egress only through Squid.
 
 Records: `prereg/` (preregistrations), `ledger/` (the trial ledger and its
 checkpoint), `reports/` (backtest gate reports), `lessons/lessons.jsonl` and
-`requirements.txt` (pinned engine deps). `prereg/`, `ledger/` and `reports/` start
-empty.
+`requirements.txt` (pinned engine deps). `ledger/` and `reports/` start empty;
+`prereg/` holds `etf_trend.json`, a draft with an `open_questions` list that the
+operator answers before it is registered.
+
+Not yet wired: nothing calls `universe`, `tranches`, `etf_trend` or the engine
+edge builders from a runner, and no collector feeds the pure `sources/` modules.
+`TODO.md` lists the next steps.
 
 ### sandbox/
 
@@ -184,8 +224,13 @@ Suites for the engine (`test_engine`, `test_hardening`, `test_emit`,
 `test_source_seam`, `test_seam_graph`, `test_event_direction`), isolation and
 sources, each adapter, the harness (`test_stats`, `test_ledger`, `test_gates`,
 `test_costs`, `test_settlement`, `test_portfolio`, `test_prereg`,
-`test_candidate_wire`, `test_passive_core`), the event data modules (`test_form4`,
-`test_earnings_surprise`) and the ops tools (`test_forward_ledgers`,
+`test_candidate_wire`, `test_passive_core`, `test_tranches`, `test_placebo`,
+`test_universe`, `test_etf_trend`, `test_etf_trend_prereg`), the event data
+modules (`test_form4`, `test_earnings_surprise`, `test_french_factors`,
+`test_ticker_map`, `test_ticker_observations`, `test_shares_outstanding`,
+`test_form13f`, `test_last_trade`, `test_end_events`, `test_filing_sections`,
+`test_edgar_filings`), the link graph (`test_link_store`, `test_text_peers`,
+`test_ownership_edges`) and the ops tools (`test_forward_ledgers`,
 `test_forward_eval`, `test_forward_register`, `test_alert_relay`,
 `test_deploy_check`). CI job assignment is in `.github/workflows/ci.yml`.
 
