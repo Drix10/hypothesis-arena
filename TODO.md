@@ -80,7 +80,7 @@ Open:
         maintenance are shrunk, a book at or below it is cut to half the last
         target and entries HOLD until restored, tested in `test_portfolio`.
   - [ ] `constraint_set` and `contamination_class` in the prereg validator.
-  - [ ] The whole-share book at the registered size ($100,000 for paper) and the
+  - [x] The whole-share book at the registered size ($100,000 for paper) and the
         monthly-tranche portfolio (a 3-month hold, one third re-ranked a month).
   - [ ] Borrow stress grid of 0.5%, 2% and 5% a year in the cost model (the code
         has one flat stress rate).
