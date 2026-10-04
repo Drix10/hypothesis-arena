@@ -84,22 +84,28 @@ Open:
         monthly-tranche portfolio (a 3-month hold, one third re-ranked a month).
   - [x] Borrow stress grid of 0.5%, 2% and 5% a year in the cost model
         (`costs.BORROW_STRESS_GRID`).
-  - [ ] Gate report additions: net alpha per decade, the Fama-French plus
-        momentum alpha, the correlation with each promoted strategy and the
-        effective number of independent signals (`plan/strategies.md`, Breadth).
+  - [x] Gate report additions (`gates.breadth`): net alpha per decade, the
+        Fama-French plus momentum alpha, the correlation with each promoted
+        strategy and the effective number of independent signals. The factor
+        alpha's t-statistic ignores the loadings' estimation error (`lean:`).
   - [x] The placebo-graph tool (`plan/math.md`, Edge validation).
   - [ ] Verify on Alpaca's docs and the paper account: shorting on paper, the
         `shortable` and `easy_to_borrow` flags, fractional shorts, the paper
         balance setting.
 - [ ] **ETF Trend test** (`etf_trend`): prereg (`seen-window`) and backtest gate.
-- [ ] **EDGAR corpus:** 10-K, 10-Q and 8-K full text with manifests, a section
-      parser, a point-in-time CIK, ticker and former-name map, XBRL shares
-      outstanding and a 13F holdings parser. The financial statement sets, the
-      Form 4 reader and the Ken French factors (`research/sources/french_factors.py`)
-      exist.
-  - [ ] A last-trading-day source for delisted firms (the coverage probe leaves
-        11% of eligible firms with an unverified end), so delisting returns
-        (`plan/math.md`, Point-in-time discipline) rest on a dated event.
+- [ ] **EDGAR corpus:** 10-K, 10-Q and 8-K full-text fetch with manifests, and
+      the collectors that feed the pure modules below. Built and tested on
+      fixtures only: `filing_sections`, `ticker_map`, `shares_outstanding`,
+      `form13f`, `last_trade` and `french_factors` (`research/sources/`), plus the
+      financial statement sets and the Form 4 reader.
+  - [ ] A real-filing precision check of `filing_sections` (the last heading at a
+        line start wins, so a late cross-reference can win) and of `form13f` on a
+        live information table.
+  - [ ] Observation collectors for `ticker_map` (cover-page symbols, symbol-change
+        corporate actions, Form 4 issuer symbols, former names) and event
+        collectors for `last_trade` (Form 25, Form 15, 8-K items), so delisting
+        returns (`plan/math.md`, Point-in-time discipline) rest on a dated event;
+        the coverage probe leaves 11% of eligible firms with an unverified end.
   - [ ] Add `test_coverage_probe` to the research gate in `ci.yml` and
         `CONTEXT_MANIFEST.json` (protected paths; a human commits them).
 - [ ] **Link graph:** a bitemporal store; text peers and common ownership first
