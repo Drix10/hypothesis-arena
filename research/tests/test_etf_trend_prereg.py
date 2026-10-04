@@ -7,7 +7,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from research.strategy import prereg
 
-PATH = os.path.join(os.path.dirname(__file__), "..", "preregistrations",
+PATH = os.path.join(os.path.dirname(__file__), "..", "prereg",
                     "etf_trend.json")
 LEVERAGED_OR_INVERSE = {"UPRO", "TQQQ", "SPXL", "SSO", "QLD", "TMF", "SDS",
                         "SH", "SQQQ", "SPXU", "TBT", "UVXY"}
