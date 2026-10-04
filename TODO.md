@@ -70,10 +70,12 @@ cleanup.
 
 Facts an agent or a session asserted that nobody has checked.
 
-- `last_trade` takes a Form 25 as dated about 10 days before the last bar (the
-  agent cited Exchange Act Rule 12d2-2(d)(1); not checked).
-- `french_factors.fetch` has never reached the real site; one live fetch and a
-  look at the file layout are needed before a gate relies on it.
+- `french_factors.fetch` has never reached the real site. The two file names
+  match the data library page; the percent units and the file layout still need
+  one live fetch before a gate relies on it.
+- `last_trade` windows: Rule 12d2-2(d)(1) makes a delisting effective 10 days
+  after the Form 25 (checked); the 8-K Item 2.01 and Form 15 windows are
+  working assumptions.
 - `filing_sections` (the last heading at a line start wins) and `form13f` have
   only seen fixtures; the 200-filing precision audit and one live information
   table are the check.
