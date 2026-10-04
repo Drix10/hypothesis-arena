@@ -16,6 +16,7 @@ SHADOW_MIN_TRADES = 30
 SHADOW_MIN_REBALANCES = 3
 SHADOW_COST_RATIO_MAX = 1.5
 ANNUAL = 252
+FACTOR_NAMES = ("Mkt-RF", "SMB", "HML", "RMW", "CMA", "Mom")
 
 
 class GateError(ValueError):
@@ -31,12 +32,15 @@ def backtest_gate(ret_1x, ret_2x, cash, passive, n_trials, sr_var, *, seed=0,
            haircut_ok=None, transfer_ok=None, participation_ok=None,
            excluded_event_frac=None, is_event_strategy=False,
            model_component=False, paired_no_model_exists=None, decision=None,
-           cost_multiple=None):
+           cost_multiple=None, dates=None, factors=None, promoted=None):
     """Holdout series in, {'gate','verdict','failed','conditions'} out.
 
     `variants_matrix[t][j]` holds each registered variant's return; PBO is
     not applicable (and skipped) for a single variant. `decision` is the
-    pre-registration's decision block: its thresholds become conditions."""
+    pre-registration's decision block: its thresholds become conditions.
+    `dates` (ISO, one per return), `factors` (french_factors rows) and
+    `promoted` ({name: returns}) add a 'breadth' entry; it never changes the
+    verdict."""
     n = len(ret_1x)
     if not (len(ret_2x) == len(cash) == len(passive) == n) or n < 4:
         raise GateError("series-length")
@@ -96,8 +100,97 @@ def backtest_gate(ret_1x, ret_2x, cash, passive, n_trials, sr_var, *, seed=0,
         conds.append(_c("paired_no_model_variant_exists",
                         paired_no_model_exists is True, paired_no_model_exists))
     failed = [c["name"] for c in conds if not c["pass"]]
-    return {"gate": "backtest", "verdict": "PASS" if not failed else "FAIL",
-            "failed": failed, "conditions": conds}
+    report = {"gate": "backtest", "verdict": "PASS" if not failed else "FAIL",
+              "failed": failed, "conditions": conds}
+    if dates is not None or factors is not None or promoted is not None:
+        report["breadth"] = breadth(ret_1x, cash, dates, factors, promoted)
+    return report
+
+
+def _decade_alpha(ex, dates):
+    by = {}
+    for d, x in zip(dates, ex):
+        by.setdefault(int(d[:4]) // 10 * 10, []).append(x)
+    return {str(k): {"annual_net_alpha": stats.mean(v) * ANNUAL, "n": len(v)}
+            for k, v in sorted(by.items())}
+
+
+def _solve(a, b):
+    """Gauss-Jordan with partial pivoting on a small square system."""
+    m = len(a)
+    aug = [row[:] + [v] for row, v in zip(a, b)]
+    for i in range(m):
+        piv = max(range(i, m), key=lambda r: abs(aug[r][i]))
+        if abs(aug[piv][i]) < 1e-14:
+            raise GateError("factors-collinear")
+        aug[i], aug[piv] = aug[piv], aug[i]
+        for r in range(m):
+            if r != i:
+                f = aug[r][i] / aug[i][i]
+                aug[r] = [x - f * y for x, y in zip(aug[r], aug[i])]
+    return [aug[i][m] / aug[i][i] for i in range(m)]
+
+
+def _factor_alpha(ex, dates, factors):
+    """Six-factor (FF5 + momentum) alpha on the dates both series share."""
+    rows = {d: v for d, v in factors}
+    idx = [i for i, d in enumerate(dates) if d in rows]
+    if len(idx) < 4:
+        raise GateError("factor-overlap")
+    y = [ex[i] - rows[dates[i]]["RF"] for i in idx]
+    x = [[1.0] + [rows[dates[i]][k] for k in FACTOR_NAMES] for i in idx]
+    p = len(x[0])
+    xtx = [[sum(r[a] * r[b] for r in x) for b in range(p)] for a in range(p)]
+    beta = _solve(xtx, [sum(r[a] * v for r, v in zip(x, y)) for a in range(p)])
+    # The fitted factor premium, without the intercept, makes spanning_alpha's
+    # intercept equal the multi-factor alpha. lean: its t-stat and CI ignore
+    # the estimation error of the loadings; replace with a joint regression
+    # if the gate ever conditions on them.
+    fit = [sum(b * v for b, v in zip(beta[1:], r[1:])) for r in x]
+    out = stats.spanning_alpha(y, fit)
+    out["loadings"] = dict(zip(FACTOR_NAMES, beta[1:]))
+    return out
+
+
+def _corr(a, b):
+    ma, mb = stats.mean(a), stats.mean(b)
+    sa = sum((x - ma) ** 2 for x in a)
+    sb = sum((x - mb) ** 2 for x in b)
+    if sa <= 0.0 or sb <= 0.0:
+        raise GateError("constant-series")
+    return sum((x - ma) * (y - mb) for x, y in zip(a, b)) / math.sqrt(sa * sb)
+
+
+def effective_signals(corr):
+    """(sum of eigenvalues)^2 / sum of squared eigenvalues of a correlation
+    matrix, i.e. n^2 over its squared Frobenius norm."""
+    n = len(corr)
+    return n * n / sum(v * v for row in corr for v in row)
+
+
+def breadth(ret_1x, cash, dates=None, factors=None, promoted=None):
+    """Net alpha per decade, factor alpha, correlation with each promoted
+    strategy and the effective number of independent signals."""
+    n = len(ret_1x)
+    ex = [a - c for a, c in zip(ret_1x, cash)]
+    out = {}
+    if (dates is not None and len(dates) != n) or (
+            promoted and any(len(r) != n for r in promoted.values())):
+        raise GateError("breadth-length")
+    if dates is not None:
+        out["net_alpha_by_decade"] = _decade_alpha(ex, dates)
+        if factors is not None:
+            out["factor_alpha"] = _factor_alpha(ex, dates, factors)
+    elif factors is not None:
+        raise GateError("factors-need-dates")
+    if promoted is not None:
+        names = sorted(promoted)
+        series = [ret_1x] + [promoted[k] for k in names]
+        out["promoted_correlation"] = {k: _corr(ret_1x, promoted[k])
+                                       for k in names}
+        out["effective_signals"] = effective_signals(
+            [[_corr(a, b) for b in series] for a in series])
+    return out
 
 
 def shadow_gate(kind, sessions, trades, rebalances, shadow_ret, band_lo, band_hi,

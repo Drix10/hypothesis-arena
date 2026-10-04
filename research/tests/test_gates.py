@@ -1,3 +1,4 @@
+import datetime
 import os
 import random
 import sys
@@ -94,6 +95,69 @@ class T(unittest.TestCase):
         rep = G.backtest_gate(good, good2, [0.0001] * n, series(0.0003, 0.01, n, 2),
                        1, None, decision=dec, cost_multiple=None, **kw)
         self.assertIn("cost_multiple_ge_prereg", rep["failed"])
+
+    def test_breadth_decades_and_correlation(self):
+        n = 40
+        dates = ["%d-01-%02d" % (1999 + i // 20, i % 20 + 1) for i in range(n)]
+        ret = [0.001 if i % 2 else -0.0005 for i in range(n)]
+        r = random.Random(5)
+        other = [r.gauss(0, 0.01) for _ in range(n)]
+        b = G.breadth(ret, [0.0] * n, dates=dates,
+                      promoted={"same": ret, "other": other})
+        dec = b["net_alpha_by_decade"]
+        self.assertEqual([dec["1990"]["n"], dec["2000"]["n"]], [20, 20])
+        self.assertAlmostEqual(dec["1990"]["annual_net_alpha"], 0.00025 * 252)
+        self.assertAlmostEqual(b["promoted_correlation"]["same"], 1.0)
+        self.assertLess(abs(b["promoted_correlation"]["other"]), 0.5)
+
+    def test_effective_signals(self):
+        self.assertAlmostEqual(G.effective_signals([[1, 1], [1, 1]]), 1.0)
+        self.assertAlmostEqual(G.effective_signals([[1, 0], [0, 1]]), 2.0)
+        r = random.Random(11)
+        a = [r.gauss(0, 0.01) for _ in range(5000)]
+        c = [r.gauss(0, 0.01) for _ in range(5000)]
+        same = G.breadth(a, [0.0] * 5000, promoted={"a": a})
+        self.assertAlmostEqual(same["effective_signals"], 1.0)
+        ind = G.breadth(a, [0.0] * 5000, promoted={"c": c})
+        self.assertAlmostEqual(ind["effective_signals"], 2.0, places=1)
+
+    def test_factor_alpha_recovers_known_alpha(self):
+        n = 300
+        r = random.Random(3)
+        start = datetime.date(2001, 1, 1)
+        dates = [(start + datetime.timedelta(days=i)).isoformat()
+                 for i in range(n)]
+        rows, ret = [], []
+        for d in dates:
+            f = {k: r.gauss(0, 0.01) for k in G.FACTOR_NAMES}
+            f["RF"] = 0.0001
+            rows.append((d, f))
+            ret.append(0.0003 + 0.0001 + 0.8 * f["Mkt-RF"] + 0.3 * f["HML"]
+                       - 0.2 * f["Mom"])
+        out = G.breadth(ret, [0.0] * n, dates=dates, factors=rows)["factor_alpha"]
+        self.assertAlmostEqual(out["alpha"], 0.0003, places=9)
+        self.assertAlmostEqual(out["loadings"]["Mkt-RF"], 0.8, places=6)
+        self.assertEqual(out["n"], n)
+
+    def test_breadth_inputs_fail_closed(self):
+        x = series(0.001, 0.005, 10, 1)
+        with self.assertRaises(G.GateError):
+            G.breadth(x, [0.0] * 10, promoted={"short": x[:5]})
+        with self.assertRaises(G.GateError):
+            G.breadth(x, [0.0] * 10, factors=[])
+        with self.assertRaises(G.GateError):
+            G.breadth(x, [0.0] * 10, promoted={"flat": [0.0] * 10})
+
+    def test_breadth_is_additive_in_the_gate_report(self):
+        n = 1500
+        good = series(0.0012, 0.005, n, 1)
+        kw = dict(tstat=4.0, transfer_ok=True, participation_ok=True)
+        base = G.backtest_gate(good, good, [0.0001] * n, good, 1, None, **kw)
+        rep = G.backtest_gate(good, good, [0.0001] * n, good, 1, None,
+                              promoted={"p": series(0.0, 0.01, n, 9)}, **kw)
+        self.assertNotIn("breadth", base)
+        self.assertEqual({k: v for k, v in rep.items() if k != "breadth"}, base)
+        self.assertIn("effective_signals", rep["breadth"])
 
     def test_render_is_valid_json_with_infinite_values(self):
         import json
