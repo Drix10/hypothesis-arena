@@ -37,13 +37,17 @@ class ParseTest(unittest.TestCase):
             "cusip": "037833100", "issuer": "APPLE INC", "value": 1000,
             "shares": 10, "put_call": "", "discretion": "SOLE"})
 
-    def test_value_in_thousands_before_2023(self):
-        r = _parse(_doc(_row(value="5")), period="2022-12-31")[0]
-        self.assertEqual(r["value"], 5000)
-
-    def test_value_in_dollars_from_2023(self):
-        r = _parse(_doc(_row(value="5")), period="2023-03-31")[0]
-        self.assertEqual(r["value"], 5)
+    def test_value_unit_follows_filing_date(self):
+        cases = [
+            ("2022-09-30", "2022-11-14", 5000),
+            ("2022-12-31", "2023-02-14", 5),
+            ("2022-06-30", "2023-03-10", 5),
+            ("2022-12-31", "2023-01-02", 5000),
+            ("2022-12-31", "2023-01-03", 5),
+        ]
+        for period, filed, want in cases:
+            r = _parse(_doc(_row(value="5")), period=period, filed=filed)[0]
+            self.assertEqual(r["value"], want, (period, filed))
 
     def test_option_rows_dropped(self):
         rows = _parse(_doc(_row(), _row(cusip="594918104", put_call="Put"),

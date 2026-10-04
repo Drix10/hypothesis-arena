@@ -2,14 +2,14 @@
 
 Parses the information table XML into equity holding rows and fails closed on
 DOCTYPE or entity declarations and on any malformed row. Values are dollars:
-filings for periods before VALUE_DOLLARS_FROM report thousands.
+filings filed before VALUE_DOLLARS_FILED_FROM report thousands.
 """
 import re
 import xml.etree.ElementTree as ET
 
-# The SEC moved the value column from thousands to dollars for periods ending
-# after 2022-12-31.
-VALUE_DOLLARS_FROM = "2023-01-01"
+# The SEC moved the value column from thousands to dollars for filings made on
+# or after 2023-01-03, whatever the period of report.
+VALUE_DOLLARS_FILED_FROM = "2023-01-03"
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _CUSIP_RE = re.compile(r"^[0-9A-Z]{9}$")
@@ -65,7 +65,7 @@ def parse_information_table(xml_bytes, cik, period, filing_date):
     tables = [e for e in root.iter() if _local(e.tag) == "infoTable"]
     if not tables:
         raise Form13fError("no infoTable rows")
-    scale = 1 if period >= VALUE_DOLLARS_FROM else 1000
+    scale = 1 if filing_date >= VALUE_DOLLARS_FILED_FROM else 1000
     rows = []
     for elem in tables:
         f = _fields(elem)
