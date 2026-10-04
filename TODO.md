@@ -44,6 +44,42 @@ test output, or a report path).
    (`plan/validation.md`, Outcomes) stops new single-stock search.
 5. Everything else only after a deterministic test has shown signal.
 
+## Human queue
+
+Only a human can do these: protected paths, signing, accounts and pushes. An
+agent run never touches them. Signing the paper stage file is under Codebase
+cleanup.
+
+- [ ] Add the new research suites to the research gate in `ci.yml` and to the
+      gates in `CONTEXT_MANIFEST.json` (protected paths): `test_coverage_probe`,
+      `test_tranches`, `test_french_factors`, `test_placebo`, `test_ticker_map`,
+      `test_shares_outstanding`, `test_form13f`, `test_last_trade`,
+      `test_filing_sections`, and every suite the next runs add. The agent-flow
+      QA gate runs only the suites listed there, so the pipeline does not run
+      these until then.
+- [ ] Add the `.gitleaks.toml` allowlist line the CI secrets job needs.
+- [ ] Set `review_paths` in `CONTEXT_MANIFEST.json` (agent-flow 1.2.3) so an agent
+      can add a test line to `ci.yml` as a draft pull request instead of
+      stopping; keep the kernel risk, exec, broker and kill paths, the stage
+      files and the manifest protected.
+- [ ] Push `main` when ready: all work since `789851f` is local only.
+- [ ] Review each pre-registration an agent drafts before it is registered in the
+      trial ledger (`plan/validation.md`).
+
+## Unverified claims
+
+Facts an agent or a session asserted that nobody has checked.
+
+- `last_trade` takes a Form 25 as dated about 10 days before the last bar (the
+  agent cited Exchange Act Rule 12d2-2(d)(1); not checked).
+- `french_factors.fetch` has never reached the real site; one live fetch and a
+  look at the file layout are needed before a gate relies on it.
+- `filing_sections` (the last heading at a line start wins) and `form13f` have
+  only seen fixtures; the 200-filing precision audit and one live information
+  table are the check.
+- The coverage probe's 11% unverified end is a bar-data statement, not a
+  confirmed delisting rate.
+
 ## Codebase cleanup
 
 Done: the plan docs, the Python code (`research/`, `collector/`, `ops/`), the
@@ -106,8 +142,6 @@ Open:
         collectors for `last_trade` (Form 25, Form 15, 8-K items), so delisting
         returns (`plan/math.md`, Point-in-time discipline) rest on a dated event;
         the coverage probe leaves 11% of eligible firms with an unverified end.
-  - [ ] Add `test_coverage_probe` to the research gate in `ci.yml` and
-        `CONTEXT_MANIFEST.json` (protected paths; a human commits them).
 - [ ] **Link graph:** a bitemporal store; text peers and common ownership first
       (deterministic, dense); customer and supplier patterns with a precision
       audit (200 labeled filings, at least 0.9), knowing that 10-K disclosure
