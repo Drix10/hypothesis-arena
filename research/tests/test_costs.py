@@ -102,9 +102,13 @@ class ImpactAndCarryTest(unittest.TestCase):
 
     def test_borrow_fee_actual_360(self):
         self.assertEqual(C.borrow_fee_usd(-10_000.0, 30, C.ETB_BORROW_RATE), 0.0)
-        self.assertAlmostEqual(
-            C.borrow_fee_usd(-10_000.0, 36, C.STRESS_BORROW_RATE),
-            10_000 * 0.005 * 36 / 360)
+        for name, rate in (("low", 0.005), ("mid", 0.02), ("high", 0.05)):
+            self.assertEqual(C.borrow_stress_rate(name), rate)
+            self.assertAlmostEqual(
+                C.borrow_fee_usd(-10_000.0, 36, C.borrow_stress_rate(name)),
+                10_000 * rate * 36 / 360)
+        with self.assertRaises(C.CostError):
+            C.borrow_stress_rate("flat")
         self.assertAlmostEqual(C.borrow_fee_usd(10_000.0, 36, 0.01),
                                C.borrow_fee_usd(-10_000.0, 36, 0.01))
         with self.assertRaises(C.CostError):

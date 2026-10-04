@@ -18,11 +18,18 @@ STRESS_LEGS = (1.0, 1.5, 2.0, 3.0)
 DAY_COUNT = 360
 IMPACT_ETA = 1.0  # square-root law coefficient
 ETB_BORROW_RATE = 0.0  # Alpaca: easy-to-borrow names carry no fee
-STRESS_BORROW_RATE = 0.005
+BORROW_STRESS_GRID = {"low": 0.005, "mid": 0.02, "high": 0.05}  # a year
 
 
 class CostError(ValueError):
     pass
+
+
+def borrow_stress_rate(name):
+    """Annual borrow rate of a named stress grid point."""
+    if name not in BORROW_STRESS_GRID:
+        raise CostError("borrow-stress-name")
+    return BORROW_STRESS_GRID[name]
 
 
 def fill_px(side: str, mid: float, spread_bps: float, mult: float = 1.0) -> float:
