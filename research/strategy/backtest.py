@@ -6,7 +6,7 @@ ledger."""
 import copy
 import hashlib
 
-from research.strategy import benchmarks, gates, ledger as L, portfolio
+from research.strategy import benchmarks, gates, portfolio
 from research.strategy import prereg as P
 from research.strategy import stats
 
@@ -46,12 +46,15 @@ def run_backtest(prereg, bars, target_fn, ledger, *, variant=0, factors=None,
                  promoted=None, cost_mults=(1.0, 2.0), seed=0, margin=None,
                  cash0=100000.0, spread_bps=2.0, cash_rate=0.0, code_hash=None,
                  sr_var=None, **gate_kw):
-    """Returns the report dict. Each cost run gets its own copy of `target_fn`. `bars[sym][date] = (open, close)`; `variant`
-    indexes prereg["variants"]. A prereg hash already ledgered under the same
-    variant is refused. `code_hash` defaults to the hash of the strategy,
-    signal and variant. Extra keywords (transfer_ok, participation_ok, tstat,
-    ...) go to gates.backtest_gate; missing evidence fails its condition. A
-    failure after registration closes the trial as crashed and re-raises."""
+    """Returns the report dict. `bars[sym][date] = (open, close)`; each cost
+    run gets its own copy of `target_fn`. `variant` indexes
+    prereg["variants"]. A prereg hash already ledgered under the same variant
+    is refused. Input errors (short holdout, no SPY/IEF bars, no `sr_var` when
+    the ledger cannot supply one) are refused before registration.
+    `code_hash` defaults to the hash of the strategy, signal and variant.
+    Extra keywords (transfer_ok, participation_ok, tstat, ...) go to
+    gates.backtest_gate; missing evidence fails its condition. A failure after
+    registration closes the trial as crashed and re-raises."""
     h = P.require_valid(prereg)
     if not (isinstance(variant, int) and not isinstance(variant, bool)
             and 0 <= variant < len(prereg["variants"])):
@@ -65,7 +68,15 @@ def run_backtest(prereg, bars, target_fn, ledger, *, variant=0, factors=None,
            for r in ledger.rows()):
         raise BacktestError("duplicate-prereg")
     sessions, prices = _window(bars, prereg["holdout"])
+    if len(sessions) < 4:
+        raise BacktestError("holdout-bars")
+    if not all(s in prices for s in ("SPY", "IEF")):
+        raise BacktestError("passive-benchmark-bars")
     trial_id = "%s-%s-v%d" % (prereg["experiment_id"], h[:12], variant)
+    if sr_var is None and ledger.count_trials() + 1 > 1:
+        sr_var = _trial_variance(ledger, trial_id)
+        if sr_var is None:
+            raise BacktestError("trial-sharpe-variance-required")
     row = ledger.open_trial(
         trial_id=trial_id, hypothesis_card_id=prereg["experiment_id"],
         prereg_hash=h, family=prereg["family"],
@@ -78,9 +89,8 @@ def run_backtest(prereg, bars, target_fn, ledger, *, variant=0, factors=None,
         split_scheme=prereg["split"]["scheme"], runner=RUNNER)
     try:
         report = _evaluate(prereg, prices, sessions, target_fn, ledger,
-                           trial_id, factors, promoted, cost_mults, seed,
-                           margin, cash0, spread_bps, cash_rate, sr_var,
-                           gate_kw)
+                           factors, promoted, cost_mults, seed, margin, cash0,
+                           spread_bps, cash_rate, sr_var, gate_kw)
     except Exception as e:
         ledger.close_trial(trial_id, "crashed", {"error": type(e).__name__})
         raise
@@ -94,17 +104,13 @@ def run_backtest(prereg, bars, target_fn, ledger, *, variant=0, factors=None,
     return report
 
 
-def _evaluate(prereg, prices, sessions, target_fn, ledger, trial_id, factors,
-              promoted, cost_mults, seed, margin, cash0, spread_bps,
-              cash_rate, sr_var, gate_kw):
-    if len(sessions) < 4:
-        raise BacktestError("holdout-bars")
+def _evaluate(prereg, prices, sessions, target_fn, ledger, factors, promoted,
+              cost_mults, seed, margin, cash0, spread_bps, cash_rate, sr_var,
+              gate_kw):
     runs = {m: portfolio.run(sessions, prices, copy.deepcopy(target_fn),
                              cash0=cash0, spread_bps=spread_bps, cost_mult=m,
                              margin=margin)
             for m in sorted(cost_mults)}
-    if not all(s in prices for s in ("SPY", "IEF")):
-        raise BacktestError("passive-benchmark-bars")
     passive = benchmarks.sixty_forty(sessions, prices, cash0=cash0,
                                      spread_bps=spread_bps)["returns"]
     cash = benchmarks.cash_returns(len(sessions), cash_rate)
@@ -121,10 +127,7 @@ def _evaluate(prereg, prices, sessions, target_fn, ledger, trial_id, factors,
     except stats.StatsError:  # degenerate series: the condition fails closed
         pass
     gate = gates.backtest_gate(
-        r1, r2, cash, passive, n_trials,
-        sr_var if sr_var is not None else
-        (_trial_variance(ledger, trial_id) if n_trials > 1 else None),
-        seed=seed, decision=dec, cost_multiple=cost_multiple, dates=sessions,
+        r1, r2, cash, passive, n_trials, sr_var, seed=seed, decision=dec, cost_multiple=cost_multiple, dates=sessions,
         factors=factors, promoted=promoted, **gate_kw)
     failed = list(gate["failed"])
     if len(sessions) < dec["min_days"]:

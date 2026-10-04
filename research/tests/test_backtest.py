@@ -92,6 +92,25 @@ class T(unittest.TestCase):
         with self.assertRaises(B.BacktestError):
             B.run_backtest(PREREG, bars(), hold, self.led, variant=5)
 
+    def test_input_errors_refused_before_registration(self):
+        short = copy.deepcopy(PREREG)
+        short["holdout"].update(start="2021-01-04", end="2021-01-06")
+        no_ief = {s: v for s, v in bars().items() if s != "IEF"}
+        for pre, bs, code in ((short, bars(), "holdout-bars"),
+                              (PREREG, no_ief, "passive-benchmark-bars")):
+            with self.assertRaisesRegex(B.BacktestError, code):
+                B.run_backtest(pre, bs, hold, self.led)
+        self.assertFalse(os.path.exists(self.path))
+        B.run_backtest(PREREG, bars(), hold, self.led)
+        before = self.led.rows()
+        with self.assertRaisesRegex(B.BacktestError,
+                                    "trial-sharpe-variance-required"):
+            B.run_backtest(PREREG, bars(), hold, self.led, variant=1)
+        self.assertEqual(self.led.rows(), before)
+        rep = B.run_backtest(PREREG, bars(), hold, self.led, variant=1,
+                             sr_var=0.01)
+        self.assertEqual(rep["n_trials"], 2)
+
     def test_double_cost_run_costs_more(self):
         rep = B.run_backtest(PREREG, bars(), rotate, self.led)
         self.assertGreater(rep["cost_usd"]["1.0"], 0.0)
