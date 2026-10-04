@@ -87,7 +87,7 @@ Open:
   - [ ] Gate report additions: net alpha per decade, the Fama-French plus
         momentum alpha, the correlation with each promoted strategy and the
         effective number of independent signals (`plan/strategies.md`, Breadth).
-  - [ ] The placebo-graph tool (`plan/math.md`, Edge validation).
+  - [x] The placebo-graph tool (`plan/math.md`, Edge validation).
   - [ ] Verify on Alpaca's docs and the paper account: shorting on paper, the
         `shortable` and `easy_to_borrow` flags, fractional shorts, the paper
         balance setting.
