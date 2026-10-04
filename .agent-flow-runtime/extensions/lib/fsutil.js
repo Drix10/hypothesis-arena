@@ -136,11 +136,12 @@ export function readJson(path) {
 export function atomicWrite(path, content) {
     mkdirSync(dirname(path), { recursive: true });
     const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
-    writeFileSync(tmp, content, "utf-8");
     try {
+        writeFileSync(tmp, content, "utf-8");
         renameSync(tmp, path);
     }
     catch (e) {
+        // A full disk fails the write halfway: don't leave the partial file behind.
         try {
             unlinkSync(tmp);
         }

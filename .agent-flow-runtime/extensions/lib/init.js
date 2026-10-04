@@ -94,9 +94,11 @@ function suggestProtectedPaths(root) {
             /* not there */
         }
     }
-    if (existsSync(join(root, ".github", "workflows")))
-        out.push(".github/workflows/");
     return out;
+}
+/** Paths agents can usefully add lines to while a person reviews: CI workflows. Suggested, never written. */
+function suggestReviewPaths(root) {
+    return existsSync(join(root, ".github", "workflows")) ? [".github/workflows/"] : [];
 }
 export function planInit(root, opts) {
     const now = opts.now ?? isoNow();
@@ -135,7 +137,7 @@ export function planInit(root, opts) {
         throw new Error(`init built an invalid manifest (bug): ${problems.join("; ")}`);
     files.push({ path: MANIFEST_FILE, content: `${JSON.stringify(manifest, null, 2)}\n`, exists: existsSync(join(root, MANIFEST_FILE)) });
     const suggested = suggestProtectedPaths(root);
-    return { files, context_files: contextFiles, suggested_protected_paths: suggested, references: refCount, missing_references: missing, ...(existingRules.length && !existsSync(join(root, "AGENTS.md")) ? { existing_rules: existingRules } : {}) };
+    return { files, context_files: contextFiles, suggested_protected_paths: suggested, suggested_review_paths: suggestReviewPaths(root), references: refCount, missing_references: missing, ...(existingRules.length && !existsSync(join(root, "AGENTS.md")) ? { existing_rules: existingRules } : {}) };
 }
 /** The `$schema` pointer for an editor: the project's npm install, else the vendored runtime, else none. */
 function schemaRef(root) {

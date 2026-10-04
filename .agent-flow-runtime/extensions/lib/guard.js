@@ -27,7 +27,7 @@ import { basename, dirname, isAbsolute, join, parse as parsePath, relative, reso
 import { git } from "./git.js";
 import { CASE_INSENSITIVE_FS, escapesBase, landingPath, toPosix, walk } from "./fsutil.js";
 import { denyCommandsOf, matchDenyCommand } from "./denycmd.js";
-import { MANIFEST_FILE, contextFilePaths, denyReadPathsOf, matchAny, protectedPathsOf } from "./manifest.js";
+import { MANIFEST_FILE, contextFilePaths, denyReadPathsOf, matchAny, protectedPathsOf, reviewPathsOf } from "./manifest.js";
 import { isEnvFile } from "./risk.js";
 export const ROLES = ["orchestrator", "implementer", "reviewer", "qa", "gardener", "bootstrap"];
 export const READ_ONLY_ROLES = ["reviewer", "qa"];
@@ -70,6 +70,17 @@ export const tamperProofMatch = (rel) => underAny(rel, TAMPER_PROOF);
  * hook config. No agent role edits these; a human does.
  */
 const AGENT_CONFIG = [".claude/", ".codex/", ".gemini/", ".pi/", ".agents/", ".cursor/", ".windsurf/", ".github/workflows/", ".github/skills/", ".husky/", ".githooks/"];
+/**
+ * The one entry of AGENT_CONFIG a manifest's `review_paths` can open up: CI workflows. Agents add checks there (a new
+ * test in the CI list) and a person reviews the diff; the classifier refuses anything but added lines. The rest of
+ * AGENT_CONFIG is what constrains the agents themselves (skills, hooks, harness settings) and never opens.
+ */
+const REVIEWABLE_CONFIG = ".github/workflows/";
+/** The AGENT_CONFIG entry `rel` falls under, unless the manifest lists it as review-only. */
+function configHit(rel, reviewPaths) {
+    const hit = underAny(rel, AGENT_CONFIG);
+    return hit === REVIEWABLE_CONFIG && matchAny(reviewPaths, rel) ? null : hit;
+}
 /** camelCase / PascalCase / kebab → snake, so `writeFile` and `NotebookEdit` are recognised. */
 function toolWords(name) {
     return name
@@ -954,7 +965,7 @@ const DEVICE = /^\/dev\/(null|stdout|stderr|tty|fd\/\d+)$/;
 // ---------------------------------------------------------------------------
 // The CLI twins of agent-flow's own mutating tools
 // ---------------------------------------------------------------------------
-const CLI_COMMANDS = new Set(["doctor", "init", "audit-risk", "baseline", "classify", "check-staged", "state", "worktree", "scan", "install", "hook", "schema", "template", "report", "repair", "guard", "audit", "gates", "manifest", "codeowners", "update", "run"]);
+const CLI_COMMANDS = new Set(["doctor", "init", "audit-risk", "baseline", "classify", "check-staged", "state", "worktree", "scan", "install", "hook", "schema", "template", "report", "repair", "guard", "audit", "gates", "manifest", "codeowners", "update", "uninstall", "debt", "brief", "statusline", "mcp", "run"]);
 /**
  * May `role` run `agent-flow <argv…>`? Returns a block reason, or null if allowed.
  * `argv` is what follows the binary (process.argv.slice(2)). Applies the same
@@ -1003,7 +1014,7 @@ export function roleMayRunCli(role, argv) {
         if (sub === "gates" && act === "run" && READ_ONLY_ROLES.includes(role)) {
             return `role "${role}" may not run \`agent-flow gates run\` — the orchestrator runs gates and hands the report over.`;
         }
-        if (sub === "install" || sub === "update" || sub === "run" || (sub === "hook" && act === "install")) {
+        if (sub === "install" || sub === "update" || sub === "uninstall" || sub === "run" || (sub === "hook" && act === "install")) {
             return `role "${role}" may not run \`agent-flow ${sub === "hook" ? "hook install" : sub}\` — it rewrites agent/hook configuration; a human runs setup.`;
         }
     }
@@ -1043,6 +1054,7 @@ function decideWrite(g, p, protectedPaths, ctxFiles) {
     });
     const outside = views.some((v) => v.outside);
     const shown = toPosix(p);
+    const reviewPaths = reviewPathsOf(g.manifest);
     for (const v of views) {
         if (v.outside)
             continue;
@@ -1050,7 +1062,7 @@ function decideWrite(g, p, protectedPaths, ctxFiles) {
         if (t)
             return block("tamper-proof", `${v.rel} is written only by agent-flow tools (state_update, etc.) — direct edits would forge trust signals.`);
         if (role) {
-            const c = underAny(v.rel, AGENT_CONFIG);
+            const c = configHit(v.rel, reviewPaths);
             if (c)
                 return block("agent-config", `${v.rel} is agent/CI configuration (${c}) — agents don't edit what constrains them. Escalate to a human.`);
         }
@@ -1075,7 +1087,7 @@ function decideWrite(g, p, protectedPaths, ctxFiles) {
             [landing, wtReal],
         ]) {
             const wr = toPosix(relative(base, abs));
-            const c = underAny(wr, AGENT_CONFIG);
+            const c = configHit(wr, reviewPaths);
             if (c)
                 return block("agent-config", `${wr} is agent/CI configuration (${c}) — escalate instead of editing it.`);
             const t = underAny(wr, TAMPER_PROOF);
@@ -1630,7 +1642,7 @@ function decideShellTarget(g, t, protectedPaths, ctxFiles) {
             const wiring = protectedPaths.length && !g.allowProtected ? underAny(rel, GUARD_WIRING) : null;
             if (wiring)
                 return block("guard-wiring", `command writes ${rel}, which is what runs the guard (${wiring}); a human changes it.`);
-            const cfg = role && role !== "orchestrator" ? underAny(rel, AGENT_CONFIG) : null;
+            const cfg = role && role !== "orchestrator" ? configHit(rel, reviewPathsOf(g.manifest)) : null;
             if (cfg)
                 return block("agent-config", `command writes ${rel}, agent/CI configuration (${cfg}). Escalate to a human.`);
             if (!g.allowProtected) {
@@ -1894,7 +1906,12 @@ function decideMentions(g, named, protectedPaths, ctxFiles, what = "command") {
         return block("tamper-proof", `${what} writes near ${tamper}, which only agent-flow tools may change.`);
     // Not for the orchestrator: its launch prompts legitimately name `.claude/agents/…`.
     if (role && role !== "orchestrator") {
-        const cfg = named(AGENT_CONFIG);
+        // CI workflows are the one entry a manifest can list as review-only; a command that names such a path (`git add
+        // .github/workflows/ci.yml`) is judged on what it resolves to elsewhere, not on this text scan.
+        // Only a listed pattern that itself sits in the workflows directory can vouch for the mention: a broad one (`*.md`)
+        // would let any command that names a markdown file also name a workflow file unseen.
+        const inWorkflows = reviewPathsOf(g.manifest).filter((p) => toPosix(p).replace(/^\.?\/+/, "").toLowerCase().startsWith(REVIEWABLE_CONFIG.slice(0, -1)));
+        const cfg = named(AGENT_CONFIG.filter((c) => c !== REVIEWABLE_CONFIG)) ?? (named([REVIEWABLE_CONFIG]) && !(inWorkflows.length && named(inWorkflows)) ? REVIEWABLE_CONFIG : null);
         if (cfg)
             return block("agent-config", `mutating ${what} references agent/CI configuration (${cfg}). Escalate to a human.`);
     }

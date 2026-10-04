@@ -10,6 +10,29 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-flow-runtime/bin/agent-flow.js\" brief --event SessionStart",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.agent-flow-runtime/bin/agent-flow.js\" brief --event SubagentStart",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }

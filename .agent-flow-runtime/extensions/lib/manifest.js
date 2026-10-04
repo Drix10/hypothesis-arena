@@ -15,6 +15,8 @@ import { validatePolicy } from "./policy.js";
 export const MANIFEST_FILE = "CONTEXT_MANIFEST.json";
 export const DEFAULT_STALENESS_DAYS = 30;
 export const DEFAULT_MAX_REVIEW_ROUNDS = 2;
+export const LEAN_LEVELS = ["off", "lite", "full"];
+export const DEFAULT_LEAN = "lite";
 export function manifestPathFor(root, manifestPath) {
     // The CLI passes `--manifest` straight through; a bare flag arrives as `true`.
     // Fail here with a sentence, not deep inside path.isAbsolute with a TypeError.
@@ -102,6 +104,17 @@ export function validateManifest(m) {
                     problems.push(`protected_paths[${i}] is an unfilled template placeholder: ${p}`);
             });
     }
+    if (man.review_paths !== undefined) {
+        if (!Array.isArray(man.review_paths))
+            problems.push("review_paths must be an array of strings — ignored");
+        else
+            man.review_paths.forEach((p, i) => {
+                if (typeof p !== "string" || !p)
+                    problems.push(`review_paths[${i}] must be a non-empty string`);
+                else if (PLACEHOLDER.test(p))
+                    problems.push(`review_paths[${i}] is an unfilled template placeholder: ${p}`);
+            });
+    }
     if (man.risk_boundaries !== undefined) {
         if (!Array.isArray(man.risk_boundaries))
             problems.push("risk_boundaries must be an array");
@@ -177,6 +190,12 @@ export function validateManifest(m) {
                     problems.push(`pipeline.harness_by_role.${role} must be one of claude, codex, gemini, pi`);
             }
     }
+    const lean = man.pipeline?.lean;
+    if (lean !== undefined && !LEAN_LEVELS.includes(lean))
+        problems.push(`pipeline.lean must be one of ${LEAN_LEVELS.join(", ")} (default ${DEFAULT_LEAN}), got ${JSON.stringify(lean)}`);
+    const isolate = man.pipeline?.isolate_roles;
+    if (isolate !== undefined && typeof isolate !== "boolean")
+        problems.push("pipeline.isolate_roles must be true or false");
     const stopBlocks = man.pipeline?.max_stop_blocks;
     if (stopBlocks !== undefined && (!Number.isInteger(stopBlocks) || stopBlocks < 1 || stopBlocks > 5)) {
         problems.push("pipeline.max_stop_blocks must be an integer 1–5");
@@ -247,6 +266,15 @@ export function protectedPathsOf(man) {
         return [];
     return p.filter((x) => typeof x === "string" && x.length > 0);
 }
+/** review_paths as a clean string array: a string is one pattern, junk entries are dropped. */
+export function reviewPathsOf(man) {
+    const p = man?.review_paths;
+    if (typeof p === "string")
+        return p.trim() ? [p] : [];
+    if (!Array.isArray(p))
+        return [];
+    return p.filter((x) => typeof x === "string" && x.length > 0);
+}
 /** Load the manifest if present; never throws. Used by the classifier and state machine. */
 export function tryLoadManifest(root) {
     const r = loadManifest(root);
@@ -260,6 +288,14 @@ export function loadManifestForGuard(root) {
     const r = loadManifest(root);
     const head = committedManifest(root);
     const base = defaultBranchManifest(root);
+    // What agents may edit without a stop is read from the committed copy (the default branch's, else HEAD's) only: an edit
+    // in the working copy, which an agent may be making, must not widen it. With nothing committed anywhere, the disk copy counts.
+    const review = reviewPathsOf(base ?? head ?? (r.ok ? r.value.manifest : null));
+    const fin = (m) => ({ ...m, review_paths: review });
+    const inner = loadManifestForGuardInner(r, head, base);
+    return inner.manifest ? { ...inner, manifest: fin(inner.manifest) } : inner;
+}
+function loadManifestForGuardInner(r, head, base) {
     if (r.ok) {
         // Protection committed to HEAD outlives an uncommitted edit: emptying protected_paths on disk
         // (a Write, an `rm`, a `git checkout` of an older copy) must not switch it off.
@@ -286,10 +322,11 @@ export function loadManifestForGuard(root) {
  * Manifest keys that decide what the orchestrator RUNS or how strictly a change is judged. An agent that can
  * edit the working copy must not be able to change them for the session that is judging its own work:
  * `gates` are commands the orchestrator executes outside the guard, and loosening `policy`, `secret_scan`
- * or `pipeline` lowers the bar. They take effect once merged to the default branch (or committed at HEAD
+ * or `pipeline` lowers the bar; `review_paths` lists what agents may edit without a stop, so widening it is
+ * the same act. They take effect once merged to the default branch (or committed at HEAD
  * when the repository has no default-branch copy).
  */
-const FLOORED_KEYS = ["gates", "policy", "secret_scan", "pipeline"];
+const FLOORED_KEYS = ["gates", "policy", "secret_scan", "pipeline", "review_paths"];
 /** Set to 1 by a human who is editing gates/policy locally and wants the working copy to count right now. */
 export const TRUST_WORKING_MANIFEST_ENV = "AGENT_FLOW_TRUST_WORKING_MANIFEST";
 /**
@@ -467,6 +504,11 @@ export function secretIgnorePaths(man) {
 export function maxReviewRounds(man) {
     const r = man?.pipeline?.max_review_rounds;
     return Number.isInteger(r) && r >= 1 && r <= 5 ? r : DEFAULT_MAX_REVIEW_ROUNDS;
+}
+/** `pipeline.lean`, or the default when unset or not a known level. */
+export function leanLevel(man) {
+    const l = man?.pipeline?.lean;
+    return LEAN_LEVELS.includes(l) ? l : DEFAULT_LEAN;
 }
 /** The per-issue cost cap in USD, or undefined when none is set. */
 export function maxCostUsd(man) {

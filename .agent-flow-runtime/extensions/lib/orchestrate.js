@@ -246,8 +246,9 @@ export function findingsFor(dir, r) {
  * deny-list names only Bash would still have a shell. The guard hook judges PowerShell writes like Bash ones.
  */
 /** `dirs` are the issue folder and the worktree. A role that `cd`s into its worktree would otherwise lose permission to read the issue and packet in it (Claude Code scopes tool access to its working directory). */
+/** `isolate`: only the project's and the local checkout's Claude Code settings apply, so a plugin or hook installed globally on this machine can't add context to a role. */
 export function claudeArgs(role, p) {
-    const base = ["claude", "-p", ...(p.model ? ["--model", p.model] : []), ...(p.dirs?.length ? ["--add-dir", ...p.dirs] : [])];
+    const base = ["claude", "-p", ...(p.model ? ["--model", p.model] : []), ...(p.isolate ? ["--setting-sources", "project,local"] : []), ...(p.dirs?.length ? ["--add-dir", ...p.dirs] : [])];
     if (role === "implementer")
         return [...base, "--permission-mode", "acceptEdits", "--allowedTools", "Bash,PowerShell,Skill", "--output-format", "json", p.prompt];
     if (role === "reviewer")
@@ -330,9 +331,10 @@ export async function runIssue(i) {
     mkdirSync(A, { recursive: true });
     let round = 0;
     let risk;
+    let humanReview = false;
     const done = (o) => {
         const c = issueCost(root, N);
-        return { issue: N, round, artifacts: A, branch, worktree: WT, risk, cost_usd: c.total, unreported_runs: c.unreported_runs, ...o };
+        return { issue: N, round, artifacts: A, branch, worktree: WT, risk, ...(humanReview ? { human_review: true } : {}), cost_usd: c.total, unreported_runs: c.unreported_runs, ...o };
     };
     const afJson = (args) => {
         const r = af([...args, "--json"]);
@@ -407,6 +409,10 @@ export async function runIssue(i) {
             writeFileSync(join(A, "from-github"), "1\n");
         const FAST = cfg("pipeline.models.fast");
         const HIGH = cfg("pipeline.models.high_reasoning");
+        const leanSetting = cfg("pipeline.lean");
+        const LEAN = leanSetting === "off" || leanSetting === "lite" || leanSetting === "full" ? leanSetting : "lite";
+        const ISOLATE = cfg("pipeline.isolate_roles") === "true";
+        let shortcuts = [];
         const gatesDefined = (afJson(["gates", "list"]).gates ?? []).length > 0;
         let findings = R > 1 ? findingsFor(A, R - 1) : "none";
         /**
@@ -435,6 +441,7 @@ export async function runIssue(i) {
                 updatePhase("implement", R);
             // 1b. Implementer
             const impl = await runRole("implementer", R, { findings, model: R === LIMIT && HIGH ? HIGH : FAST, announce: `${roundTag}: implementing` });
+            shortcuts = Array.isArray(impl.shortcuts) ? impl.shortcuts : [];
             if (impl.status === "needs_me") {
                 escalate(String(impl.category ?? "IMPL_ERROR"), `${impl.what_failed ?? "the Implementer stopped"}. Decide: ${impl.suggested_next_step ?? "how to proceed"}`);
             }
@@ -453,6 +460,7 @@ export async function runIssue(i) {
             const diff = sh("git", ["-C", WT, "diff", `${cls.base ?? BASE}...HEAD`], root);
             writeFileSync(join(A, "diff.patch"), diff.stdout);
             risk = cls.risk_level;
+            humanReview = !!cls.human_approval_required;
             log({ kind: "info", text: `risk ${cls.risk_level}, ${(cls.files ?? []).length} file(s) changed` });
             if (!(cls.files ?? []).length) {
                 escalate("no_changes", `the Implementer reported ready_for_review, but the branch has no changes against ${cls.base ?? BASE}. Decide: whether this task needs no change, or restate it with clearer criteria.`);
@@ -460,8 +468,11 @@ export async function runIssue(i) {
             if ((cls.protected_violations ?? []).length) {
                 escalate("protected_path", `protected path modified: ${cls.protected_violations.join(", ")}. Decide: whether a human makes this change.`);
             }
-            if ((cls.policy_violations ?? []).length) {
-                const msgs = cls.policy_violations.map((v) => v.message ?? String(v));
+            // A review-only path (CI workflow, test list) changed by more than harmless added lines is the Implementer's to redo,
+            // like a policy rule: it can add a line instead of editing one, or escalate as `protected_path` if the task truly needs the edit.
+            const reviewMsgs = (cls.review_violations ?? []).map((v) => `${v.file}: ${v.why}`);
+            if ((cls.policy_violations ?? []).length || reviewMsgs.length) {
+                const msgs = [...(cls.policy_violations ?? []).map((v) => v.message ?? String(v)), ...reviewMsgs];
                 log({ kind: "warn", text: `policy: ${msgs.join("; ")}` });
                 writeFileSync(join(A, `policy-r${R}.json`), `${JSON.stringify({ policy_violations: msgs }, null, 2)}\n`);
                 findings = join(A, `policy-r${R}.json`);
@@ -580,14 +591,14 @@ export async function runIssue(i) {
                 commands = `listed, one per line separated by ";", in ${join(A, "commands.txt")}`;
             }
             const prompts = {
-                implementer: `Use the implementer skill. Round ${rr}. Issue: ${A}/issue.md. Worktree: ${WT} (cd into it first). Findings to address: ${o.findings ?? "none"}`,
-                reviewer: `Round ${rr} of ${o.limit}. Read .claude/skills/reviewer/SKILL.md and follow it. Packet: ${A}/ (issue.md, diff.patch, classification.json, implementer-r${rr}.json, and review-r${rr - 1}.json if it exists). Worktree for reading context: ${WT}`,
+                implementer: `Use the implementer skill. Round ${rr}. Issue: ${A}/issue.md. Worktree: ${WT} (cd into it first). Findings to address: ${o.findings ?? "none"}. Lean level: ${LEAN}.`,
+                reviewer: `Round ${rr} of ${o.limit}. Read .claude/skills/reviewer/SKILL.md and follow it. Packet: ${A}/ (issue.md, diff.patch, classification.json, implementer-r${rr}.json, and review-r${rr - 1}.json if it exists). Worktree for reading context: ${WT}. Lean level: ${LEAN}.`,
                 qa: `Use the qa skill. Issue ${N}. Worktree: ${WT} (cd into it first). Commands: ${commands}`,
             };
             const env = { AGENT_FLOW_ROLE: role };
             if (role === "implementer")
                 env.AGENT_FLOW_WORKTREE = WT;
-            let argv = claudeArgs(role, { prompt: prompts[role], model: o.model, dirs: [A, WT] });
+            let argv = claudeArgs(role, { prompt: prompts[role], model: o.model, dirs: [A, WT], isolate: ISOLATE });
             let waits = 0;
             for (let attempt = 0; attempt < 2; attempt++) {
                 const res = await i.spawner({ argv, env, cwd: root, base: stem, timeoutSec: i.timeoutSec });
@@ -651,7 +662,9 @@ export async function runIssue(i) {
                 i.fromGitHub || existsSync(join(A, "from-github")) ? `Closes #${N}` : `Agent-flow run #${N}`,
                 "",
                 `**Risk:** ${cls.risk_level} (${(cls.reasons ?? []).slice(0, 5).join("; ")})`,
-                `**Review:** ${rev.status}: ${rev.summary ?? ""}`,
+                ...((cls.review_required ?? []).length ? [`**Needs your review:** this change adds to ${cls.review_required.map((f) => `\`${f}\``).join(", ")} (review-only: CI and test configuration). The agent only added lines; check that each new check is the one you want.`] : []),
+                `**Review:** ${rev.status}: ${rev.summary ?? ""}${typeof rev.net_lines_removable === "number" && rev.net_lines_removable > 0 ? ` (${rev.net_lines_removable} line(s) could still be cut)` : ""}`,
+                ...(shortcuts.length ? ["", "**Deferred shortcuts** (each is marked `lean:` in the code; `agent-flow debt` lists them):", ...shortcuts.map((x) => `- ${x.where}: ${x.ceiling}; upgrade when ${x.upgrade}`)] : []),
                 `**QA:** ${qa.status}${flaky.length ? ` (flaky: ${flaky.map((x) => x.test ?? x.name ?? JSON.stringify(x)).join(", ")})` : ""}`,
                 ...(stale.length ? ["", "**Context may be stale:**", ...stale.map((s) => `- ${s.file}: ${s.claim} → ${s.reality}`)] : []),
                 ...(auditHead ? ["", `<sub>audit head: \`${auditHead}\` (anchor for \`agent-flow audit verify --anchor <hash>\`)</sub>`] : []),
@@ -675,17 +688,21 @@ export async function runIssue(i) {
                 const title = `${readFileSync(join(A, "title.txt"), "utf-8").split("\n")[0]} (#${N})`;
                 // classify may name the base as `origin/main`; a pull request needs the branch name.
                 const prBase = (cls.base ?? BASE).replace(/^origin\//, "");
-                const created = sh("gh", ["pr", "create", "--base", prBase, "--head", branch, "--title", title, "--body-file", join(A, "pr.md"), ...(cls.risk_level === "critical" ? ["--draft"] : [])], root);
+                const created = sh("gh", ["pr", "create", "--base", prBase, "--head", branch, "--title", title, "--body-file", join(A, "pr.md"), ...(cls.risk_level === "critical" || cls.human_approval_required ? ["--draft"] : [])], root);
                 if (created.status !== 0)
                     escalate("push_failed", `could not open the pull request: ${(created.stderr || created.stdout).trim().slice(0, 300)}`);
                 url = created.stdout.trim().split("\n").pop() ?? "";
             }
             log({ kind: "info", text: `pull request: ${url}` });
             if (cls.human_approval_required) {
-                const saved = af(["state", "update", "--issue", String(N), "--state", "Needs Me", "--reason", `critical_change_needs_human: critical change, human review required on ${url}`]);
+                // Critical changes and edits to review-only paths wait for a person at the pull request; the work itself is finished.
+                const critical = cls.risk_level === "critical";
+                const category = critical ? "critical_change_needs_human" : "review_required";
+                const reason = critical ? `critical_change_needs_human: critical change, human review required on ${url}` : `review_required: this change adds to ${(cls.review_required ?? []).join(", ")} (CI/test configuration); read the diff and merge ${url}`;
+                const saved = af(["state", "update", "--issue", String(N), "--state", "Needs Me", "--reason", reason]);
                 if (saved.status !== 0)
-                    throw new Stop(done({ status: "error", reason: `critical PR opened at ${url}, but its human-review state could not be saved: ${(saved.stderr || saved.stdout).trim().slice(0, 300)}`, pr: url }));
-                return done({ status: "needs_me", category: "critical_change_needs_human", reason: `critical_change_needs_human: critical change, human review required on ${url}`, pr: url });
+                    throw new Stop(done({ status: "error", reason: `${critical ? "critical " : ""}PR opened at ${url}, but its human-review state could not be saved: ${(saved.stderr || saved.stdout).trim().slice(0, 300)}`, pr: url }));
+                return done({ status: "needs_me", category, reason, pr: url });
             }
             const c = af(["state", "update", "--issue", String(N), "--state", "Completed", "--reason", `PR ${url}`, "--json"]);
             if (c.status === 3) {
@@ -694,7 +711,7 @@ export async function runIssue(i) {
             }
             if (c.status !== 0)
                 throw new Stop(done({ status: "error", reason: `PR opened at ${url}, but completion could not be recorded: ${(c.stderr || c.stdout).trim().slice(0, 300)}`, pr: url }));
-            if (i.autoMerge === true && cfg("pipeline.auto_merge_low_risk") === "true" && cls.risk_level === "low" && qa.status !== "failed") {
+            if (i.autoMerge === true && cfg("pipeline.auto_merge_low_risk") === "true" && cls.risk_level === "low" && !cls.human_approval_required && qa.status !== "failed") {
                 const m = sh("gh", ["pr", "merge", url, "--auto", "--squash"], root);
                 log({ kind: m.status === 0 ? "info" : "warn", text: m.status === 0 ? "auto-merge enabled (waits for CI)" : `auto-merge not enabled: ${(m.stderr || m.stdout).trim().slice(0, 200)}` });
             }

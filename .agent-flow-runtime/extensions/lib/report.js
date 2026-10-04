@@ -110,12 +110,18 @@ export function dropNullOptionals(value, schema) {
     return out;
 }
 /** Last top-level `{…}` in free text, respecting strings. */
-function lastJsonObject(text) {
+function lastJsonObject(input) {
+    // The report is the last thing a role prints. A role's output is untrusted and can be huge, or open braces it never
+    // closes: every `{` rescans to the end, which is quadratic. Look only at the tail, and stop after a fixed amount of work.
+    const text = input.length > 2_000_000 ? input.slice(-2_000_000) : input;
+    let budget = 20_000_000;
     let found;
-    for (let start = text.indexOf("{"); start !== -1; start = text.indexOf("{", start + 1)) {
+    for (let start = text.indexOf("{"); start !== -1 && budget > 0; start = text.indexOf("{", start + 1)) {
         let depth = 0;
         let inStr = false;
         for (let i = start; i < text.length; i++) {
+            if (--budget <= 0)
+                break;
             const ch = text[i];
             if (inStr) {
                 if (ch === "\\")
