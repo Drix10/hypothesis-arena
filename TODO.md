@@ -94,8 +94,9 @@ Open:
 - [ ] **ETF Trend test** (`etf_trend`): prereg (`seen-window`) and backtest gate.
 - [ ] **EDGAR corpus:** 10-K, 10-Q and 8-K full text with manifests, a section
       parser, a point-in-time CIK, ticker and former-name map, XBRL shares
-      outstanding, a 13F holdings parser and Ken French factors. The financial
-      statement sets and the Form 4 reader exist.
+      outstanding and a 13F holdings parser. The financial statement sets, the
+      Form 4 reader and the Ken French factors (`research/sources/french_factors.py`)
+      exist.
   - [ ] A last-trading-day source for delisted firms (the coverage probe leaves
         11% of eligible firms with an unverified end), so delisting returns
         (`plan/math.md`, Point-in-time discipline) rest on a dated event.
