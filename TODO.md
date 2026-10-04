@@ -79,6 +79,15 @@ Facts an agent or a session asserted that nobody has checked.
 - `filing_sections` (the last heading at a line start wins) and `form13f` have
   only seen fixtures; the 200-filing precision audit and one live information
   table are the check.
+- `edgar_filings` lists only `filings.recent` of a submissions JSON, so filings in
+  the SEC's older-history files are missed (the window starts in 2007); it also
+  requires a `Content-Length` header, which a live response may not carry. Both
+  need one live fetch to settle. `end_events` already reads the older-file shape.
+- `ticker_observations.former_name_observations` takes the first 8-K on or after
+  a name change as `known_at`, a conservative heuristic, not a dated fact.
+- Modules under `research/sources/` import each other as `sources.x` in their
+  tests, while `research/strategy/` uses `research.strategy.x`; one module can be
+  loaded twice under two names. `universe.py` (wave 4) is told to settle which.
 - The coverage probe's 11% unverified end is a bar-data statement, not a
   confirmed delisting rate.
 
