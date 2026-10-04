@@ -63,8 +63,13 @@ cleanup.
       stopping; keep the kernel risk, exec, broker and kill paths, the stage
       files and the manifest protected.
 - [ ] Push `main` when ready: all work since `789851f` is local only.
-- [ ] Review each pre-registration an agent drafts before it is registered in the
-      trial ledger (`plan/validation.md`).
+- [ ] Answer the `open_questions` in each draft pre-registration under
+      `research/prereg/` (ETF list, evaluation length, split count and the like),
+      then approve it in chat. Nothing is registered in the trial ledger or run
+      before that (`plan/validation.md`).
+- [ ] One live check, run from a normal shell: fetch one Ken French zip and one
+      real 10-K through `french_factors.fetch` and `edgar_filings`, and look at
+      units, headers and the section parser's output (see Unverified claims).
 
 ## Unverified claims
 
