@@ -11,6 +11,8 @@ import zipfile
 from collections import defaultdict
 
 ROUTINE_YEARS = 3
+SESSION_OPEN = datetime.time(9, 30)
+FILING_DAY_END = datetime.time(23, 59)
 SYMBOL_RE = re.compile(r"^[A-Z]{1,5}(?:[.-][A-Z])?$")
 csv.field_size_limit(1 << 24)
 
@@ -76,30 +78,64 @@ def is_routine(history, year, month):
     return all((year - k, month) in history for k in range(1, ROUTINE_YEARS + 1))
 
 
+def has_history(first, day):
+    """At least ROUTINE_YEARS of loaded history before `day`."""
+    try:
+        return first <= day.replace(year=day.year - ROUTINE_YEARS)
+    except ValueError:      # Feb 29 minus whole years
+        return first <= day.replace(year=day.year - ROUTINE_YEARS, day=28)
+
+
+def entry_open(filing_date):
+    """Open of the second weekday session after the filing day. The quarterly
+    sets carry no acceptance time, so the filing is taken as accepted at the
+    end of its day and a score is usable from the second session.
+    lean: weekdays only, no exchange holiday calendar; swap in the session
+    calendar when the composite builder needs exact fills."""
+    d, n = filing_date, 0
+    while n < 2:
+        d += datetime.timedelta(days=1)
+        n += d.weekday() < 5
+    return datetime.datetime.combine(d, SESSION_OPEN)
+
+
 def build_events(rows):
-    """Opportunistic officer/director purchases, aggregated per issuer per
-    filing date: dicts of date, symbol, cik, value, n_insiders, sorted by date."""
+    """Officer/director purchases that are not routine, aggregated per issuer
+    per filing date: dicts of date, symbol, cik, value, n_insiders,
+    opportunistic, accepted, entry, sorted by date. `opportunistic` is true
+    only when a contributing insider has at least ROUTINE_YEARS of loaded
+    history and no calendar-month habit; shorter history is unclassified and
+    never flagged."""
     hist = defaultdict(set)
+    first = {}
     for r in rows:
-        hist[(r["cik"], r["owner"])].add((r["trans_date"].year,
-                                          r["trans_date"].month))
+        k = (r["cik"], r["owner"])
+        hist[k].add((r["trans_date"].year, r["trans_date"].month))
+        first[k] = min(first.get(k, r["trans_date"]), r["trans_date"])
     agg = {}
     for r in rows:
         if r["code"] != "P" or not r["officer_or_director"]:
             continue
         td = r["trans_date"]
-        if is_routine(hist[(r["cik"], r["owner"])], td.year, td.month):
+        key = (r["cik"], r["owner"])
+        if is_routine(hist[key], td.year, td.month):
             continue
         if r["filing_date"] < td:
             continue
         k = (r["filing_date"], r["cik"], r["symbol"])
         e = agg.setdefault(k, {"date": r["filing_date"].isoformat(),
                                "cik": r["cik"], "symbol": r["symbol"],
-                               "value": 0.0, "owners": set()})
+                               "value": 0.0, "owners": set(),
+                               "opportunistic": False})
+        e["opportunistic"] |= has_history(first[key], td)
         e["value"] += r["shares"] * r["price"]
         e["owners"].add(r["owner"])
     out = []
     for e in agg.values():
         e["n_insiders"] = len(e.pop("owners"))
+        fd = datetime.date.fromisoformat(e["date"])
+        e["accepted"] = datetime.datetime.combine(
+            fd, FILING_DAY_END).isoformat(timespec="minutes")
+        e["entry"] = entry_open(fd).isoformat(timespec="minutes")
         out.append(e)
     return sorted(out, key=lambda e: (e["date"], e["symbol"]))
