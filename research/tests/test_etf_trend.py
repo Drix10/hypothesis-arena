@@ -102,11 +102,16 @@ class ExposureScaleTest(unittest.TestCase):
         return E.exposure_scale(prices, date, prev, "VTI")
 
     def test_continuous_around_trend_threshold(self):
+        # 252 * drift spans about -2.5% to +2.5% excess, inside TREND_BAND;
+        # swing 0.002 keeps volatility under target so trend alone moves s.
         vals = [self.scale(self.prices(series(d, 0.002)))
-                for d in (0.0003, 0.0004, 0.0005, 0.0006)]
-        self.assertEqual(vals, sorted(vals))
+                for d in (-0.0001, -0.00005, 0.0, 0.00005, 0.0001)]
+        for v in vals:
+            self.assertTrue(E.SCALE_FLOOR < v < E.SCALE_CEILING, vals)
         for a, b in zip(vals, vals[1:]):
-            self.assertLess(b - a, 0.2)
+            self.assertGreater(b, a)
+            self.assertLess(b - a, 0.15)
+        self.assertAlmostEqual(vals[2], 0.5, delta=0.02)
 
     def test_bounds_and_volatility_cut(self):
         calm = self.scale(self.prices(series(0.002, 0.001)))
