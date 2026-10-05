@@ -44,10 +44,10 @@ edge by measuring it, not by assuming it.
 1. **The engine** (`engine.md`): a point-in-time link graph of US-listed
    firms built from SEC filings, text similarity, news co-mentions and
    common ownership, plus a stream of dated events.
-2. **Strategies** (`strategies.md`): deterministic strategies that trade
-   propagation along the graph, and one where a language model reasons about
-   a specific event and proposes the linked trade, checked by an independent
-   verifier and executed by fixed rules.
+2. **The strategy** (`strategies.md`): `connected_drift`, a deterministic
+   long-short book that blends propagation along the graph, section-level
+   Filing Change and opportunistic insider buys, scaled by the ETF Trend
+   state. Model ripple reasoning is parked.
 3. **The kernel** (`kernel.md`, `risk.md`, `execution.md`): a C++ program
    that owns every order, every limit and every exit.
 4. **Validation** (`validation.md`): pre-registration, a trial ledger,
@@ -136,8 +136,8 @@ reliable exits, not alpha.
 
 | Layer | Job | Technology |
 |---|---|---|
-| Engine | link graph, events, ripple hypotheses, verification | Python: deterministic parsers, reader-tier model, verifier |
-| Strategy engine | turn graph signals and verified hypotheses into candidates with entry, stop and exit bound | deterministic Python |
+| Engine | link graph and its signals; events and ripple hypotheses are parked | Python: deterministic parsers |
+| Strategy engine | turn graph signals into candidates with entry, stop and exit bound | deterministic Python |
 | Kernel | snapshot, risk, sizing, execution | C++ |
 | Stage chain, kill switches, spend | permit or forbid, never expand | signed stage files, C++ constants, a human signature |
 | Validation and promotion | score, gate, judge | offline harness and a human sign-off |
@@ -173,9 +173,9 @@ see equity or PnL. OS permissions enforce the boundary (`engine.md`).
   gate (`validation.md`): net-of-cost Sharpe with a lower confidence bound
   above zero, positive spanning alpha against the reference book, beats cash,
   survives 2× costs, adjusted for the number of trials.
-- **Model value:** the model-driven strategy beats its rule-based twin on the
+- **Model value:** any model-driven strategy beats its rule-based twin on the
   same events, net of model cost, on post-cutoff data, or the model layer is
-  removed.
+  removed. None runs before the review.
 - **Transferability:** every paper number was produced under the target
   constraint set with its account ledger simulated.
 - **Determinism:** the same logged context replayed gives the same decision,
@@ -193,7 +193,7 @@ see equity or PnL. OS permissions enforce the boundary (`engine.md`).
 
 - Hot path in C++. Engine, research and strategy code in Python.
 - The edge hypothesis is linked-firm information diffusion over days to
-  months, tested strategy by strategy.
+  months, tested through one strategy, `connected_drift`, and its components.
 - Live instruments are US-listed equities and ETFs under the stage's
   constraint set. No crypto, forex or derivatives.
 - Venue is Alpaca.
@@ -202,7 +202,6 @@ see equity or PnL. OS permissions enforce the boundary (`engine.md`).
 - Four stages (paper, tiny, scaled, full), human-signed, never auto-promoted;
   demotion is automatic and unvetoable. Promotion needs 30 clean paper days, a
   passed strategy gate and a signature.
-- Pipeline: engine features, or verified ripple hypotheses for Event Ripple,
-  go to a deterministic strategy, which writes a candidate; the kernel risk
-  engine sizes it; the runner executes it.
+- Pipeline: engine features go to the deterministic strategy, which writes a
+  candidate; the kernel risk engine sizes it; the runner executes it.
 - Not high-frequency trading.

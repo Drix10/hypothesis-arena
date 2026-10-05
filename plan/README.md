@@ -5,9 +5,9 @@ One folder holds the whole plan. If it is not in here, we do not build it.
 The fund trades the slow spread of public information between linked firms. An
 event at one company moves its suppliers, customers, peers and co-mentioned
 firms over days to months, and the market prices those links late. An engine
-builds the link graph from primary documents and global news, finds the
-ripples and proposes trades; deterministic code sizes, risks, executes and
-exits them. Speed is not the edge; reading and connecting is.
+builds the link graph from primary documents and global news; one strategy,
+`connected_drift`, turns the graph signals into trades; deterministic code sizes,
+risks, executes and exits them. Speed is not the edge; reading and connecting is.
 
 ## Files
 
@@ -15,9 +15,10 @@ Read in this order.
 
 1. `vision.md`: thesis, operator path, constraint sets, venue, what we do not
    build.
-2. `strategies.md`: the four strategies, controls and portfolio construction.
-3. `engine.md`: the link graph, event pipeline, ripple reasoning, isolation,
-   feature contract and research factory.
+2. `strategies.md`: the one strategy, `connected_drift`, its controls and portfolio
+   construction.
+3. `engine.md`: the link graph, isolation and feature contract; the event
+   pipeline, ripple reasoning and research factory are parked.
 4. `data.md`: every source, ranked and licensed, with failure defaults; free and
    paid data.
 5. `math.md`: the quantitative models behind the engine and strategies.

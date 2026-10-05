@@ -7,6 +7,11 @@ trading tree. A separate offline research factory proposes and tests new
 hypotheses. Neither can size, send, amend or cancel an order, and no model
 output can relax a risk rule.
 
+`connected_drift` (`strategies.md`) uses the link graph and the deterministic
+extractor. The event pipeline, ripple reasoning (router, retrieval, brain,
+verifier) and the research factory are parked until after the go/no-go review
+(`roadmap.md`); their rules stay in force for when they are built.
+
 ```
 sources (data.md) -> harvest -> parse / extract -> resolve entities
                                                       |
@@ -73,6 +78,11 @@ valid_from | valid_to | known_at | evidence_ids | extractor | contamination_clas
 
 Weights and normalization are in `math.md`.
 
+The strategy's core edges are (a) `supply_chain` customer and supplier links from
+the deterministic extractor, (b) `text_peer` and (d) `ownership`; the `news`
+edge is a selectable variant, and `learned` stays research only. The extractor
+runs after an EDGAR coverage check by year (`data.md`).
+
 **Bounded growth.** Edges are stored as intervals: a new observation that
 leaves an edge's weight bucket unchanged extends `valid_to` instead of
 appending. News co-mentions are aggregated to trailing-window counts per firm
@@ -108,6 +118,9 @@ flat RSS over a 24-hour soak.
 
 ## Event pipeline
 
+Parked: Event Ripple, the only consumer, has weak evidence and part of it is
+model memorization (`roadmap.md`, Parked).
+
 Every event is one dated record (`math.md`, Shocks) with its evidence.
 
 | Event type | Source | Trigger |
@@ -129,6 +142,9 @@ Every event is one dated record (`math.md`, Shocks) with its evidence.
   as `skipped=capacity` and still feed the deterministic twin.
 
 ## Ripple reasoning
+
+Parked: judgment-class output counts only after the model's cutoff, so history
+cannot test it (`roadmap.md`, Parked).
 
 The models in this path read and propose; they hold no tools. Deterministic
 code does retrieval before each call, so every model here is a
@@ -376,6 +392,8 @@ Rules on every record:
   signal.
 
 ## Research factory
+
+Parked until after the go/no-go review (`roadmap.md`, Parked).
 
 Agents propose hypotheses, write the code and backtest it before a human sees
 it; outputs pass the same thresholds as human research.
