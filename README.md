@@ -12,9 +12,10 @@
 </div>
 
 News about one company reaches its suppliers, customers, peers and
-co-mentioned firms late. An engine builds a point-in-time link graph from SEC
-filings, ownership and news, and deterministic code sizes, risks, executes and
-exits the trades. Speed is not the edge; connecting the dots is.
+co-owned firms late, and slow filing and insider information is priced late.
+One strategy, the Connected Drift Book, combines link propagation, filing text
+change and opportunistic insider buys; deterministic code sizes, risks,
+executes and exits the trades. Speed is not the edge; connecting the dots is.
 
 Paper only, no real money. **No strategy has passed a gate yet.** Most will
 not, and the system is built to find that out cheaply.
@@ -54,8 +55,9 @@ same strategy without it. A short paper run proves plumbing, not alpha.
 | C++ kernel, order router, journal, Alpaca paper transport | built and tested; parked |
 | Backtest harness, trial ledger, cost model, statistics | built; shorts and margin ledger next |
 | Collector, research graph, five data adapters | built |
-| Link graph, event pipeline, ripple reasoning | not built |
-| Strategies: ETF Trend, Link Momentum, Filing Change, Event Ripple | none tested yet |
+| Link graph, three strategy components, composite | built on fixtures |
+| Event pipeline, ripple reasoning | parked |
+| Strategy: Connected Drift Book | pre-registration not yet approved, no backtest |
 
 The ordered work list is [`TODO.md`](./TODO.md); the plan is
 [`plan/`](./plan/README.md).

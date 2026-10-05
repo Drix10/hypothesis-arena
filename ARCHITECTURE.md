@@ -1,9 +1,10 @@
 # ARCHITECTURE: codebase guide
 
-An AI-assisted systematic fund that trades the slow spread of news between
-linked firms. An engine builds a point-in-time link graph from SEC filings,
-global news and ownership data, a language model reasons about where events
-ripple, and a deterministic C++ kernel executes. US-listed equities and ETFs,
+An AI-assisted systematic fund built around one strategy, the Connected Drift
+Book: a long-short US equity composite of link propagation, section-level
+filing text change and opportunistic insider buys, scaled by an ETF trend
+state. An engine builds a point-in-time link graph from SEC filings and
+ownership data, and a deterministic C++ kernel executes. US-listed equities and ETFs,
 paper only. The kernel enforces a cash account, long only (the India set);
 research targets a US margin account, long and short (the US set). No crypto.
 
@@ -142,8 +143,9 @@ engine trades.
 - `schema.py`: feature constants and builders (validity owned by
   `collector/ctx_read.py`).
 
-The link graph (`plan/engine.md`) has its store and two deterministic edge
-builders; the event pipeline, router, brain and verifier are not built yet.
+The link graph (`plan/engine.md`) has its store and three deterministic edge
+builders. The event pipeline, router, brain and verifier are parked
+(`plan/roadmap.md`, Parked).
 
 - `link_store.py`: the bitemporal, append-only, hash-chained edge store.
   `LinkStore.add`, `supersede` and `retire` append; `edges(as_of_valid,
@@ -155,6 +157,11 @@ builders; the event pipeline, router, brain and verifier are not built yet.
 - `ownership_edges.py`: `ownership_edges` turns 13F rows (from
   `sources/form13f`) into `common_owner` edges by holdings overlap, comparing
   only issuer pairs that share a filer.
+- `customer_edges.py`: `coverage` reports per fiscal year the share of 10-Ks that
+  disclose a customer; `edges` extracts customer and supplier edges with
+  deterministic patterns, resolves names through `sources/ticker_map` and an
+  alias table (an unresolved or ambiguous name gives no edge) and ages an edge
+  out 18 months after its latest filing; `precision` scores a labeled set.
 
 ### sources/
 
@@ -196,14 +203,21 @@ loaded twice.
   (`run_backtest`: validates a prereg, opens the ledger trial before any
   result, runs the holdout at 1x and 2x cost, applies the gate and closes the
   trial; bars are passed in, with SPY and IEF required for the 60/40 benchmark).
-- Strategies: `etf_trend` (the ETF Trend signal as a `target_fn`).
+- Strategy components: `etf_trend` (the trend signal as a `target_fn` and
+  `exposure_scale`, the continuous rate-capped gross multiplier), `text_change`
+  (Item 1A and MD&A similarity to the prior-year filing, with litigation and
+  CEO/CFO sub-scores) and `composite` (winsorized, residualized z-scores of the
+  link, filing and insider components, the equal-weight composite, the
+  agreement gate, the short vetoes, `target` for the backtest runner, and
+  `component_correlation` with `effective_signal_count`).
 - Backtest data: `bar_loader` (verified on-disk SIP datasets into
   `prices[sym][date] = (open, close)`; `benchmark_symbols` adds SPY and IEF).
 - Market data: `sip_fetch` (SIP datasets with manifests; `load_alpaca_env`) and
   `bulk_bars` (throttled many-symbol fetch).
-- Event data for the engine: `form4` (insider filings), `earnings_surprise` (SUE
-  from SEC statements), `sec_financial_statements` (SEC financial-statement
-  data sets).
+- Event data: `form4` (insider filings, the routine-trade classifier and the
+  opportunistic flag with entry times), `earnings_surprise` (its SUE code is
+  unused; `read_symbols` feeds the coverage probe) and
+  `sec_financial_statements` (SEC financial-statement data sets).
 - Candidates: `candidate_wire` (the writer for `candidates.jsonl`) and
   `passive_core` (the 60/40 passive core).
 
@@ -215,8 +229,9 @@ checkpoint), `reports/` (backtest gate reports), `lessons/lessons.jsonl` and
 answers before it is registered.
 
 Not yet wired: `backtest` has only run on synthetic bars (the chain test); no real
-SIP datasets are on disk for `bar_loader` to read, nothing calls `universe` or the engine edge builders from a runner,
-and no collector feeds the pure `sources/` modules.
+SIP datasets are on disk for `bar_loader` to read, `composite` has run only on
+fixtures, nothing feeds it real filings, 13F rows or Form 4 rows, and no
+collector feeds the pure `sources/` modules.
 `TODO.md` lists the next steps.
 
 ### sandbox/
@@ -235,13 +250,14 @@ sources, each adapter, the harness (`test_stats`, `test_ledger`, `test_gates`,
 `test_costs`, `test_settlement`, `test_portfolio`, `test_prereg`,
 `test_candidate_wire`, `test_passive_core`, `test_tranches`, `test_placebo`,
 `test_universe`, `test_etf_trend`, `test_etf_trend_prereg`, `test_etf_trend_chain`,
+`test_composite`, `test_text_change`,
 `test_link_momentum_prereg`, `test_filing_change_prereg`,
 `test_insider_opportunistic_prereg`, `test_bar_loader`, `test_backtest`), the event data
 modules (`test_form4`, `test_earnings_surprise`, `test_french_factors`,
 `test_ticker_map`, `test_ticker_observations`, `test_shares_outstanding`,
 `test_form13f`, `test_last_trade`, `test_end_events`, `test_filing_sections`,
 `test_edgar_filings`, `test_gdelt_gkg`), the link graph (`test_link_store`, `test_text_peers`,
-`test_ownership_edges`) and the ops tools (`test_forward_ledgers`,
+`test_ownership_edges`, `test_customer_edges`) and the ops tools (`test_forward_ledgers`,
 `test_forward_eval`, `test_forward_register`, `test_alert_relay`,
 `test_deploy_check`). CI job assignment is in `.github/workflows/ci.yml`.
 
@@ -291,7 +307,10 @@ as $0).
 - Built: the kernel through the router and journal, the collector, the engine's
   source seam and research graph, the harness for the India set, the forward
   ledgers.
-- Not built: the link graph, the event pipeline and ripple reasoning; shorts in
-  the harness and the kernel; the netting router; any stage beyond paper.
+- Built on fixtures: the link graph, the three strategy components, the
+  composite and the shorts harness. Not built: collectors that feed them real
+  data, the `connected_drift` backtest, kernel short selling and the netting
+  router. Parked: the event pipeline and ripple reasoning. No stage beyond
+  paper.
 - Credentials in use: OpenRouter, FRED/ALFRED, BEA and Alpaca paper. There is no
   FX venue and no other keys exist.
