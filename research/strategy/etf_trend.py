@@ -1,11 +1,19 @@
 """ETF Trend signal (plan/strategies.md, research/prereg/etf_trend.json): the
 sign of the 12-month return minus the cash leg, inverse-volatility weights
-scaled to a portfolio volatility target. Target for portfolio.run(margin=...)."""
+scaled to a portfolio volatility target. Target for portfolio.run(margin=...).
+exposure_scale turns the same trend state into the gross multiplier of the
+long-short book (plan/math.md, Exposure scaler)."""
 import math
 
 LOOKBACK = 252
 MIN_CLOSES = LOOKBACK + 1
 TRADING_DAYS = 252
+SCALE_FLOOR = 0.0  # math.md: G_t = G * clip(s_t, 0, 1)
+SCALE_CEILING = 1.0
+# Proposed values (strategies.md Open items: form and rate cap are registered
+# with the pre-registration).
+TREND_BAND = 0.05  # excess return over which the trend state moves 0 -> 1
+RATE_CAP = 0.25  # largest |s_t - s_{t-1}| between rebalances
 
 
 class EtfTrendError(ValueError):
@@ -88,3 +96,43 @@ class EtfTrend:
         if gross > self.gross_max:
             scale *= self.gross_max / gross
         return {s: x * scale for s, x in raw.items()}
+
+
+def exposure_scale(prices, date, prev, market, cash="BIL", vol_window=63,
+                   target_vol=0.10):
+    """Gross multiplier in [SCALE_FLOOR, SCALE_CEILING] at rebalance `date`.
+
+    `prices[sym][d] = (open, close)`; only bars dated up to `date` are read.
+    The trend state is the market's 12-month excess return over the cash leg,
+    mapped linearly through 0.5 at zero excess to 0 and 1 at +-TREND_BAND; it
+    is multiplied by min(1, target_vol / trailing realised volatility). The
+    result moves at most RATE_CAP from `prev` (None on the first rebalance).
+    A missing or stale bar, a short history or a bad price returns
+    SCALE_FLOOR immediately: fail closed is not rate limited."""
+    try:
+        m = _closes(prices[market], date)
+        c = _closes(prices[cash], date)
+    except (KeyError, TypeError, ValueError, IndexError):
+        return SCALE_FLOOR
+    if m is None or c is None:
+        return SCALE_FLOOR
+    excess = m[-1] / m[-MIN_CLOSES] - 1.0 - (c[-1] / c[-MIN_CLOSES] - 1.0)
+    trend = min(1.0, max(0.0, 0.5 + excess / (2.0 * TREND_BAND)))
+    vol = _stdev(_returns(m[-vol_window - 1:])) * math.sqrt(TRADING_DAYS)
+    if not vol > 0:
+        return SCALE_FLOOR
+    s = trend * min(1.0, target_vol / vol)
+    if prev is not None:
+        s = min(prev + RATE_CAP, max(prev - RATE_CAP, s))
+    return min(SCALE_CEILING, max(SCALE_FLOOR, s))
+
+
+def _closes(bars, date):
+    """Closes up to `date`, or None when `date` has no bar or history is short."""
+    days = sorted(d for d in bars if d <= date)
+    if len(days) < MIN_CLOSES or days[-1] != date:
+        return None
+    closes = [float(bars[d][1]) for d in days[-MIN_CLOSES:]]
+    if not all(math.isfinite(x) and x > 0 for x in closes):
+        return None
+    return closes
