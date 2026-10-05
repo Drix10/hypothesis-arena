@@ -7,9 +7,11 @@ test output, or a report path).
 
 ## Current state
 
-- Plan: four strategies (ETF Trend, Link Momentum, Filing Change, Event Ripple),
-  two research cards, the engine, the India and US constraint sets. Book size and
-  data tier are stage settings: paper is a $100,000 book on free data.
+- Plan: one strategy, the Connected Drift Book (`connected_drift`): a long-short
+  US equity composite of link propagation, section-level Filing Change and
+  opportunistic insider buys, scaled by the ETF Trend state. Other ideas are
+  parked research cards. Book size and data tier are stage settings: paper is a
+  $100,000 book on free data.
 - Evidence: none. No preregistration, no backtest report, an empty trial ledger.
   No strategy has passed a gate.
 - Harness: trial ledger, cost model with short terms, statistics (walk-forward,
@@ -36,13 +38,13 @@ test output, or a report path).
 
 ## Next, in order
 
-1. Shorts in the harness: every US-set test needs it.
-2. ETF Trend test: the cheapest full pass through the harness.
-3. EDGAR corpus, then the deterministic link graph (text peers, 13F ownership).
-4. Link Momentum filings variant: prereg and backtest gate. This is the test the
-   fund's single-stock thesis stands on; a clear economic failure
-   (`plan/validation.md`, Outcomes) stops new single-stock search.
-5. Everything else only after a deterministic test has shown signal.
+1. Text-change signal, customer and supplier extractor and the opportunistic
+   flag: the three missing components.
+2. Composite builder and the ETF Trend scaler on the US margin ledger.
+3. The `connected_drift` pre-registration; the first output is the component
+   correlation matrix. A clear economic failure (`plan/validation.md`,
+   Outcomes) stops new single-stock search.
+4. Everything parked only after the deterministic test has shown signal.
 
 ## Human queue
 
@@ -50,23 +52,15 @@ Only a human can do these: protected paths, signing, accounts and pushes. An
 agent run never touches them. Signing the paper stage file is under Codebase
 cleanup.
 
-- [ ] Add the new research suites to the research gate in `ci.yml` and to the
-      gates in `CONTEXT_MANIFEST.json` (protected paths): `test_coverage_probe`,
-      `test_tranches`, `test_french_factors`, `test_placebo`, `test_ticker_map`,
-      `test_shares_outstanding`, `test_form13f`, `test_last_trade`,
-      `test_filing_sections`, and every suite the next runs add. The agent-flow
-      QA gate runs only the suites listed there, so the pipeline does not run
-      these until then.
-- [ ] Add the `.gitleaks.toml` allowlist line the CI secrets job needs.
-- [ ] Set `review_paths` in `CONTEXT_MANIFEST.json` (agent-flow 1.2.3) so an agent
-      can add a test line to `ci.yml` as a draft pull request instead of
-      stopping; keep the kernel risk, exec, broker and kill paths, the stage
-      files and the manifest protected.
+- [ ] Add each new suite to the research gate in `ci.yml` and to the gates in
+      `CONTEXT_MANIFEST.json` as the runs land (`review_paths` lets an agent draft
+      the `ci.yml` line as a pull request; the manifest gate line stays yours).
 - [ ] Push `main` when ready: all work since `789851f` is local only.
-- [ ] Answer the `open_questions` in each draft pre-registration under
-      `research/prereg/` (ETF list, evaluation length, split count and the like),
-      then approve it in chat. Nothing is registered in the trial ledger or run
-      before that (`plan/validation.md`).
+- [ ] Approve the proposed values in `plan/roadmap.md` (agreement-gate threshold,
+      3 selectable variants, 63-session embargo, holdout) and answer the
+      `open_questions` of the `connected_drift` pre-registration when it is
+      drafted. Nothing is registered in the trial ledger or run before that
+      (`plan/validation.md`).
 - [ ] One live check, run from a normal shell: fetch one Ken French zip and one
       real 10-K through `french_factors.fetch` and `edgar_filings`, and look at
       units, headers and the section parser's output (see Unverified claims).
@@ -162,13 +156,10 @@ Open:
   - [ ] Verify on Alpaca's docs and the paper account: shorting on paper, the
         `shortable` and `easy_to_borrow` flags, fractional shorts, the paper
         balance setting.
-- [ ] **ETF Trend test** (`etf_trend`): prereg (`seen-window`) and backtest gate.
-      Built: the draft `research/prereg/etf_trend.json`, the signal
-      (`strategy/etf_trend.py`) and the runner (`strategy/backtest.py`), all on
-      synthetic data, the bar loader (`strategy/bar_loader.py`, reads `sip_fetch`
-      datasets and names SPY and IEF for the benchmark) and an end-to-end chain
-      test (`test_etf_trend_chain`). Waits on the operator's answers to the
-      draft's `open_questions` and on real SIP datasets fetched to disk.
+- [ ] **ETF Trend scaler:** the signal (`strategy/etf_trend.py`), the runner
+      (`strategy/backtest.py`) and the bar loader (`strategy/bar_loader.py`) are
+      built on synthetic data. Left: a continuous, rate-capped exposure input to
+      the harness on the US margin ledger, and real SIP datasets on disk.
 - [ ] **EDGAR corpus:** 10-K, 10-Q and 8-K full-text fetch with manifests, and
       the collectors that feed the pure modules below. Built and tested on
       fixtures only: `filing_sections`, `ticker_map`, `shares_outstanding`,
@@ -186,52 +177,37 @@ Open:
       (deterministic, dense); customer and supplier patterns with a precision
       audit (200 labeled filings, at least 0.9), knowing that 10-K disclosure
       covers only large customers.
-- [ ] **Link Momentum test, filings variant** (`link_momentum`): the draft
-      `research/prereg/link_momentum.json` (edges a, b and d, 3-month hold in
-      monthly tranches, 150% gross) waits on the operator's answers; then the
-      backtest gate with edge validation. It cannot run until edge (a), the
-      customer and supplier extractor, exists (Link graph). The free feed gives
-      about ten years, so expect the paid-data trigger for pre-2016 prices.
-- [ ] **Insider opportunistic buys card:** the draft
-      `research/prereg/insider_opportunistic.json` waits on the operator's
-      answers (holding period, sizing, cluster rule); `research/strategy/form4.py`
-      already classifies routine trades. Then the backtest gate.
+- [ ] **Text-change signal:** section-level Item 1A and MD&A similarity
+      (`plan/math.md`, Text change); not built.
+- [ ] **Customer and supplier extractor:** an EDGAR coverage check by year first;
+      if post-2020 coverage collapses, register without edge (a). Not built.
+- [ ] **Opportunistic flag on the Form 4 events:** `strategy/form4.py` classifies
+      routine trades; the flag and entry timestamps are not built.
+- [ ] **Composite builder:** residualization, the equal-weight composite, the
+      agreement gate and the vetoes (`plan/strategies.md`); not built.
+- [ ] **`connected_drift` pre-registration and backtest gate:** the first output
+      is the component correlation matrix and the effective signal count. The
+      four older drafts under `research/prereg/` are replaced by one.
 - [ ] **News co-mentions:** `sources/gdelt_gkg.py` parses GKG 2.1, resolves
       names by exact match and reports the resolution rate, on fixtures only.
       Left: a daily GKG downloader, a legal-name and former-name table, a
       measured resolution rate on real files, news edges into the link store,
-      and the news and intraday variant preregs and backtest gates.
-- [ ] **Filing Change test** (`filing_change`): the draft
-      `research/prereg/filing_change.json` waits on the operator's answers; the
-      text-change signal (`plan/math.md`, Text change) is not built; then the
-      backtest gate.
-- [ ] **Event pipeline** on history; Event Ripple rules (`event_ripple_rules`)
-      prereg and backtest gate.
-- [ ] **Engine reasoning:** router, retrieval, brain, verifier and the
-      `ripple_hypothesis` feature; the Event Ripple prereg; forward shadow on
-      post-cutoff events (needs the reader tier and model pins).
-- [ ] **Link Momentum model variant** (`link_momentum_llm`): precision audit and
-      paired test (needs the reader tier).
-- [ ] **X corroboration test** (`x_corroboration`): official-API adapter, bot
-      filter, corroboration flag, prereg with power analysis; forward on Event
-      Ripple rules candidates (needs the event pipeline and approval of the $50 a
-      month X budget).
+      and the news variant (the third selectable variant, `plan/strategies.md`).
+- Parked (`plan/roadmap.md`, Parked), not built before the review: Event
+  Ripple and its event pipeline, engine reasoning, the Link Momentum model
+  variant and the X corroboration test.
 - [ ] **Go/no-go review:** apply `plan/roadmap.md` and record the decision in the
       approvals log.
 - [ ] **Paid research dataset** (only on the paid-data trigger).
 
 ## Engine plumbing
 
-Starts only for a deterministic test that has shown signal.
+Parked with the model-involved items above; starts only after the deterministic
+test has shown signal.
 
-- [ ] **Reader tier:** capability-free calls, capped JSON, span verifier,
-      anonymization; the research graph gains the reader nodes.
-- [ ] **Model pins:** reader, router, brain and verifier with knowledge cutoffs;
-      a post-cutoff bake-off per role.
-- [ ] **Research factory** (no network in generated code, trial-ledgered, at most
-      3 cards a week).
+- [ ] **Reader tier, model pins, research factory:** see `plan/engine.md`.
 - [ ] **Engine done-boxes:** the remaining items in `plan/engine.md` and
-      `plan/data.md`.
+      `plan/data.md` that the link graph and the research datasets need.
 
 ## Kernel (parked until the go/no-go review; only defects that break the paper loop are fixed)
 
