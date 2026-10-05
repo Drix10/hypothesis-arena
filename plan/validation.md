@@ -146,8 +146,8 @@ within 20 bp). It is extended for the US set (shorts, margin, borrow, short
 dividends and the short-side cost terms) before a US-set strategy enters shadow.
 Multiple-testing families are kept apart so one hypothesis does not tax an
 unrelated one: the strategies in `strategies.md` form one Holm family, which
-holds the Connected Drift Book's 3 selectable variants plus any strategy
-registered beside it, and model-component tests (the link-component model twin,
+holds the Connected Drift Book's 3 selectable variants plus any other strategy
+registered later, and model-component tests (the link-component model twin,
 any parked card's judgment-class test, the X corroboration test) form another.
 
 ## Champion promotion
@@ -184,11 +184,11 @@ A challenger may be proposed for promotion only when all of the following hold:
    results) voids the run. Search correction: a Holm step-down at α = 0.05 over
    the family's tested variants on the primary metric, with the declared variant
    count setting the multiplicity and no post-hoc discounting. The Connected
-   Drift Book's 3 selectable variants count as 3 tested variants; diagnostic runs
-   do not. The construction: H0 is challenger net Sharpe at most champion net Sharpe (one-sided; the
-   challenger must be strictly better); the test statistic is the paired
-   bootstrap difference of net Sharpes on the same window; p-values come from
-   the stationary bootstrap (the same resampling as the CI); the family is one
+   Drift Book's 3 selectable variants count as 3 tested variants; diagnostic
+   runs do not. The construction: H0 is challenger net Sharpe at most champion
+   net Sharpe (one-sided; the challenger must be strictly better); the test
+   statistic is the paired bootstrap difference of net Sharpes on the same
+   window; p-values come from the stationary bootstrap (the same resampling as the CI); the family is one
    pooled Holm over the union of all variants declared across all families
    evaluated in the promotion run, with no separate per-family Holms;
    Holm-adjusted p below 0.05 is required.
@@ -334,8 +334,8 @@ calendar and cost model, on daily returns:
    is at matched volatility by de-risking whichever is riskier).
 3. **60/40:** SPY and IEF rebalanced monthly, as a sanity reference.
 4. **The same strategy without its model component** (paired): the deterministic
-   graph for the link-component model twin, `event_ripple_rules` for a parked Event
-   Ripple.
+   graph for the link-component model twin, `event_ripple_rules` for a parked
+   Event Ripple.
 5. **The reference book** for the spanning test: the volatility-matched passive
    core plus every promoted strategy at its registered risk weight. Long-short
    strategies also report Fama-French five-factor plus momentum alpha.

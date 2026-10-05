@@ -158,8 +158,9 @@ The edge-weighted mean of linked firms' past-month returns on the link graph.
 - **Agreement gate.** A candidate is dropped when any single component
   contradicts the composite's sign beyond a threshold fixed at registration
   (proposed: one standard deviation).
-- **Short vetoes.** A short candidate is dropped on any of: distress; no
-  broker borrow flag or failing the short crowding filter (`risk.md`);
+- **Short vetoes.** A short candidate is dropped on any of: distress (its
+  measure is an open item); no broker borrow flag or failing the short
+  crowding filter (`risk.md`);
   concentrated forced-seller exposure, read from the 13F ownership edges (the
   rebound risk of a name under fire-sale pressure, Coval-Stafford); market cap
   below $1B (a history proxy for easy to borrow; the live check is the broker
@@ -229,8 +230,13 @@ Values marked *proposed* are not decided; they are listed under Open items.
 - Embargo: 63 sessions (proposed; the 1%-of-sample rule was not verified).
 - Holdout: the last 3 years or 25%, whichever is longer (proposed).
 - Single-name cap and no-trade band values (proposed).
-- Whether the book replaces the separate Filing Change and filings-variant
-  registrations or sits beside them; the Holm family size depends on it.
+- Scaler functional form and rate cap `δ` (proposed at registration;
+  `math.md`, Exposure scaler).
+- Distress veto definition (proposed at registration). The evidence report
+  names the veto but fixes no measure.
+
+The separate Link Momentum, Filing Change, insider and ETF Trend registrations
+are folded into this book (approved in chat 2026-10-05).
 
 ## What the earlier strategies became
 

@@ -106,17 +106,20 @@ MD&A, sign-flipped so a large change is negative, with litigation and CEO/CFO
 language as sub-scores) and insider purchases `x_ins` (opportunistic open-market
 Form 4 purchases in the trailing month; undefined where no event fires).
 
-- **Residualization:** each component is regressed cross-sectionally each month
-  on market beta `β_i`, `log(size_i)`, industry dummies and the firm's own
-  one-month return `R_i,m−1`; the residual is kept. A firm with no event keeps
-  an undefined `x_ins`, which is excluded from the regression and set to 0
-  afterwards.
-- **Standardization:** `x` is winsorized at the 1st and 99th cross-sectional
-  percentiles, ranked, and mapped to a z-score through the inverse normal CDF of
-  `(rank − 0.5) / n`. The order is residualize, winsorize, rank to z.
-- **Composite:** `S_i = (z_link,i + z_filing,i + z_ins,i) / 3`, with a missing
-  `z` equal to 0 (*registered*). Weights are fixed and never fitted. The
-  ridge-toward-equal variant shrinks weights `w_k = (1 − λ)/3 + λ ŵ_k` with one
+- **Standardization:** each component `x` is winsorized at the 1st and 99th
+  cross-sectional percentiles, ranked, and mapped to a z-score through the
+  inverse normal CDF of `(rank − 0.5) / n`.
+- **Residualization:** each z-score is regressed cross-sectionally each month on
+  market beta `β_i`, `log(size_i)`, industry dummies and the firm's own
+  one-month return `R_i,m−1`; the residual is kept and rescaled to unit
+  cross-sectional standard deviation, so the composite averages comparable
+  scores. The order is winsorize, rank to z, residualize (the evidence report's
+  Stage 1). A firm with no insider event is excluded from that component's
+  ranking and regression and its score set to 0 afterwards.
+- **Composite:** `S_i = (z_link,i + z_filing,i + z_ins,i) / 3`, with `z` the
+  rescaled residual and a missing `z` equal to 0 (*registered*). The primary
+  weights are fixed and never fitted; only the registered ridge-toward-equal
+  variant fits `ŵ_k`, shrinking weights `w_k = (1 − λ)/3 + λ ŵ_k` with one
   shrink factor `λ` chosen once under CPCV.
 - **Agreement gate:** candidate `i` is dropped when `sign(z_k,i) ≠ sign(S_i)`
   and `|z_k,i| > τ` for any component `k` with `z_k,i ≠ 0`. `τ` is registered
@@ -124,8 +127,9 @@ Form 4 purchases in the trailing month; undefined where no event fires).
 - **Exposure scaler:** gross is `G_t = G · clip(s_t, 0, 1)`, where `s_t` is a
   continuous function of the ETF Trend state and trailing volatility, and the
   change per rebalance is capped: `|s_t − s_{t−1}| ≤ δ`. The functional form,
-  `δ` and the volatility target (10% annual, `Sizing` below) are registered and
-  proposed with the pre-registration. The scaler never raises gross above the
+  `δ` and the volatility target (10% annual, `Sizing` below) are registered;
+  the form and `δ` are proposed with the pre-registration (`strategies.md`,
+  Open items). The scaler never raises gross above the
   constraint set's limit.
 - **Effective signal count:** over a window of months, take the correlation
   matrix `C` of `(z_link, z_filing, z_ins)` (pairwise-complete, with the
@@ -239,9 +243,9 @@ The trigger itself is the simpler Poisson burst score above.
 - **Turnover band:** a held name is kept while it stays in the top (bottom)
   40%; the band is registered and reported.
 - **Tranches:** a name is held for the registered horizon (3 months for the
-  Connected Drift Book) through monthly tranches: each month one third of the book is
-  re-ranked and re-opened, so no single month's liquidity or timing decides the
-  book. The horizon is fixed in the pre-registration.
+  Connected Drift Book) through monthly tranches: each month one third of the
+  book is re-ranked and re-opened, so no single month's liquidity or timing
+  decides the book. The horizon is fixed in the pre-registration.
 
 ## Costs and capacity
 
