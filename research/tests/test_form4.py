@@ -98,5 +98,63 @@ class BuildEvents(unittest.TestCase):
         self.assertEqual(ev, [])
 
 
+class OpportunisticFlag(unittest.TestCase):
+    def history(self, owner, years, month, code="P"):
+        return [row(owner, D(y, month, 10), D(y, month, 11), code=code)
+                for y in years]
+
+    def event(self, rows, date):
+        return [e for e in I.build_events(rows) if e["date"] == date][0]
+
+    def test_non_habitual_insider_with_long_history_is_flagged(self):
+        rows = self.history("o", (2016, 2017, 2018), 3) + [
+            row("o", D(2020, 6, 9), D(2020, 6, 10))]
+        self.assertTrue(self.event(rows, "2020-06-10")["opportunistic"])
+
+    def test_habitual_insider_produces_no_event(self):
+        rows = self.history("h", (2017, 2018, 2019), 6) + [
+            row("h", D(2020, 6, 9), D(2020, 6, 10))]
+        self.assertFalse([e for e in I.build_events(rows)
+                          if e["date"] == "2020-06-10"])
+
+    def test_short_history_is_unclassified_and_not_flagged(self):
+        rows = self.history("s", (2018, 2019), 3) + [
+            row("s", D(2020, 6, 9), D(2020, 6, 10))]
+        self.assertFalse(self.event(rows, "2020-06-10")["opportunistic"])
+        lone = [row("s", D(2020, 6, 9), D(2020, 6, 10))]
+        self.assertFalse(I.build_events(lone)[0]["opportunistic"])
+
+    def test_history_boundary_is_three_whole_years(self):
+        first = D(2017, 6, 9)
+        self.assertTrue(I.has_history(first, D(2020, 6, 9)))
+        self.assertFalse(I.has_history(first, D(2020, 6, 8)))
+        self.assertTrue(I.has_history(D(2017, 2, 28), D(2020, 2, 29)))
+
+    def test_event_flag_needs_a_classified_contributor(self):
+        rows = self.history("o", (2016, 2017, 2018), 3) + [
+            row("o", D(2020, 6, 9), D(2020, 6, 10)),
+            row("n", D(2020, 6, 9), D(2020, 6, 10))]
+        e = self.event(rows, "2020-06-10")
+        self.assertEqual(e["n_insiders"], 2)
+        self.assertTrue(e["opportunistic"])
+
+    def test_sales_never_produce_a_flagged_event(self):
+        rows = self.history("o", (2016, 2017, 2018), 3) + [
+            row("o", D(2020, 6, 9), D(2020, 6, 10), code="S")]
+        self.assertFalse([e for e in I.build_events(rows)
+                          if e["date"] == "2020-06-10"])
+
+    def test_entry_is_second_session_open_after_acceptance(self):
+        e = I.build_events([row("a", D(2020, 6, 9), D(2020, 6, 10))])[0]
+        self.assertEqual(e["accepted"], "2020-06-10T23:59")
+        self.assertEqual(e["entry"], "2020-06-12T09:30")   # Wed filing, Fri
+
+    def test_entry_skips_weekend(self):
+        e = I.build_events([row("a", D(2020, 6, 10), D(2020, 6, 11))])[0]
+        self.assertEqual(e["entry"], "2020-06-15T09:30")   # Thu filing, Mon
+        e = I.build_events([row("a", D(2020, 6, 11), D(2020, 6, 12))])[0]
+        self.assertEqual(e["entry"], "2020-06-16T09:30")   # Fri filing, Tue
+
+
 if __name__ == "__main__":
     unittest.main()
