@@ -154,6 +154,25 @@ Runs name their manifest hashes; a run that cannot is void.
   against EDGAR. A symbol with an unresolved action is excluded for the
   affected window.
 
+Data each `connected_drift` component needs (all free; `strategies.md` has the
+design):
+
+| Component | Data |
+|---|---|
+| Link score | customer and supplier disclosures in 10-K and 10-Q text (edge a); 10-K Item 1 text for text peers (edge b); 13F holdings (edge d); GDELT co-mentions only for the news-edge variant; daily bars for partner and own returns |
+| Filing Change | 10-K and 10-Q full text, section-parsed (Item 1A, MD&A), with acceptance datetimes |
+| Insider | Form 4 open-market purchases with filing timestamps and three years of insider history |
+| Exposure scaler | daily bars including SPY and IEF |
+| Residualization and diagnostics | daily bars, XBRL shares outstanding, SIC industry, Ken French factors and industry portfolios |
+| Shorts | the broker's `shortable` and `easy_to_borrow` flags, FINRA short interest |
+
+EDGAR coverage check: before the customer and supplier extractor is built,
+measure by filing year the share of 10-K filers whose text names a customer or
+supplier. The 2020 amendments (SEC Release 33-10825) replaced the quantitative
+customer line item with a principles-based topic, so coverage after 2020 may
+collapse. If it does, `connected_drift` is registered without edge (a) and says
+so.
+
 Data-quality rules:
 
 - **CIK to ticker, point in time.** The graph is keyed by CIK and prices by
@@ -198,7 +217,7 @@ Data-quality rules:
     haircut bar;
   - X pay-per-use reads for the X corroboration test, capped at $50 a month,
     once the `event_ripple_rules` candidates run forward and the test is
-    pre-registered;
+    pre-registered (both parked, `roadmap.md`);
   - a news archive with entity tags, only if the GDELT co-mention source
     passes edge validation (`math.md`) and its coverage is the binding limit.
   A failure with an economic cause never triggers a paid-data purchase.

@@ -9,9 +9,9 @@ in git history, not here.
 
 | Area | State |
 |---|---|
-| Plan | Four strategies (Link Momentum, Filing Change, Event Ripple, ETF Trend), the engine, the India and US constraint sets. |
+| Plan | One strategy, the Connected Drift Book (`connected_drift`): a long-short US equity composite of link propagation, section-level Filing Change and opportunistic insider buys, scaled by the ETF Trend state. Evidence and design source: `research/lessons/connected-drift-evidence.md`. Also the engine and the India and US constraint sets. |
 | Kernel | Built through the router and journal: libcurl paper transport, WebSocket stream, India-set account rule and allowlist, candidate ingest, `paper_loop`, kill inputs, early-close calendar, torn-journal recovery. Live smoke passed on Alpaca paper. Remaining kernel steps are parked (Kernel track). |
-| Engine | Collector built and soaked. A six-node research graph, five Tier A adapters and the source seam are built. The link graph, event pipeline and ripple reasoning are not built. |
+| Engine | Collector built and soaked. A six-node research graph, five Tier A adapters and the source seam are built. The link graph is not built; the event pipeline and ripple reasoning are parked. |
 | Harness | Trial ledger, India-set cost model, settlement simulation, statistics (walk-forward, CPCV, PBO, DSR, MinTRL, bootstrap, HAC, pooled Holm), pre-registration validator, contamination guard, benchmarks and report generators. India set only. |
 | Strategies | Earlier strategies failed their backtest gates and were retired. The forward ledger runs the passive core and its benchmarks. No champion. |
 | Paper | The paper loop runs the passive core as a plumbing test. Paper trading a strategy through the kernel has not started. |
@@ -19,42 +19,46 @@ in git history, not here.
 Critical path:
 
 ```
-Shorts in the harness -> ETF Trend test ------------------------------+
-EDGAR corpus -> Link graph -> Link Momentum test (filings) ------------+
-News co-mentions -> Link Momentum tests (news, intraday) --------------+--> Go/no-go review
-Filing Change test ----------------------------------------------------+      -> shadow gate
-Event pipeline -> Event Ripple rules test -----------------------------+      -> kernel short selling
-Reader tier + model pins -> Engine reasoning -> Event Ripple forward shadow
-                         \-> Link Momentum model variant (extraction class)
+Shorts in the harness -> Text-change signal -----------------+
+                         Customer and supplier extractor -----+
+                         Opportunistic flag (Form 4) ---------+--> Composite builder
+                         ETF Trend scaler (US margin ledger) -+        |
+                                                                       v
+                 connected_drift pre-registration -> backtest gate (correlation
+                 matrix first) -> Go/no-go review -> shadow gate
+                 -> kernel short selling
 ```
 
 ## Go/no-go review
 
-After the ETF Trend, Link Momentum, Filing Change and Event Ripple rules backtest
-gates:
+After the `connected_drift` backtest gate, which judges its three selectable
+variants as one family:
 
-1. **One or more passes.** The best passer (by the pre-registered primary metric;
-   ties go to the simpler strategy) starts its shadow gate at the registered
-   paper book size under the US set. Kernel short selling unblocks.
-2. **None passes, and a strategy meets the paid-data trigger**
-   (`data.md`, Paid data). Buy the paid dataset for that strategy only, run its
-   fixed spec once on the extended history, then apply rule 1 or 3.
-3. **None passes and the failures are economic** (`validation.md`, Strategy
-   gates; an underpowered result follows rule 2). Record a negative result. The
-   book stays the passive core, plus ETF Trend if it passed. Event Ripple
-   continues in forward shadow on its own clock, and further search comes only
-   from research-factory cards that name a new information set.
+1. **It passes.** The best variant (by the pre-registered primary metric; ties go
+   to the simpler variant) starts its shadow gate at the registered paper book
+   size under the US set. Kernel short selling unblocks.
+2. **It fails and meets the paid-data trigger** (`data.md`, Paid data). Buy the
+   paid dataset for the strategy, run its fixed spec once on the extended
+   history, then apply rule 1 or 3.
+3. **It fails and the failure is economic** (`validation.md`, Strategy gates; an
+   underpowered result follows rule 2). Record a negative result. The book stays
+   the passive core. Further search comes only from new pre-registrations that
+   name a new information set.
 
-Event Ripple is judged separately, at its own power-based minimum
-(`validation.md`, Model component gate): on the order of 1,000 resolved
-candidates per arm after the brain's cutoff plus 30 days, about a year of forward
-shadow.
+If the component correlation matrix shows the components are highly correlated,
+the composite collapses to one signal and the stronger component alone is
+registered instead of the blend.
 
-Trial budget before the review: at most 12 new ledger trials (planned: ETF Trend
-2, Link Momentum 3, Filing Change 2, Event Ripple rules 1, Link Momentum model
-variant 1). Exceeding it needs an operator-approved entry in the approvals log.
+Trial budget before the review: 3 selectable variants of `connected_drift` are
+proposed (equal-weight composite with trend scaler, ridge-toward-equal weights,
+the primary plus the news edge). Diagnostic runs (drop-one ablations, no trend
+scaler, own-firm skip-month, placebo graph, delisting sensitivity, event-day
+insider entry) are not selectable and sit outside the effective trial count.
+Exceeding the budget needs an operator-approved entry in the approvals log.
 
 ## Research track (critical path)
+
+Build order; each box needs the boxes above it that it names.
 
 - [ ] **Shorts in the harness** (`research/strategy/`): the short side and margin
       ledger (Reg T, maintenance, borrow, no short rebate, short dividends,
@@ -66,48 +70,49 @@ variant 1). Exceeding it needs an operator-approved entry in the approvals log.
       Verify against Alpaca's docs and the paper account: shorting
       on paper, the `shortable` and `easy_to_borrow` flags, fractional shorts and
       the paper balance setting.
-- [ ] **ETF Trend test** (`etf_trend`): pre-registration (`seen-window` label) and
-      backtest gate.
-- [ ] **EDGAR corpus** (free data): 10-K, 10-Q and 8-K full text with manifests,
-      a section parser, a point-in-time CIK, ticker and former-name map, XBRL
-      shares outstanding, 13F holdings and Ken French factors.
-- [ ] **Link graph** (`engine.md`): a bitemporal store; deterministic
-      supply-chain patterns with a precision audit (200 labeled filings, at least
-      0.9); text peers; common ownership.
-- [ ] **Link Momentum test, filings variant** (`link_momentum`): pre-registration
-      and backtest gate with the edge-validation report.
-- [ ] **News co-mentions:** a GDELT GKG co-mention pipeline with a measured
-      entity-resolution rate; pre-registrations and backtest gates for the news
-      and intraday variants.
-- [ ] **Filing Change test** (`filing_change`): pre-registration and backtest
-      gate.
-- [ ] **Event pipeline** (`engine.md`) on history; Event Ripple rules
-      (`event_ripple_rules`) pre-registration and backtest gate.
-- [ ] **Engine reasoning** (`engine.md`): router, hybrid retrieval, brain,
-      verifier and the `ripple_hypothesis` feature; the Event Ripple
-      pre-registration; forward shadow starts on post-cutoff events (needs the
-      reader tier and model pins).
-- [ ] **Link Momentum model variant** (`link_momentum_llm`, extraction class):
-      precision audit and paired test against the news variant (needs the reader
-      tier).
-- [ ] **X corroboration test** (`x_corroboration`, `data.md`): official-API
-      adapter, bot filter, corroboration flag, pre-registration with power
-      analysis; forward on Event Ripple rules candidates (needs the event
-      pipeline and approval of the $50 a month X budget).
+- [ ] **Text-change signal:** section-level similarity of each 10-K and 10-Q to
+      its prior-year counterpart on Item 1A and MD&A, with litigation and
+      CEO/CFO sub-scores, and a section parser that reports extraction rates
+      (needs the EDGAR corpus, `data.md`).
+- [ ] **Customer and supplier extractor** (`engine.md`): an EDGAR coverage check
+      by year first, then a deterministic parser with an alias table, a
+      fail-closed match and the precision audit (200 labeled filings, at least
+      0.9). If post-2020 coverage collapses, register `connected_drift` without
+      edge (a) and say so.
+- [ ] **Opportunistic flag on the Form 4 events:** purchases by insiders with no
+      three-year calendar-month habit, with entry timestamps.
+- [ ] **Composite builder:** the link-graph store with text peers and common
+      ownership, residualization, the equal-weight composite, the agreement gate
+      and the vetoes (`strategies.md`).
+- [ ] **ETF Trend scaler:** the trend signal as a continuous, rate-capped
+      exposure input to the harness, run against the US margin ledger.
+- [ ] **`connected_drift` pre-registration and backtest gate:** the first output
+      is the component correlation matrix and the effective signal count; the
+      first backtest runs only after the operator approves the registration.
 - [ ] **Go/no-go review:** apply the rules above and record the decision in the
       approvals log.
 - [ ] **Paid research dataset** (only on the paid-data trigger).
 
+### Parked
+
+Not built before the review; kept for a later plan change, not deleted.
+
+- **Event Ripple** (event pipeline, rules test, forward shadow): weak evidence,
+  partly model memorization.
+- **Engine reasoning** (router, hybrid retrieval, brain, verifier, the
+  `ripple_hypothesis` feature): judgment-class output counts only after the model
+  cutoff, so history cannot test it.
+- **Link Momentum model variant** (`link_momentum_llm`): an extraction-class twin
+  of a component the deterministic extractor covers first.
+- **X corroboration test** (`x_corroboration`): it corroborates Event Ripple
+  candidates, which are parked.
+- **Research factory** (`engine.md`): no new search before the review.
+- **Reader tier and model pins:** needed only by the parked items above.
+
 ## Engine plumbing track
 
-Feeds engine reasoning and the Link Momentum model variant.
-
-- [ ] **Reader tier:** capability-free model calls, capped JSON, span verifier,
-      anonymization (`engine.md`).
-- [ ] **Model pins:** reader, router, brain and verifier pinned with knowledge
-      cutoffs; a post-cutoff bake-off per role.
-- [ ] **Research factory** (`engine.md`).
-- [ ] **Engine done-boxes:** the remaining items in `engine.md` and `data.md`.
+- [ ] **Engine done-boxes:** the remaining items in `engine.md` and `data.md`
+      that the link graph and the research datasets need.
 
 ## Kernel track
 
@@ -190,8 +195,8 @@ Parked until the review; only defects that break the paper loop are fixed.
 - Social media as a trigger: never alone (`data.md`, Tier C).
 - A model that sizes, prices or places an order: no. The brain proposes typed
   hypotheses and deterministic code does the rest.
-- A strategy outside `strategies.md` before the review: no. New ideas are
-  research-factory cards.
+- A strategy other than `connected_drift` before the review: no. New ideas are
+  research cards in `strategies.md`.
 - A new indicator or strategy tweak: a new pre-registration, counted in the trial
   ledger.
 - Kernel or ops work before the review: only a defect that breaks the running
@@ -259,3 +264,11 @@ MANIFEST HASH: <sha256>
   2026-10-04.
 - Research-card "Binary level contracts" added to `strategies.md`. Approved in
   chat, 2026-10-04.
+- Plan restructured around the single combined strategy `connected_drift`; the
+  separate Link Momentum, Filing Change, insider and ETF Trend registrations are
+  folded into it. Approved in chat, 2026-10-05.
+
+Open items for operator approval (proposed, not decided): the agreement-gate
+threshold (one standard deviation), the 3 selectable variants, the embargo
+(63 sessions) and the holdout (last 3 years or 25% of the sample, whichever is
+longer).
