@@ -17,10 +17,10 @@ def bar(t, o, c):
     return {"t": t, "o": o, "h": max(o, c), "l": min(o, c), "c": c, "v": 1}
 
 
-def write(outdir, sym, rows):
+def write(outdir, sym, rows, adjustment="split"):
     def get(url, headers):
         return {"bars": {sym: rows}, "next_page_token": None}
-    S.write_dataset(sym, "bars", START, END, outdir, "1Day", "all",
+    S.write_dataset(sym, "bars", START, END, outdir, "1Day", adjustment,
                     http_get=get, headers={}, now=NOW)
 
 
@@ -49,7 +49,7 @@ class LoaderTest(unittest.TestCase):
 
     def test_tampered_file_refused(self):
         write(self.dir, "AAA", [bar("2026-01-02T05:00:00Z", 1, 2)])
-        path, _ = S.dataset_paths(self.dir, "AAA", "bars", "1Day", "all")
+        path, _ = S.dataset_paths(self.dir, "AAA", "bars", "1Day", "split")
         with open(path, "ab") as f:
             f.write(b" ")
         with self.assertRaises(S.SipError):
@@ -66,6 +66,16 @@ class LoaderTest(unittest.TestCase):
         write(self.dir, "AAA", [bar("2026-01-06T00:30:00Z", 1, 2)])
         got = L.load_prices(self.dir, ["AAA"], "2026-01-01", "2026-01-31")
         self.assertEqual(list(got["AAA"]), ["2026-01-05"])
+
+    def test_default_is_split_adjusted_and_raw_is_selectable(self):
+        write(self.dir, "AAA", [bar("2026-01-02T05:00:00Z", 1, 2)], "split")
+        write(self.dir, "AAA", [bar("2026-01-02T05:00:00Z", 3, 4)], "raw")
+        write(self.dir, "AAA", [bar("2026-01-02T05:00:00Z", 5, 6)], "all")
+        args = (self.dir, ["AAA"], "2026-01-01", "2026-01-31")
+        self.assertEqual(L.load_prices(*args)["AAA"],
+                         {"2026-01-02": (1.0, 2.0)})
+        self.assertEqual(L.load_prices(*args, adjustment="raw")["AAA"],
+                         {"2026-01-02": (3.0, 4.0)})
 
     def test_benchmark_symbols(self):
         self.assertEqual(L.benchmark_symbols(["QQQ", "SPY", "AAA", "AAA"]),

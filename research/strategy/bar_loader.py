@@ -23,9 +23,12 @@ def _session_date(stamp):
 
 
 def load_prices(outdir, symbols, start, end, *, timeframe="1Day",
-                adjustment="all"):
+                adjustment="split"):
     """{symbol: {iso_session_date: (open, close)}} for dates in [start, end].
-    start and end are inclusive ISO dates. A missing dataset raises
+    start and end are inclusive ISO dates. adjustment "split" (default)
+    serves signals; "raw" serves total-return accounting, with dividends
+    supplied separately to portfolio.run ("all" would double-count them).
+    A missing dataset raises
     FileNotFoundError; a hash or manifest mismatch raises SipError."""
     prices = {}
     for sym in symbols:
