@@ -10,4 +10,5 @@ paths = [
   '''^kernel/(p33|v4)/''',                      # earlier vector directories, present only in history: every hit is a 64-hex SHA-256 test digest, none is a credential
   '''^kernel/jev_vectors/''',                  # removed model-filter vectors, present only in history: 64-hex test digests tripping generic-api-key
   '''^research(-plane)?/sandbox/langfuse/docker-compose\.yml$''', # throwaway local Langfuse (also its earlier path in history), never networked
+  '''^\.claude/agent-flow-install\.json$''',  # SHA-256 digests of installed agent-flow files
 ]
