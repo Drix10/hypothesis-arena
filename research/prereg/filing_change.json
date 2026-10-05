@@ -16,7 +16,7 @@
     "excluding the 100 largest firms",
     "short side: market cap at least $1B and passes the short crowding filter"
   ],
-  "signal": "For each 10-K or 10-Q, delta = 1 - cos(v_y, v_y-1) between term-frequency vectors of the same section (risk factors, MD&A) in consecutive years (plan/math.md, Text change). Quintiles of delta; the high-change quintile is short and the low-change quintile is long. Rebalance monthly; a name is held about 3 months after its filing. Fills per plan/execution.md.",
+  "signal": "For each 10-K or 10-Q, delta = 1 - cos(v_y, v_y-1) between term-frequency vectors of the same section (risk factors, MD&A) in consecutive years (plan/math.md, Text change). Quintiles of delta; the high-change quintile is short and the low-change quintile is long. Rebalance monthly; a name is held about 3 months after its filing. Fills per plan/execution.md. Known risk: firms that later delist are short-leg winners, and missing prices trigger the 5% void rule and the paid-data trigger (plan/strategies.md, Filing Change; plan/data.md, Paid data).",
   "variants": [
     {"name": "risk_factors", "sections": ["risk_factors"]},
     {"name": "risk_factors_mda", "sections": ["risk_factors", "mda"]}
@@ -31,7 +31,7 @@
   "holdout": {
     "start": "2023-01-01",
     "end": "2026-10-04",
-    "rule": "unseen-window: no earlier filing-text test touched this window; the plan names no holdout dates"
+    "rule": "the last portion of the sample, never used for any choice; the plan names no holdout dates"
   },
   "decision": {
     "min_net_sharpe": 1e-06,
@@ -49,6 +49,8 @@
     "split.label_horizon_days: 63 is a 3-month hold in sessions; the plan gives no number.",
     "split.n_splits: the plan states no walk-forward split count; 2 is the validator minimum.",
     "split.embargo_days: the plan gives no number; 0 is a placeholder.",
+    "holdout: the operator confirms that no earlier text-change test used the 2023-2026 window.",
+    "signal: the last-trading-day source (TODO.md, EDGAR corpus) is needed for the short leg's delisting returns.",
     "holdout: the plan gives no dates; the free EDGAR feed starts in 2016, and 2023-2026 is a placeholder window.",
     "decision.min_net_sharpe: the plan requires the 95% bootstrap CI lower bound above 0 and states no numeric floor; 1e-06 stands for 'above 0'.",
     "decision.min_days: the plan states no minimum evaluation length for the backtest gate; 1 is a placeholder (MinTRL is computed by the harness).",
