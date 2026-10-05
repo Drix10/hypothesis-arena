@@ -43,6 +43,18 @@ Necessary, never sufficient.
   graphs, source ablations, delisting sensitivity) write ledger rows of kind
   `diagnostic`, linked to their trial; they can never be selected, so they do
   not enter `N_eff`.
+- **Trial budget for `connected_drift`:** 3 selectable variants (proposed;
+  `strategies.md`, Pre-registration fields), so the family floor of `N_eff` is
+  3. Drop-one ablations, the run without the scaler, the own-firm skip-month and
+  1-month hold, the placebo graph, delisting sensitivity and event-day insider
+  entry are diagnostic runs: each writes a ledger row, none is selectable, none
+  counts toward `N_eff`. A diagnostic result that is used to choose or change
+  anything stops being a diagnostic and is a new trial.
+- **Seen-window caveat:** the free feed's 2016-2026 window was already seen by
+  an earlier long-only trend test. Any run that touches the trend scaler is
+  labeled `seen-window` in its report, and the shadow-gate minimum for the
+  strategy doubles to 6 rebalances. The scaler is judged by its diagnostic run
+  against the unscaled book, never as standalone evidence.
 - **Overfitting diagnostics:** Deflated Sharpe Ratio with `N_eff`; Probability
   of Backtest Overfitting when there are at least 2 variants; minimum
   track-record length (MinTRL) for the observed Sharpe. A contrived oracle has
@@ -133,9 +145,10 @@ registration) and the `--verify` fidelity replay (every logged row reproduced
 within 20 bp). It is extended for the US set (shorts, margin, borrow, short
 dividends and the short-side cost terms) before a US-set strategy enters shadow.
 Multiple-testing families are kept apart so one hypothesis does not tax an
-unrelated one: the strategies in `strategies.md` form one Holm family, and
-model-component tests (the Link Momentum model variant, Event Ripple against its
-rules twin, the X corroboration test) form another.
+unrelated one: the strategies in `strategies.md` form one Holm family, which
+holds the Connected Drift Book's 3 selectable variants plus any strategy
+registered beside it, and model-component tests (the link-component model twin,
+any parked card's judgment-class test, the X corroboration test) form another.
 
 ## Champion promotion
 
@@ -170,8 +183,9 @@ A challenger may be proposed for promotion only when all of the following hold:
    the champion; any window cherry-picking (start or end chosen after seeing
    results) voids the run. Search correction: a Holm step-down at α = 0.05 over
    the family's tested variants on the primary metric, with the declared variant
-   count setting the multiplicity and no post-hoc discounting. The construction:
-   H0 is challenger net Sharpe at most champion net Sharpe (one-sided; the
+   count setting the multiplicity and no post-hoc discounting. The Connected
+   Drift Book's 3 selectable variants count as 3 tested variants; diagnostic runs
+   do not. The construction: H0 is challenger net Sharpe at most champion net Sharpe (one-sided; the
    challenger must be strictly better); the test statistic is the paired
    bootstrap difference of net Sharpes on the same window; p-values come from
    the stationary bootstrap (the same resampling as the CI); the family is one
@@ -253,12 +267,34 @@ journal.
 champion using the pre-registered primary metric; ties break toward the simpler
 strategy (fewer parameters, lower turnover).
 
+## Composite reporting
+
+For a composite strategy (`connected_drift`), reports come in this order:
+
+1. **First report: component correlation.** Before any Sharpe, return or
+   spanning result, the harness writes the correlation matrix of the component
+   scores and the effective signal count `(Σλ)² / Σλ²` (`math.md`, Composite
+   score), computed on the pre-registered evaluation window and excluding the
+   holdout. If the components are highly correlated the composite collapses to
+   one signal; the next step is a new pre-registration on the stronger
+   component, not a reweighting.
+2. **Primary variant** through the backtest gate below.
+3. **Ablation report.** The drop-one runs (three), the run without the scaler
+   and the other diagnostic runs are reported next to the primary with net
+   Sharpe, spanning alpha and the change from the primary. They are
+   attribution, not selection: a component whose removal leaves the spanning
+   alpha unchanged or higher is reported as subtracting value, and removing it
+   is a new pre-registration.
+
+Every contamination, transferability and gate rule below applies to the
+composite unchanged.
+
 ## Model component gate
 
 Every model component is judged against the same strategy without it, on
 identical inputs, net of the component's own model cost:
 
-- **Extraction class** (for example the Link Momentum model variant's link
+- **Extraction class** (for example the link-component model twin's link
   edges): the strategy on the model-extracted graph beats the strategy on the
   deterministic graph over the same months. History is allowed per the
   contamination rules, and the difference must hold again in the shadow-gate
@@ -298,7 +334,7 @@ calendar and cost model, on daily returns:
    is at matched volatility by de-risking whichever is riskier).
 3. **60/40:** SPY and IEF rebalanced monthly, as a sanity reference.
 4. **The same strategy without its model component** (paired): the deterministic
-   graph for the Link Momentum model variant, `event_ripple_rules` for Event
+   graph for the link-component model twin, `event_ripple_rules` for a parked Event
    Ripple.
 5. **The reference book** for the spanning test: the volatility-matched passive
    core plus every promoted strategy at its registered risk weight. Long-short

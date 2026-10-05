@@ -96,6 +96,46 @@ as trials.
   `R = R^intraday + R^overnight` from open and close prices; the variant uses
   `R^intraday` of linked firms only (Wang 2025).
 
+## Composite score
+
+The Connected Drift Book (`strategies.md`) scores each eligible stock `i` at
+each month-end from three components: link propagation `x_link` (the residual
+`u_i` above, with partner returns taken as residual returns net of market and
+industry), Filing Change `x_filing` (the section-level `Δ` of Item 1A and
+MD&A, sign-flipped so a large change is negative, with litigation and CEO/CFO
+language as sub-scores) and insider purchases `x_ins` (opportunistic open-market
+Form 4 purchases in the trailing month; undefined where no event fires).
+
+- **Residualization:** each component is regressed cross-sectionally each month
+  on market beta `β_i`, `log(size_i)`, industry dummies and the firm's own
+  one-month return `R_i,m−1`; the residual is kept. A firm with no event keeps
+  an undefined `x_ins`, which is excluded from the regression and set to 0
+  afterwards.
+- **Standardization:** `x` is winsorized at the 1st and 99th cross-sectional
+  percentiles, ranked, and mapped to a z-score through the inverse normal CDF of
+  `(rank − 0.5) / n`. The order is residualize, winsorize, rank to z.
+- **Composite:** `S_i = (z_link,i + z_filing,i + z_ins,i) / 3`, with a missing
+  `z` equal to 0 (*registered*). Weights are fixed and never fitted. The
+  ridge-toward-equal variant shrinks weights `w_k = (1 − λ)/3 + λ ŵ_k` with one
+  shrink factor `λ` chosen once under CPCV.
+- **Agreement gate:** candidate `i` is dropped when `sign(z_k,i) ≠ sign(S_i)`
+  and `|z_k,i| > τ` for any component `k` with `z_k,i ≠ 0`. `τ` is registered
+  (proposed 1.0).
+- **Exposure scaler:** gross is `G_t = G · clip(s_t, 0, 1)`, where `s_t` is a
+  continuous function of the ETF Trend state and trailing volatility, and the
+  change per rebalance is capped: `|s_t − s_{t−1}| ≤ δ`. The functional form,
+  `δ` and the volatility target (10% annual, `Sizing` below) are registered and
+  proposed with the pre-registration. The scaler never raises gross above the
+  constraint set's limit.
+- **Effective signal count:** over a window of months, take the correlation
+  matrix `C` of `(z_link, z_filing, z_ins)` (pairwise-complete, with the
+  event-sparse insider column computed over the months it fires) and its
+  eigenvalues `λ_k`; the count is `(Σλ_k)² / Σλ_k²`. It is 3 when the
+  components are uncorrelated and 1 when they are one signal. The Grinold gain
+  from combining is at most about `sqrt(3)`, the bound reached only at a count
+  of 3 (`IR = IC · sqrt(breadth)`). The matrix and the count are the first
+  harness output, before any return (`validation.md`, First report).
+
 ## Event propagation
 
 For an event at source `j` with signed magnitude `x_j` (standardized abnormal
@@ -198,8 +238,8 @@ The trigger itself is the simpler Poisson burst score above.
   25% of its target position.
 - **Turnover band:** a held name is kept while it stays in the top (bottom)
   40%; the band is registered and reported.
-- **Tranches:** a name is held for the registered horizon (3 months for Link
-  Momentum) through monthly tranches: each month one third of the book is
+- **Tranches:** a name is held for the registered horizon (3 months for the
+  Connected Drift Book) through monthly tranches: each month one third of the book is
   re-ranked and re-opened, so no single month's liquidity or timing decides the
   book. The horizon is fixed in the pre-registration.
 
