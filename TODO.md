@@ -100,6 +100,17 @@ Facts an agent or a session asserted that nobody has checked.
   (`plan/validation.md`, Controls), whether or not the strategy trades them; the
   ETF Trend universe has VTI, not SPY, so the bar loader must add SPY. It has run
   only on synthetic bars.
+- On this machine `python` is 3.13 and `python3` is 3.11. Under 3.13 the engine
+  suites (`test_engine`, `test_hardening`, `test_seam_graph`) fail on unclosed
+  SQLite connections with `PYTHONWARNINGS=error`, also on the commit before this
+  work; the QA gate runs `python3` and passes them. Pin the interpreter in CI and
+  decide whether the engine should close its connections.
+- Parallel pipeline runs each execute the whole QA suite, and six at once on
+  this Windows machine caused timeouts and `os.replace` races that failed rounds
+  without any code fault. Keep a wave to about three runs, or merge by hand after
+  checking the reviewer verdicts and a serial gate run.
+- `gdelt_gkg` column positions (V2Themes 8, V2Organizations 14) follow the GKG 2.1
+  layout and its fixtures; no real GKG file has been read.
 - The coverage probe's 11% unverified end is a bar-data statement, not a
   confirmed delisting rate.
 
@@ -154,9 +165,10 @@ Open:
 - [ ] **ETF Trend test** (`etf_trend`): prereg (`seen-window`) and backtest gate.
       Built: the draft `research/prereg/etf_trend.json`, the signal
       (`strategy/etf_trend.py`) and the runner (`strategy/backtest.py`), all on
-      synthetic data. Waits on the operator's answers to the draft's
-      `open_questions`, and on a bar loader that reads `sip_fetch` datasets into
-      `prices[sym][date] = (open, close)` and adds SPY for the benchmark.
+      synthetic data, the bar loader (`strategy/bar_loader.py`, reads `sip_fetch`
+      datasets and names SPY and IEF for the benchmark) and an end-to-end chain
+      test (`test_etf_trend_chain`). Waits on the operator's answers to the
+      draft's `open_questions` and on real SIP datasets fetched to disk.
 - [ ] **EDGAR corpus:** 10-K, 10-Q and 8-K full-text fetch with manifests, and
       the collectors that feed the pure modules below. Built and tested on
       fixtures only: `filing_sections`, `ticker_map`, `shares_outstanding`,
@@ -174,16 +186,25 @@ Open:
       (deterministic, dense); customer and supplier patterns with a precision
       audit (200 labeled filings, at least 0.9), knowing that 10-K disclosure
       covers only large customers.
-- [ ] **Link Momentum test, filings variant** (`link_momentum`): prereg (3-month
-      hold in monthly tranches, at least 15 names a side at 150% gross, window
-      from 2007) and backtest gate with edge validation. The free feed gives
+- [ ] **Link Momentum test, filings variant** (`link_momentum`): the draft
+      `research/prereg/link_momentum.json` (edges a, b and d, 3-month hold in
+      monthly tranches, 150% gross) waits on the operator's answers; then the
+      backtest gate with edge validation. It cannot run until edge (a), the
+      customer and supplier extractor, exists (Link graph). The free feed gives
       about ten years, so expect the paid-data trigger for pre-2016 prices.
-- [ ] **Insider opportunistic buys card:** write the prereg for operator approval
-      (entry from day 2, deterministic class); `research/strategy/form4.py`
-      already classifies routine trades.
-- [ ] **News co-mentions:** the GDELT GKG pipeline with a measured resolution
-      rate; news and intraday variant preregs and backtest gates.
-- [ ] **Filing Change test** (`filing_change`): prereg and backtest gate.
+- [ ] **Insider opportunistic buys card:** the draft
+      `research/prereg/insider_opportunistic.json` waits on the operator's
+      answers (holding period, sizing, cluster rule); `research/strategy/form4.py`
+      already classifies routine trades. Then the backtest gate.
+- [ ] **News co-mentions:** `sources/gdelt_gkg.py` parses GKG 2.1, resolves
+      names by exact match and reports the resolution rate, on fixtures only.
+      Left: a daily GKG downloader, a legal-name and former-name table, a
+      measured resolution rate on real files, news edges into the link store,
+      and the news and intraday variant preregs and backtest gates.
+- [ ] **Filing Change test** (`filing_change`): the draft
+      `research/prereg/filing_change.json` waits on the operator's answers; the
+      text-change signal (`plan/math.md`, Text change) is not built; then the
+      backtest gate.
 - [ ] **Event pipeline** on history; Event Ripple rules (`event_ripple_rules`)
       prereg and backtest gate.
 - [ ] **Engine reasoning:** router, retrieval, brain, verifier and the

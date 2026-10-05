@@ -178,6 +178,8 @@ Pure modules built on fixtures, with no collector wired to them yet:
 - `last_trade` and `end_events`: the dated last trading day of a delisted firm;
   `end_events` extracts Form 25, Form 15 and 8-K events from a submissions JSON.
 - `french_factors`: daily Fama-French five factors and momentum as decimals.
+- `gdelt_gkg`: GKG 2.1 parsing, exact-match organisation-to-CIK resolution, daily
+  co-mention pair counts and the resolution rate.
 
 In tests these import each other as `sources.x`; `research/strategy` code uses
 `research.sources.x`. Use the second form in new code, so one module is not
@@ -195,6 +197,8 @@ loaded twice.
   result, runs the holdout at 1x and 2x cost, applies the gate and closes the
   trial; bars are passed in, with SPY and IEF required for the 60/40 benchmark).
 - Strategies: `etf_trend` (the ETF Trend signal as a `target_fn`).
+- Backtest data: `bar_loader` (verified on-disk SIP datasets into
+  `prices[sym][date] = (open, close)`; `benchmark_symbols` adds SPY and IEF).
 - Market data: `sip_fetch` (SIP datasets with manifests; `load_alpaca_env`) and
   `bulk_bars` (throttled many-symbol fetch).
 - Event data for the engine: `form4` (insider filings), `earnings_surprise` (SUE
@@ -206,11 +210,12 @@ loaded twice.
 Records: `prereg/` (preregistrations), `ledger/` (the trial ledger and its
 checkpoint), `reports/` (backtest gate reports), `lessons/lessons.jsonl` and
 `requirements.txt` (pinned engine deps). `ledger/` and `reports/` start empty;
-`prereg/` holds `etf_trend.json`, a draft with an `open_questions` list that the
-operator answers before it is registered.
+`prereg/` holds drafts (`etf_trend`, `link_momentum`, `filing_change`,
+`insider_opportunistic`), each with an `open_questions` list that the operator
+answers before it is registered.
 
-Not yet wired: `backtest` has only run on synthetic bars; nothing loads real
-bars into it, nothing calls `universe` or the engine edge builders from a runner,
+Not yet wired: `backtest` has only run on synthetic bars (the chain test); no real
+SIP datasets are on disk for `bar_loader` to read, nothing calls `universe` or the engine edge builders from a runner,
 and no collector feeds the pure `sources/` modules.
 `TODO.md` lists the next steps.
 
@@ -229,11 +234,13 @@ Suites for the engine (`test_engine`, `test_hardening`, `test_emit`,
 sources, each adapter, the harness (`test_stats`, `test_ledger`, `test_gates`,
 `test_costs`, `test_settlement`, `test_portfolio`, `test_prereg`,
 `test_candidate_wire`, `test_passive_core`, `test_tranches`, `test_placebo`,
-`test_universe`, `test_etf_trend`, `test_etf_trend_prereg`, `test_backtest`), the event data
+`test_universe`, `test_etf_trend`, `test_etf_trend_prereg`, `test_etf_trend_chain`,
+`test_link_momentum_prereg`, `test_filing_change_prereg`,
+`test_insider_opportunistic_prereg`, `test_bar_loader`, `test_backtest`), the event data
 modules (`test_form4`, `test_earnings_surprise`, `test_french_factors`,
 `test_ticker_map`, `test_ticker_observations`, `test_shares_outstanding`,
 `test_form13f`, `test_last_trade`, `test_end_events`, `test_filing_sections`,
-`test_edgar_filings`), the link graph (`test_link_store`, `test_text_peers`,
+`test_edgar_filings`, `test_gdelt_gkg`), the link graph (`test_link_store`, `test_text_peers`,
 `test_ownership_edges`) and the ops tools (`test_forward_ledgers`,
 `test_forward_eval`, `test_forward_register`, `test_alert_relay`,
 `test_deploy_check`). CI job assignment is in `.github/workflows/ci.yml`.
