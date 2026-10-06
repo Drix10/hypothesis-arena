@@ -58,6 +58,10 @@ cleanup.
 - [ ] Push `main` when ready: all work since `789851f` is local only.
 - [ ] Register `connected_drift` in the trial ledger once the live data checks
       below pass (`plan/validation.md`); the values are approved.
+- [ ] Customer coverage by year: with network and `MIRO_CONTACT` exported, run
+      `python3 research/strategy/customer_coverage_probe.py`; it writes
+      `research/reports/customer_coverage.json`. If `collapsed` is true,
+      `connected_drift` is registered without edge (a) (`plan/data.md`).
 - [ ] One live check, run from a normal shell: fetch one Ken French zip and one
       real 10-K through `french_factors.fetch` and `edgar_filings`, and look at
       units, headers and the section parser's output (see Unverified claims).
