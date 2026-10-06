@@ -103,6 +103,7 @@ jobs:
           PYTHONWARNINGS=error python3 research/tests/test_bar_loader.py
           PYTHONWARNINGS=error python3 research/tests/test_coverage_probe.py
           PYTHONWARNINGS=error python3 research/tests/test_customer_coverage_probe.py
+          PYTHONWARNINGS=error python3 research/tests/test_real_filing_probe.py
           PYTHONWARNINGS=error python3 research/tests/test_edgar_filings.py
           PYTHONWARNINGS=error python3 research/tests/test_end_events.py
           PYTHONWARNINGS=error python3 research/tests/test_etf_trend.py

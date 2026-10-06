@@ -173,7 +173,10 @@ Open:
       financial statement sets and the Form 4 reader.
   - [ ] A real-filing precision check of `filing_sections` (the last heading at a
         line start wins, so a late cross-reference can win) and of `form13f` on a
-        live information table.
+        live information table. Built (`research/strategy/real_filing_probe.py`);
+        waits on a human run with network:
+        `MIRO_CONTACT=<contact> python3 research/strategy/real_filing_probe.py`,
+        which writes `research/reports/real_filing_probe.json`.
   - [ ] Observation collectors for `ticker_map` (cover-page symbols, symbol-change
         corporate actions, Form 4 issuer symbols, former names) and event
         collectors for `last_trade` (Form 25, Form 15, 8-K items), so delisting
