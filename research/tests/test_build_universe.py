@@ -110,6 +110,9 @@ class BuildUniverseTest(unittest.TestCase):
         self.assertIn("SMALL", syms)
         self.assertFalse(m["filters"]["market_cap"])
         self.assertIsNone(m["counts"]["short_eligible"])
+        _, m = B.build(TICKERS, [{"cik": c} for c, *_ in FIRMS], AS_OF,
+                       reference={"market_cap": {}})
+        self.assertEqual(m["counts"]["short_eligible"], 0)
 
     def test_stale_bars_excluded(self):
         write_bars(self.dir, "MID", 20.0, 1_000_000, end="2026-08-01")

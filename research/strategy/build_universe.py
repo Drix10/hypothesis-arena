@@ -15,7 +15,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from research.strategy import customer_coverage_probe, issuer_symbols, sip_fetch
 from research.strategy.fetch_universe_bars import REQUIRED
 
-ETF_TREND = ("BIL", "IEF", "SPY", "VTI")
 MIN_PRICE = 5.0
 MIN_DOLLAR_VOLUME = 10e6
 MEDIAN_SESSIONS = 60
@@ -104,9 +103,9 @@ def build(tickers, filers, as_of, reference=None, bars_dir=None):
         keep = {s for s, v in liq.items() if v is not None
                 and v[0] >= MIN_PRICE and v[1] >= MIN_DOLLAR_VOLUME}
     counts["short_eligible"] = (
-        sum(caps[s] >= MIN_SHORT_CAP for s in keep) if caps else None)
+        sum(caps[s] >= MIN_SHORT_CAP for s in keep) if caps is not None else None)
     counts["stocks"] = len(keep)
-    symbols = sorted(keep | set(REQUIRED) | set(ETF_TREND))
+    symbols = sorted(keep | set(REQUIRED))
     manifest = {"as_of": as_of.isoformat(), "counts": counts,
                 "filters": {"market_cap": caps is not None,
                             "price_and_dollar_volume": bars_dir is not None},
