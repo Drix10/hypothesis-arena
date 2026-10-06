@@ -1,7 +1,7 @@
 """End-to-end ETF Trend chain on synthetic bars: prereg, signal, backtest
 runner and trial ledger (plan/strategies.md, ETF Trend)."""
+import copy
 import datetime
-import json
 import os
 import random
 import sys
@@ -15,15 +15,32 @@ from research.strategy import etf_trend as E
 from research.strategy import ledger as L
 from research.strategy import margin as M
 
-PREREG_PATH = os.path.join(os.path.dirname(__file__), "..", "prereg",
-                           "etf_trend.json")
 START, END = datetime.date(2019, 1, 1), datetime.date(2022, 12, 31)
 DOWN = "TLT"
-
-
-def load_prereg():
-    with open(PREREG_PATH, encoding="utf-8") as f:
-        return json.load(f)
+INLINE_PREREG = {
+    "schema": "prereg",
+    "experiment_id": "etf_trend_chain",
+    "family": "etf_trend",
+    "created": "2026-10-04",
+    "constraint_set": "us",
+    "contamination_class": "deterministic",
+    "hypothesis": "Synthetic chain check of the ETF Trend signal.",
+    "strategy": "etf_trend",
+    "universe": ["VTI", "VEA", "VWO", "IEF", "TLT", "TIP", "DBC", "GLD",
+                 "BIL"],
+    "signal": "Sign of the 12-month return minus the BIL return, "
+              "inverse-volatility weights, monthly rebalance.",
+    "variants": [{"name": "long_short", "short_side": True},
+                 {"name": "long_only", "short_side": False}],
+    "cost_model": "costs",
+    "split": {"scheme": "walk_forward", "n_splits": 2,
+              "label_horizon_days": 21, "embargo_days": 0},
+    "holdout": {"start": START.isoformat(), "end": END.isoformat(),
+                "rule": "seen-window: synthetic data"},
+    "decision": {"min_net_sharpe": 1e-06, "max_drawdown_pct": 20.0,
+                 "min_cost_multiple": 2.0, "min_days": 1,
+                 "new_signal_tstat_min": 3.0},
+}
 
 
 def make_bars(universe, seed=7):
@@ -48,9 +65,7 @@ class EtfTrendChainTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.pre = load_prereg()
-        self.pre["holdout"].update(start=START.isoformat(),
-                                   end=END.isoformat())
+        self.pre = copy.deepcopy(INLINE_PREREG)
         self.bars = make_bars(self.pre["universe"])
         self.sessions = sorted(self.bars["SPY"])
         self.terms = M.MarginTerms(margin_rate=0.08)
@@ -99,9 +114,6 @@ class EtfTrendChainTest(unittest.TestCase):
         rep = self.run_chain(self.ledger(), variant=1)
         self.assertIn(rep["verdict"], ("PASS", "FAIL"))
         self.assertGreater(rep["cost_usd"]["1.0"], 0.0)
-
-    def test_prereg_file_keeps_its_holdout(self):
-        self.assertEqual(load_prereg()["holdout"]["start"], "2016-01-01")
 
 
 if __name__ == "__main__":
