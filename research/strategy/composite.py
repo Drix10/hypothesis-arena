@@ -10,6 +10,12 @@ WINSOR = (0.01, 0.99)
 TAU_PROPOSED = 1.0  # proposed agreement-gate threshold in z units (strategies.md)
 MIN_SHORT_CAP = 1e9
 INSIDER_DAYS = 31
+SINGLE_NAME_CAP = 0.06  # of the book, plan/strategies.md Sizing
+NO_TRADE_BAND = 0.20
+BETA_CAP = 0.3
+TARGET_VOL = 0.10
+VOL_WINDOW = 63
+TRADING_DAYS = 252
 VETOES = ("distress", "no_borrow", "crowded", "forced_seller")
 
 
@@ -258,8 +264,9 @@ def short_vetoed(sym, data):
 
 def target(data, date, n_side, tau=TAU_PROPOSED, gross=1.0, exposure=1.0):
     """Signed weights: the `n_side` highest positive and lowest negative
-    composites, gated, shorts also vetoed, each at gross * clip(exposure, 0, 1)
-    / 2 / n_side. Dropped names are not replaced. Missing inputs give {}."""
+    composites, gated, shorts also vetoed, each side sums to gross * clip(exposure, 0, 1)
+    / 2 with weights proportional to |composite|. Dropped names are not
+    replaced. Missing inputs give {}."""
     if not data or n_side < 1 or not _finite(exposure):
         return {}
     comps = components(data, date)
@@ -270,15 +277,74 @@ def target(data, date, n_side, tau=TAU_PROPOSED, gross=1.0, exposure=1.0):
     ranked = sorted(s, key=lambda k: (-s[k], k))
     longs = [k for k in ranked[:n_side] if s[k] > 0]
     shorts = [k for k in ranked[::-1][:n_side] if s[k] < 0]
-    w = gross * min(max(exposure, 0.0), 1.0) / 2.0 / n_side
-    out = {}
+    side = gross * min(max(exposure, 0.0), 1.0) / 2.0
+    kept = []
     for k in longs + shorts:
         if not passes_gate([c.get(k, 0.0) for c in comps.values()], s[k], tau):
             continue
         if s[k] < 0 and short_vetoed(k, data):
             continue
-        out[k] = w if s[k] > 0 else -w
+        kept.append(k)
+    out = {}
+    for sign in (1, -1):
+        names = [k for k in kept if (s[k] > 0) == (sign > 0)]
+        tot = sum(abs(s[k]) for k in names)
+        for k in names:
+            out[k] = sign * side * abs(s[k]) / tot
     return out
+
+
+def cap_weights(w, cap=SINGLE_NAME_CAP):
+    """Each |weight| clipped to `cap`; the excess is not redistributed."""
+    return {s: min(max(x, -cap), cap) for s, x in w.items()}
+
+
+def net_beta(w, beta):
+    return sum(x * beta[s] for s, x in w.items())
+
+
+def beta_limit(w, beta, cap=BETA_CAP):
+    """Names without a finite point-in-time beta are dropped; when |net beta|
+    exceeds `cap` every weight is scaled by cap / |net beta|."""
+    w = {s: x for s, x in w.items() if _finite(beta.get(s))}
+    net = abs(net_beta(w, beta))
+    if net > cap:
+        w = {s: x * cap / net for s, x in w.items()}
+    return w
+
+
+def vol_scale(w, bars, date, target=TARGET_VOL, window=VOL_WINDOW):
+    """min(1, target / trailing annual volatility) of the book `w` held over
+    the last `window` SPY sessions to `date`; 0 (flat) when a session, a held
+    symbol's close or the volatility is missing. `bars[sym][d] = (open, close)`.
+    lean: realised volatility of today's weights, not the sector-shrunk EWMA
+    covariance of plan/math.md; upgrade with the covariance model."""
+    if not w:
+        return 1.0
+    try:
+        days = sorted(d for d in bars["SPY"] if d <= date)[-window - 1:]
+        if len(days) < window + 1 or days[-1] != date:
+            return 0.0
+        px = {s: [float(bars[s][d][1]) for d in days] for s in w}
+    except (KeyError, TypeError, ValueError, IndexError):
+        return 0.0
+    if not all(_finite(c) and c > 0 for v in px.values() for c in v):
+        return 0.0
+    rets = [sum(x * (px[s][i] / px[s][i - 1] - 1.0) for s, x in w.items())
+            for i in range(1, window + 1)]
+    mean = sum(rets) / window
+    vol = math.sqrt(sum((r - mean) ** 2 for r in rets) / (window - 1)
+                    * TRADING_DAYS)
+    if not vol > 0:
+        return 0.0
+    return min(1.0, target / vol)
+
+
+def no_trade_band(new, old, band=NO_TRADE_BAND):
+    """`new` with a held name's weight kept at its `old` value when the change
+    is under `band` of the old size; entries, exits and larger changes trade."""
+    return {s: old[s] if old.get(s) and abs(x - old[s]) < band * abs(old[s])
+            else x for s, x in new.items()}
 
 
 class CompositeTarget:

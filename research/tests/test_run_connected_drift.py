@@ -1,7 +1,7 @@
 """run_connected_drift on synthetic on-disk datasets: the dry run opens no
 trial, --register refuses before the ledger on missing data, a touched holdout,
-stale data, an unapproved prereg or an incomplete book, and the printed matrix
-is composite's."""
+stale data or an unapproved prereg, the Book applies its sizing rules, and
+the printed matrix is composite's."""
 import contextlib
 import datetime
 import io
@@ -29,6 +29,13 @@ INDUSTRY = {s: "AB"[i % 2] for i, s in enumerate(SYMS)}
 CAP = {s: 2e9 * (1 + (i * 5) % 13) for i, s in enumerate(SYMS)}
 BETA = {s: 0.8 + 0.05 * ((i * 7) % 11) for i, s in enumerate(SYMS)}
 CIKS = {"C%02d" % i: s for i, s in enumerate(SYMS)}
+
+
+def pit(values):
+    return {s: [{"known_at": "2015-01-01", "value": v}]
+            for s, v in values.items()}
+
+
 ROADMAP_OK = ("## Approvals log\n\n- Other. Approved in chat, 2026-10-02.\n"
               "- `connected_drift` registration values: gate 1.0.\n"
               "  Approved in chat, 2026-10-06.\n")
@@ -151,8 +158,8 @@ class RunnerTest(unittest.TestCase):
         write_bars(self.dir, CLOSES)
         filings, events = fixture_datasets()
         write_json(self.dir, "reference.json",
-                   {"ciks": CIKS, "industry": INDUSTRY, "market_cap": CAP,
-                    "beta": BETA})
+                   {"ciks": CIKS, "industry": INDUSTRY,
+                    "market_cap": pit(CAP), "beta": pit(BETA)})
         write_json(self.dir, "filing_scores.json", filings)
         write_json(self.dir, "form4_events.json", events)
         write_json(self.dir, "vetoes.json", {n: {} for n in C.VETOES})
@@ -198,12 +205,66 @@ class RunnerTest(unittest.TestCase):
         _, out, _ = self.run_cli()
         self.assertIn("2016-01-01..2018-06-30", out)
 
-    def test_register_refuses_incomplete_book(self):
-        code, _, err = self.register()
+    def test_book_is_complete(self):
+        self.assertEqual(R.INCOMPLETE, ())
+
+    def test_pit_inputs_use_latest_entry_strictly_before_date(self):
+        series = {"A": [{"known_at": "2016-01-31", "value": 1.0},
+                        {"known_at": "2016-03-31", "value": 2.0}],
+                  "B": [{"known_at": "2016-03-31", "value": 3.0}],
+                  "C": [{"known_at": "2016-01-01", "value": float("nan")}],
+                  "D": [{"value": 1.0}]}
+        got = R.Inputs._pit(series, "2016-03-31")
+        self.assertEqual(got, {"A": 1.0})
+
+    def test_missing_pit_market_cap_drops_symbol(self):
+        ref = {"ciks": CIKS, "industry": INDUSTRY,
+               "market_cap": pit({s: CAP[s] for s in SYMS[1:]}),
+               "beta": pit(BETA)}
+        bars = {s: {d: (c, c) for d, c in CLOSES[s].items()} for s in CLOSES}
+        inp = R.Inputs(bars, ref, link_store.LinkStore(
+            os.path.join(self.dir, "link_store.jsonl")), {}, [])
+        data = inp("2016-06-30")
+        self.assertNotIn(SYMS[0], data["market_cap"])
+        self.assertEqual(len(data["market_cap"]), len(SYMS) - 1)
+
+    def test_malformed_pit_reference_refused(self):
+        ref = {"ciks": CIKS, "industry": INDUSTRY, "market_cap": CAP,
+               "beta": pit(BETA)}
+        write_json(self.dir, "reference.json", ref)
+        code, _, err = self.run_cli()
         self.assertEqual(code, 1)
-        self.assertIn("book-incomplete:single-name cap 6%", err)
-        self.assertIn("point-in-time market_cap and beta", err)
-        self.assertFalse(os.path.exists(self.ledger))
+        self.assertIn("dataset-malformed:reference.json", err)
+
+    def test_book_applies_cap_beta_vol_and_band(self):
+        bars = {s: {d: (c, c) for d, c in CLOSES[s].items()} for s in CLOSES}
+        sessions = sorted(bars["SPY"])
+        longs, shorts = SYMS[:3], SYMS[3:6]
+
+        class Fixed:
+            def __init__(self, beta):
+                self.beta, self.ref = beta, {}
+
+            def betas(self, date):
+                return self.beta
+
+            def __call__(self, date):
+                return {}
+
+        beta = {s: 1.0 for s in SYMS}
+        book = R.Book(sessions, bars, Fixed(beta))
+        raw = {longs[0]: 0.5, longs[1]: 0.2, longs[2]: 0.1,
+               shorts[0]: -0.2, shorts[1]: -0.2, shorts[2]: -0.2}
+        book.tranches = lambda date, closes: dict(raw)
+        d = "2018-03-29"
+        w = book(d, {})
+        self.assertLessEqual(max(abs(x) for x in w.values()),
+                             C.SINGLE_NAME_CAP + 1e-12)
+        self.assertLessEqual(abs(C.net_beta(w, beta)), C.BETA_CAP + 1e-9)
+        first = dict(w)
+        raw[longs[1]] = 0.2 * 1.05
+        book.prev = None
+        self.assertEqual(book(d, {})[longs[1]], first[longs[1]])
 
     def test_register_refuses_on_missing_data(self):
         os.remove(os.path.join(self.dir, "form4_events.json"))

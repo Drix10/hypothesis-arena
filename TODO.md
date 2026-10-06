@@ -201,13 +201,13 @@ Open:
       count; the runner `strategy/run_connected_drift.py` (tested on fixtures in
       `test_run_connected_drift`) prints them with the same dry-run command, then
       registers with `--register --margin-rate <rate>`, which refuses on a
-      touched holdout, missing or stale data, an unapproved prereg or an
-      incomplete book. Waits on the real datasets it reads (bars, link store,
-      filing scores, Form 4 events, reference and veto data) and, for
-      registration, on the book items in its `INCOMPLETE`: the 6% single-name
-      cap, 20% no-trade band, 10% volatility target, score-proportional sizing,
-      0.3 beta cap and point-in-time market cap and beta. The four older drafts under `research/prereg/`
-      are removed in the cleanup.
+      touched holdout, missing or stale data or an unapproved prereg. The book
+      is built: score-proportional sizing, 6% single-name cap, 0.3 beta cap,
+      10% volatility target and 20% no-trade band (`composite.py`, `Book`), with
+      market cap and beta read point in time from `reference.json`. Waits on the
+      real datasets it reads (bars, link store, filing scores, Form 4 events,
+      reference with dated market cap and beta, and veto data). The four older
+      drafts under `research/prereg/` are removed in the cleanup.
 - [ ] **News co-mentions:** `sources/gdelt_gkg.py` parses GKG 2.1, resolves
       names by exact match and reports the resolution rate, on fixtures only.
       Left: a daily GKG downloader, a legal-name and former-name table, a

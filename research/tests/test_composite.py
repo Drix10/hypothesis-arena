@@ -170,6 +170,56 @@ class TestComposite(unittest.TestCase):
             {k: 0.0 for k in w})
 
 
+class TestSizing(unittest.TestCase):
+    def test_weights_proportional_to_score(self):
+        d = data()
+        w = C.target(d, DATE, 4, tau=1e9)
+        comps = C.components(d, DATE)
+        s = C.composite(comps, C._universe(d))
+        longs = [k for k, v in w.items() if v > 0]
+        self.assertAlmostEqual(sum(w[k] for k in longs), 0.5)
+        for a, b in zip(longs, longs[1:]):
+            self.assertAlmostEqual(w[a] / w[b], s[a] / s[b])
+
+    def test_cap_binds(self):
+        w = C.cap_weights({"A": 0.2, "B": -0.2, "C": 0.03})
+        self.assertEqual(w, {"A": 0.06, "B": -0.06, "C": 0.03})
+
+    def test_band_skips_small_changes(self):
+        old = {"A": 0.04, "B": -0.04, "C": 0.04}
+        new = {"A": 0.04 * 1.19, "B": -0.04 * 1.21, "C": 0.0, "D": 0.01}
+        got = C.no_trade_band(new, old)
+        self.assertEqual(got["A"], 0.04)
+        self.assertEqual(got["B"], new["B"])
+        self.assertEqual(got["C"], 0.0)
+        self.assertEqual(got["D"], 0.01)
+
+    def test_beta_cap_holds_and_missing_beta_drops(self):
+        beta = {"A": 1.5, "B": 0.5, "C": 1.0}
+        w = {"A": 0.2, "B": -0.05, "C": 0.2, "X": 0.05}
+        out = C.beta_limit(w, beta)
+        self.assertNotIn("X", out)
+        self.assertAlmostEqual(abs(C.net_beta(out, beta)), C.BETA_CAP)
+        small = {"A": 0.05, "B": -0.1}
+        self.assertEqual(C.beta_limit(small, beta), small)
+
+    def test_vol_target_scales_and_fails_closed(self):
+        days = ["2024-01-%02d" % (i + 1) for i in range(30)]
+        bars = {"SPY": {d: (1.0, 1.0) for d in days}, "A": {}}
+        px = 100.0
+        for i, d in enumerate(days):
+            px *= 1.02 if i % 2 else 0.98
+            bars["A"][d] = (px, px)
+        w = {"A": 1.0}
+        k = C.vol_scale(w, bars, days[-1], window=20)
+        self.assertLess(k, 1.0)
+        calm = {"SPY": bars["SPY"],
+                "A": {d: (100 + i * 1e-4,) * 2 for i, d in enumerate(days)}}
+        self.assertEqual(C.vol_scale(w, calm, days[-1], window=20), 1.0)
+        self.assertEqual(C.vol_scale(w, bars, days[-1], window=40), 0.0)
+        self.assertEqual(C.vol_scale({"Z": 1.0}, bars, days[-1], window=20), 0.0)
+
+
 class TestCorrelation(unittest.TestCase):
     def test_identical_components_count_one(self):
         a = [1.0, -2.0, 0.5, 3.0, -1.0]
