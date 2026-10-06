@@ -1,4 +1,4 @@
-"""ETF Trend signal (plan/strategies.md, research/prereg/etf_trend.json): the
+"""ETF Trend signal (plan/strategies.md): the
 sign of the 12-month return minus the cash leg, inverse-volatility weights
 scaled to a portfolio volatility target. Target for portfolio.run(margin=...).
 exposure_scale turns the same trend state into the gross multiplier of the

@@ -37,8 +37,6 @@ HISTORY_START = "2016-01-01T00:00:00Z"
 CASH0 = 100000.0
 SIP_DELAY_MIN = 16
 TOL = 0.002  # whole-share rounding moves a replay by a few bp; look-ahead moves it far more
-ROOT = os.path.join(os.path.dirname(__file__), "..")
-PREREG = os.path.join(ROOT, "research", "prereg")
 
 CORE_WEIGHTS = {"VTI": 0.6, "IEF": 0.4}
 

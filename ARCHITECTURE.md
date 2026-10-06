@@ -248,7 +248,7 @@ Suites for the engine (`test_engine`, `test_hardening`, `test_emit`,
 sources, each adapter, the harness (`test_stats`, `test_ledger`, `test_gates`,
 `test_costs`, `test_settlement`, `test_portfolio`, `test_prereg`,
 `test_candidate_wire`, `test_passive_core`, `test_tranches`, `test_placebo`,
-`test_universe`, `test_etf_trend`, `test_etf_trend_prereg`, `test_etf_trend_chain`,
+`test_universe`, `test_etf_trend`, `test_etf_trend_chain`,
 `test_composite`, `test_text_change`, `test_connected_drift_prereg`,
 `test_connected_drift_chain`, `test_bar_loader`, `test_backtest`), the event data
 modules (`test_form4`, `test_earnings_surprise`, `test_french_factors`,
