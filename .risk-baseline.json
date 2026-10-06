@@ -1,6 +1,6 @@
 {
   "version": "2",
-  "lastScan": "2026-10-06T11:21:17.128Z",
+  "lastScan": "2026-10-06T13:23:20.995Z",
   "surfaces": [
     {
       "key": "auth:research/engine/workers.py",
@@ -209,8 +209,8 @@
       "path": "research/sources/edgar.py",
       "detail": "data-mutation pattern",
       "lines": [
-        379,
-        645
+        377,
+        643
       ],
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
@@ -413,6 +413,18 @@
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
     {
+      "key": "external-api:research/sandbox/alpaca_short_probe.py",
+      "type": "external-api",
+      "path": "research/sandbox/alpaca_short_probe.py",
+      "detail": "external-api pattern",
+      "lines": [
+        18,
+        38,
+        43
+      ],
+      "firstSeen": "2026-10-06T13:23:20.565Z"
+    },
+    {
       "key": "external-api:research/sandbox/bea_probe.py",
       "type": "external-api",
       "path": "research/sandbox/bea_probe.py",
@@ -501,8 +513,8 @@
       "detail": "external-api pattern",
       "lines": [
         20,
-        164,
-        166
+        162,
+        164
       ],
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
@@ -563,8 +575,8 @@
       "detail": "external-api pattern",
       "lines": [
         13,
-        137,
-        138
+        149,
+        150
       ],
       "firstSeen": "2026-10-06T11:21:16.469Z"
     },
