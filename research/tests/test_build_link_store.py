@@ -195,6 +195,34 @@ class BuildLinkStoreTest(unittest.TestCase):
                          [("0000000002", 0.5), ("0000000003", 0.5)])
         self.assertEqual(own(20240516, 20240216)[0]["weight"], 1.0)
 
+    def test_late_filer_for_an_earlier_period_keeps_known_time_order(self):
+        # fund 12 reports Q2 2024 on 2024-08-10; fund 13 reports Q4 2023 late,
+        # on 2024-08-20, after the Q1 and Q2 filings
+        late = [f13(12, "0000000012-24-000003", "2024-08-10", "06-30-2024",
+                    [("BETA CORP", "222222222", 500),
+                     ("GAMMA HOLDINGS", "333333333", 500)]),
+                f13(13, "0000000013-24-000001", "2024-08-20", "12-31-2023",
+                    HOLD)]
+        self.net.pages[ccp.INDEX_URL.format(2024, 3)] = "\n".join(
+            f["idx"] for f in late).encode()
+        for f in late:
+            self.net.pages.update({k: v for k, v in f.items() if k != "idx"})
+        self.build()
+        own = [r for r in self.store().rows() if r["source"] == "ownership"]
+        known = [r["known_at"] for r in own]
+        self.assertEqual(known, sorted(known))
+        self.assertTrue(all(r["valid_to"] is None
+                            or r["valid_to"] > r["valid_from"] for r in own))
+        # the late filing is invisible before it was made
+        self.assertEqual(
+            [(e["dst_cik"], e["weight"]) for e in self.store().edges(
+                20240520, 20240520) if e["source"] == "ownership"],
+            [("0000000002", 0.5), ("0000000003", 0.5)])
+        after = {(e["src_cik"], e["dst_cik"]) for e in self.store().edges(
+            20240821, 20240821) if e["source"] == "ownership"}
+        self.assertIn(("0000000002", "0000000003"), after)
+        self.assertIn(("0000000001", "0000000002"), after)
+
     def test_collapsed_coverage_skips_source_a(self):
         write_report(self.report, True)
         rep = self.build()

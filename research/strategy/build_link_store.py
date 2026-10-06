@@ -147,18 +147,21 @@ def issuer_map(rows, aliases, observations):
 
 
 def ownership_rows(rows, issuers):
-    """Common-ownership rows, one snapshot per period of report taken at the
-    last filing date among that period's filings."""
-    at_by_period = {}
+    """Common-ownership rows, one snapshot per calendar quarter of filing taken
+    at that quarter's last filing date, so snapshots run in known-time order
+    whatever period a late filer reports. A new edge is known at its snapshot:
+    whether it clears the threshold depends on every filing made by then."""
+    at_by_quarter = {}
     for r in rows:
-        at_by_period[r["period"]] = max(at_by_period.get(r["period"], ""),
-                                        r["filing_date"])
+        d = r["filing_date"]
+        q = (d[:4], (int(d[5:7]) - 1) // 3)
+        at_by_quarter[q] = max(at_by_quarter.get(q, ""), d)
     out, open_edges = [], {}
-    for period in sorted(at_by_period):
-        as_of = at_by_period[period]
-        out += diff(open_edges,
-                    ownership_edges.ownership_edges(rows, issuers, as_of),
-                    _day(as_of))
+    for as_of in sorted(at_by_quarter.values()):
+        at = _day(as_of)
+        snap = [dict(e, known_at=at) for e in
+                ownership_edges.ownership_edges(rows, issuers, as_of)]
+        out += diff(open_edges, snap, at)
     return out
 
 
@@ -211,13 +214,12 @@ def filing_rows(sec, filing, cache_dir):
     try:
         items = json.loads(sec.get(rfp.FOLDER_URL % (filing["cik"], folder))
                            )["directory"]["item"]
-        names = [i["name"] for i in items if i["name"].lower().endswith(".xml")
-                 and i["name"].lower() != "primary_doc.xml"]
-        if names:
+        name = rfp.table_name(items)
+        if name:
             period = _period(sec.get(rfp.TABLE_URL % (
                 filing["cik"], folder, "primary_doc.xml")))
             rows = form13f.parse_information_table(
-                sec.get(rfp.TABLE_URL % (filing["cik"], folder, names[0])),
+                sec.get(rfp.TABLE_URL % (filing["cik"], folder, name)),
                 filing["cik"], period, filing["date"])
     except edgar_filings.FilingError:
         return [], "failed"
