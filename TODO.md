@@ -215,7 +215,7 @@ Open:
       names by exact match and reports the resolution rate, on fixtures only.
       Left: a daily GKG downloader, a legal-name and former-name table, a
       measured resolution rate on real files, news edges into the link store,
-      and the news variant (the third selectable variant, `plan/strategies.md`).
+      and the news variant (a later registration, `plan/strategies.md`).
 - Parked (`plan/roadmap.md`, Parked), not built before the review: Event
   Ripple and its event pipeline, engine reasoning, the Link Momentum model
   variant and the X corroboration test.
