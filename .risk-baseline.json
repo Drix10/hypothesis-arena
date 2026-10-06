@@ -1,6 +1,6 @@
 {
   "version": "2",
-  "lastScan": "2026-10-06T05:51:15.094Z",
+  "lastScan": "2026-10-06T11:21:17.128Z",
   "surfaces": [
     {
       "key": "auth:research/engine/workers.py",
@@ -555,6 +555,18 @@
         289
       ],
       "firstSeen": "2026-10-06T05:51:14.579Z"
+    },
+    {
+      "key": "external-api:research/strategy/customer_coverage_probe.py",
+      "type": "external-api",
+      "path": "research/strategy/customer_coverage_probe.py",
+      "detail": "external-api pattern",
+      "lines": [
+        13,
+        137,
+        138
+      ],
+      "firstSeen": "2026-10-06T11:21:16.469Z"
     },
     {
       "key": "external-api:research/strategy/sec_financial_statements.py",
