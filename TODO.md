@@ -177,17 +177,14 @@ Open:
       (deterministic, dense); customer and supplier patterns with a precision
       audit (200 labeled filings, at least 0.9), knowing that 10-K disclosure
       covers only large customers.
-- [ ] **Text-change signal:** section-level Item 1A and MD&A similarity
-      (`plan/math.md`, Text change); not built.
-- [ ] **Customer and supplier extractor:** an EDGAR coverage check by year first;
-      if post-2020 coverage collapses, register without edge (a). Not built.
-- [ ] **Opportunistic flag on the Form 4 events:** `strategy/form4.py` classifies
-      routine trades; the flag and entry timestamps are not built.
-- [ ] **Composite builder:** residualization, the equal-weight composite, the
-      agreement gate and the vetoes (`plan/strategies.md`); not built.
-- [ ] **`connected_drift` pre-registration and backtest gate:** the first output
-      is the component correlation matrix and the effective signal count. The
-      four older drafts under `research/prereg/` are replaced by one.
+- [x] **Text-change, customer and supplier extractor, opportunistic flag,
+      composite builder and the `connected_drift` pre-registration draft:** built
+      on fixtures, with a synthetic chain test (`test_connected_drift_chain`).
+      Waits on: the operator's answers to the draft's `open_questions`, an EDGAR
+      coverage check by year for the customer extractor, and real data. The first
+      backtest output is the component correlation matrix and effective signal
+      count. The four older drafts under `research/prereg/` are removed in the
+      cleanup.
 - [ ] **News co-mentions:** `sources/gdelt_gkg.py` parses GKG 2.1, resolves
       names by exact match and reports the resolution rate, on fixtures only.
       Left: a daily GKG downloader, a legal-name and former-name table, a

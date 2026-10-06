@@ -224,9 +224,8 @@ loaded twice.
 Records: `prereg/` (preregistrations), `ledger/` (the trial ledger and its
 checkpoint), `reports/` (backtest gate reports), `lessons/lessons.jsonl` and
 `requirements.txt` (pinned engine deps). `ledger/` and `reports/` start empty;
-`prereg/` holds drafts (`etf_trend`, `link_momentum`, `filing_change`,
-`insider_opportunistic`), each with an `open_questions` list that the operator
-answers before it is registered.
+`prereg/` holds drafts (`etf_trend` and `connected_drift`), each with an
+`open_questions` list that the operator answers before it is registered.
 
 Not yet wired: `backtest` has only run on synthetic bars (the chain test); no real
 SIP datasets are on disk for `bar_loader` to read, `composite` has run only on
@@ -250,9 +249,8 @@ sources, each adapter, the harness (`test_stats`, `test_ledger`, `test_gates`,
 `test_costs`, `test_settlement`, `test_portfolio`, `test_prereg`,
 `test_candidate_wire`, `test_passive_core`, `test_tranches`, `test_placebo`,
 `test_universe`, `test_etf_trend`, `test_etf_trend_prereg`, `test_etf_trend_chain`,
-`test_composite`, `test_text_change`,
-`test_link_momentum_prereg`, `test_filing_change_prereg`,
-`test_insider_opportunistic_prereg`, `test_bar_loader`, `test_backtest`), the event data
+`test_composite`, `test_text_change`, `test_connected_drift_prereg`,
+`test_connected_drift_chain`, `test_bar_loader`, `test_backtest`), the event data
 modules (`test_form4`, `test_earnings_surprise`, `test_french_factors`,
 `test_ticker_map`, `test_ticker_observations`, `test_shares_outstanding`,
 `test_form13f`, `test_last_trade`, `test_end_events`, `test_filing_sections`,
