@@ -186,6 +186,14 @@ Open:
         waits on a human run with network:
         `MIRO_CONTACT=<contact> python3 research/strategy/real_filing_probe.py`,
         which writes `research/reports/real_filing_probe.json`.
+  - [ ] Filing text-change dataset. Built (`research/strategy/build_filing_scores.py`,
+        fixtures only); waits on a human run with network and `reference.json` on
+        disk: `MIRO_CONTACT=<contact> python3 research/strategy/build_filing_scores.py`,
+        which caches filings under `research/data/filings` (rerun to resume) and
+        writes `research/data/filing_scores.json`. 10-K only; a run with any fetch
+        failure exits 1 and keeps the previous rows of the failed symbols.
+  - [ ] 10-Q scoring waits on a 10-Q layout in `research/sources/filing_sections.py`
+        (Part I Item 2 as MD&A, Part II Item 1A); a separate slice.
   - [ ] Observation collectors for `ticker_map` (cover-page symbols, symbol-change
         corporate actions, Form 4 issuer symbols, former names) and event
         collectors for `last_trade` (Form 25, Form 15, 8-K items), so delisting
