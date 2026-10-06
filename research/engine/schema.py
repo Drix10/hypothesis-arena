@@ -9,24 +9,11 @@ import json
 SCHEMA_VERSION = "1"
 MAX_FEATURES = 64
 
-# Bundle envelope keys (BUNDLE_REQUIRED + BUNDLE_OPTIONAL in ctx_read).
-BUNDLE_KEYS = ("schema_version", "research_epoch", "bundle_id", "commit",
-               "watermarks", "features")
-BUNDLE_OPTIONAL_KEYS = ("history",)
-
-# Feature-level keys (required + optional in ctx_read).
-FEATURE_REQUIRED = ("schema_version", "kind", "symbols", "value", "effect",
-                    "evidence", "confidence_bucket", "source_id",
-                    "canonical_hash", "observed_at_ns", "ttl_s")
-FEATURE_OPTIONAL = ("feature_id", "canonical_hashes", "entity_ref",
-                    "ingested_at_ns", "provenance_url")
-
 KINDS = ("filing_event", "macro_release", "calendar_ahead", "osint_event",
          "sentiment_tail", "regime_hint")
 EFFECTS = ("bullish", "bearish", "risk_up", "risk_down", "neutral",
            "unknown")
 EVIDENCE = ("source", "derived", "inference")
-CONFIDENCE = ("low", "medium", "high")
 VTYPES = ("enum", "bucket", "bool", "count")
 
 # Fixed emitter registry mirror (kind must be emittable by source_id).

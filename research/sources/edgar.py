@@ -21,7 +21,6 @@ import urllib.request
 
 SOURCE_ID = "edgar_8k"
 KIND = "filing_event"
-SCHEMA_KINDS = ("filing_event",)  # fixed schema.py mirror (subset we emit)
 
 UA_BASE = "MiroHedge/phase0"
 
@@ -48,7 +47,6 @@ TTL_S = 900  #: EDGAR stale after 15 min -> features expire
 HEARTBEAT_VERSION = 1
 HEARTBEAT_MAX_BYTES = 65536
 
-DAY_NS = 86400 * 1000000000
 SKEW_ALLOW_S = 300
 
 _HB_KEYS = frozenset(("version", "ts", "cadence_s", "ttl_s",

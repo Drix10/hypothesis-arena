@@ -88,7 +88,6 @@ HISTORY_ENTRIES_MAX = 256
 THESIS_CHARS_MAX = 500  # fixed thesis: reject, never truncate
 CRITIQUE_CHARS_MAX = 2000
 CANDIDATE_BYTES_MAX = 16384
-MODEL_PROMPT_BYTES_MAX = 32768
 # producer-iteration ceiling: a harvest/fuse iterable yielding beyond
 # limit+ceiling stops with producer_overrun=True and a lower-bound count
 PRODUCER_CEILING = 10000

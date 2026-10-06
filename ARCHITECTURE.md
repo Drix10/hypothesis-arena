@@ -211,8 +211,7 @@ loaded twice.
   `component_correlation` with `effective_signal_count`).
 - Backtest data: `bar_loader` (verified on-disk SIP datasets into
   `prices[sym][date] = (open, close)`; `benchmark_symbols` adds SPY and IEF).
-- Market data: `sip_fetch` (SIP datasets with manifests; `load_alpaca_env`) and
-  `bulk_bars` (throttled many-symbol fetch).
+- Market data: `sip_fetch` (SIP datasets with manifests; `load_alpaca_env`).
 - Event data: `form4` (insider filings, the routine-trade classifier and the
   opportunistic flag with entry times), `issuer_symbols` (cik to symbol lookups;
   `read_symbols` feeds the coverage probe) and
