@@ -157,6 +157,9 @@ Open:
   - [ ] Verify on Alpaca's docs and the paper account: shorting on paper, the
         `shortable` and `easy_to_borrow` flags, fractional shorts, the paper
         balance setting.
+        Probe built (`research/sandbox/alpaca_short_probe.py`); a human runs it
+        on the paper account: `ALPACA_KEY_ID=... ALPACA_SECRET=... python3
+        research/sandbox/alpaca_short_probe.py --out research/reports/alpaca_short.json`.
 - [ ] **ETF Trend scaler:** the signal (`strategy/etf_trend.py`), the runner
       (`strategy/backtest.py`) and the bar loader (`strategy/bar_loader.py`) are
       built on synthetic data. Left: a continuous, rate-capped exposure input to

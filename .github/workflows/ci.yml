@@ -97,6 +97,7 @@ jobs:
           PYTHONWARNINGS=error python3 research/tests/test_forward_eval.py
           PYTHONWARNINGS=error python3 research/tests/test_forward_register.py
           PYTHONWARNINGS=error python3 research/tests/test_alert_relay.py
+          PYTHONWARNINGS=error python3 research/tests/test_alpaca_short_probe.py
           PYTHONWARNINGS=error python3 research/tests/test_deploy_check.py
           PYTHONWARNINGS=error python3 research/tests/test_backtest.py
           PYTHONWARNINGS=error python3 research/tests/test_bar_loader.py
