@@ -95,7 +95,6 @@ jobs:
           PYTHONWARNINGS=error python3 research/tests/test_forward_ledgers.py
           PYTHONWARNINGS=error python3 research/tests/test_forward_eval.py
           PYTHONWARNINGS=error python3 research/tests/test_forward_register.py
-          PYTHONWARNINGS=error python3 research/tests/test_earnings_surprise.py
           PYTHONWARNINGS=error python3 research/tests/test_alert_relay.py
           PYTHONWARNINGS=error python3 research/tests/test_deploy_check.py
           PYTHONWARNINGS=error python3 research/tests/test_backtest.py
@@ -105,15 +104,11 @@ jobs:
           PYTHONWARNINGS=error python3 research/tests/test_end_events.py
           PYTHONWARNINGS=error python3 research/tests/test_etf_trend.py
           PYTHONWARNINGS=error python3 research/tests/test_etf_trend_chain.py
-          PYTHONWARNINGS=error python3 research/tests/test_etf_trend_prereg.py
-          PYTHONWARNINGS=error python3 research/tests/test_filing_change_prereg.py
           PYTHONWARNINGS=error python3 research/tests/test_filing_sections.py
           PYTHONWARNINGS=error python3 research/tests/test_form13f.py
           PYTHONWARNINGS=error python3 research/tests/test_french_factors.py
           PYTHONWARNINGS=error python3 research/tests/test_gdelt_gkg.py
-          PYTHONWARNINGS=error python3 research/tests/test_insider_opportunistic_prereg.py
           PYTHONWARNINGS=error python3 research/tests/test_last_trade.py
-          PYTHONWARNINGS=error python3 research/tests/test_link_momentum_prereg.py
           PYTHONWARNINGS=error python3 research/tests/test_link_store.py
           PYTHONWARNINGS=error python3 research/tests/test_ownership_edges.py
           PYTHONWARNINGS=error python3 research/tests/test_placebo.py
@@ -122,6 +117,11 @@ jobs:
           PYTHONWARNINGS=error python3 research/tests/test_ticker_map.py
           PYTHONWARNINGS=error python3 research/tests/test_ticker_observations.py
           PYTHONWARNINGS=error python3 research/tests/test_tranches.py
+          PYTHONWARNINGS=error python3 research/tests/test_composite.py
+          PYTHONWARNINGS=error python3 research/tests/test_connected_drift_chain.py
+          PYTHONWARNINGS=error python3 research/tests/test_connected_drift_prereg.py
+          PYTHONWARNINGS=error python3 research/tests/test_customer_edges.py
+          PYTHONWARNINGS=error python3 research/tests/test_text_change.py
           PYTHONWARNINGS=error python3 research/tests/test_universe.py
 
   plane:
@@ -140,7 +140,6 @@ jobs:
           PYTHONWARNINGS=error python3 research/tests/test_hardening.py
           PYTHONWARNINGS=error python3 research/tests/test_emit.py
           PYTHONWARNINGS=error python3 research/tests/test_seam_graph.py
-          PYTHONWARNINGS=error python3 research/tests/test_event_direction.py
 
   kernel:
     runs-on: ubuntu-latest

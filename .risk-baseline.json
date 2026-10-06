@@ -1,6 +1,6 @@
 {
   "version": "2",
-  "lastScan": "2026-10-03T06:38:39.346Z",
+  "lastScan": "2026-10-06T05:51:15.094Z",
   "surfaces": [
     {
       "key": "auth:research/engine/workers.py",
@@ -99,11 +99,11 @@
       "path": "research/engine/attribution.py",
       "detail": "data-mutation pattern",
       "lines": [
-        204,
-        871,
-        939,
-        1123,
-        1142
+        203,
+        870,
+        938,
+        1122,
+        1141
       ],
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
@@ -149,7 +149,7 @@
       "path": "research/engine/source_seam.py",
       "detail": "data-mutation pattern",
       "lines": [
-        292
+        290
       ],
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
@@ -159,7 +159,7 @@
       "path": "research/engine/spend.py",
       "detail": "data-mutation pattern",
       "lines": [
-        697
+        696
       ],
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
@@ -209,8 +209,8 @@
       "path": "research/sources/edgar.py",
       "detail": "data-mutation pattern",
       "lines": [
-        380,
-        646
+        379,
+        645
       ],
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
@@ -483,6 +483,18 @@
       "firstSeen": "2026-10-01T14:24:26.745Z"
     },
     {
+      "key": "external-api:research/sources/edgar_filings.py",
+      "type": "external-api",
+      "path": "research/sources/edgar_filings.py",
+      "detail": "external-api pattern",
+      "lines": [
+        13,
+        67,
+        69
+      ],
+      "firstSeen": "2026-10-06T05:51:14.579Z"
+    },
+    {
       "key": "external-api:research/sources/edgar.py",
       "type": "external-api",
       "path": "research/sources/edgar.py",
@@ -529,6 +541,20 @@
         108
       ],
       "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:research/strategy/coverage_probe.py",
+      "type": "external-api",
+      "path": "research/strategy/coverage_probe.py",
+      "detail": "external-api pattern",
+      "lines": [
+        243,
+        258,
+        259,
+        286,
+        289
+      ],
+      "firstSeen": "2026-10-06T05:51:14.579Z"
     },
     {
       "key": "external-api:research/strategy/sec_financial_statements.py",
