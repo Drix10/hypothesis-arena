@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from research.engine import customer_edges
 from research.sources import edgar_filings, ticker_map
 
-N_PER_YEAR, SEED = 10, 1
+N_PER_YEAR, SEED = 30, 1
 YEARS = tuple(range(2016, 2026))
 PRE_YEARS, POST_YEARS = (2016, 2019), (2021, 2025)
 COLLAPSE_RATIO = 0.5  # lean: judgment threshold, the plan names no number
