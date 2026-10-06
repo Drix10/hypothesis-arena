@@ -194,7 +194,15 @@ Open:
 - [ ] **Link graph:** a bitemporal store; text peers and common ownership first
       (deterministic, dense); customer and supplier patterns with a precision
       audit (200 labeled filings, at least 0.9), knowing that 10-K disclosure
-      covers only large customers.
+      covers only large customers. The store builder
+      (`research/strategy/build_link_store.py`) is built and tested on
+      fixtures. Waits on a human run with network, after the 10-K corpus is in
+      `research/data/filings` and `research/reports/customer_coverage.json`
+      exists (it skips source (a) when `collapsed` is true):
+      `MIRO_CONTACT=<contact> python3 research/strategy/build_link_store.py
+      --first-year 2013 --last-year 2025`, which writes
+      `research/data/link_store.jsonl` and prints the sources used; rerun to
+      resume from the 13F cache in `research/data/form13f`.
 - [x] **Text-change, customer and supplier extractor, opportunistic flag,
       composite builder and the `connected_drift` pre-registration draft:** built
       on fixtures, with a synthetic chain test (`test_connected_drift_chain`).
