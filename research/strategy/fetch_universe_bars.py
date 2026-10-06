@@ -10,9 +10,9 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from research.strategy import bulk_bars, passive_core, sip_fetch
+from research.strategy import bulk_bars, sip_fetch
 
-REQUIRED = tuple(sorted({"SPY", "VTI", "IEF", "BIL"} | set(passive_core.SYMBOLS)))
+REQUIRED = ("BIL", "IEF", "SPY", "VTI")
 ADJUSTMENT = "split"
 STALE_DAYS = 7  # matches run_connected_drift.STALE_DAYS
 BARS_PER_PAGE = 10000
@@ -32,11 +32,13 @@ def _day(s):
 
 
 def window(start, end, now):
-    """(start, end) ISO timestamps; the end is capped at the SIP delay."""
+    """(start, end) ISO timestamps; the end is capped at the SIP delay and at
+    today's UTC midnight, so only completed sessions are stored."""
     cap = now - sip_fetch.DELAY - datetime.timedelta(minutes=5)
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
     stop = datetime.datetime.combine(_day(end) + datetime.timedelta(days=1),
                                      datetime.time(), datetime.timezone.utc)
-    stop = min(stop, cap)
+    stop = min(stop, cap, midnight)
     return start + "T00:00:00Z", stop.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -62,10 +64,22 @@ def estimate(todo, start, end):
     return n, n * bulk_bars.MIN_INTERVAL_S / 60
 
 
-def _drop_stale(outdir, sym):
+def _set_aside(outdir, sym):
+    """Move a stale manifest aside so fetch_all, which skips any dataset that
+    still verifies, refetches it."""
     _, man = sip_fetch.dataset_paths(outdir, sym, "bars", "1Day", ADJUSTMENT)
     if os.path.exists(man):
-        os.remove(man)  # fetch_all skips any dataset that still verifies
+        os.replace(man, man + ".stale")
+
+
+def _settle(outdir, sym, ok):
+    """Restore the stale manifest after a failed refetch, else delete it."""
+    _, man = sip_fetch.dataset_paths(outdir, sym, "bars", "1Day", ADJUSTMENT)
+    if os.path.exists(man + ".stale"):
+        if ok:
+            os.remove(man + ".stale")
+        else:
+            os.replace(man + ".stale", man)
 
 
 def main(argv=None, env=None, now=None, log=print, **fetch_kw):
@@ -95,11 +109,14 @@ def main(argv=None, env=None, now=None, log=print, **fetch_kw):
         log("ALPACA_KEY_ID and ALPACA_SECRET must be exported")
         return 2
     for s in todo:
-        _drop_stale(a.out, s)
+        _set_aside(a.out, s)
     done, failed = bulk_bars.fetch_all(
         todo, ADJUSTMENT, a.out, start_ts, end_ts, log=log, load_env=False,
         headers={"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret},
         now=now, **fetch_kw)
+    bad = {s for s, _ in failed}
+    for s in todo:
+        _settle(a.out, s, s not in bad)
     log(json.dumps({"fetched": done, "failed": failed}))
     return 1 if failed else 0
 

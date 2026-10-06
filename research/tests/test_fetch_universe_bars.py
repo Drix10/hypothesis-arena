@@ -73,6 +73,27 @@ class FetchUniverseTest(unittest.TestCase):
                http_get=t)
         self.assertEqual(len(t.calls), 5)
 
+    def test_end_excludes_unfinished_session(self):
+        _, end = F.window("2026-01-01", "2026-09-28", NOW)
+        self.assertEqual(end, "2026-09-28T00:00:00Z")
+
+    def test_failed_refetch_keeps_stale_dataset(self):
+        self.run_cli("--yes", transport=Transport())
+
+        def broken(url, headers):
+            raise OSError("down")
+        sleep = F.bulk_bars.time.sleep
+        F.bulk_bars.time.sleep = lambda s: None
+        self.addCleanup(setattr, F.bulk_bars.time, "sleep", sleep)
+        rc = F.main([self.syms, "--start", "2026-01-01", "--out", self.out,
+                     "--yes", "--end", "2026-10-28"], env=ENV,
+                    now=NOW + datetime.timedelta(days=30),
+                    log=self.lines.append, http_get=broken)
+        self.assertEqual(rc, 1)
+        got = bar_loader.load_prices(self.out, ["AAA"], "2026-01-01",
+                                     "2026-09-28")
+        self.assertEqual(got["AAA"], {"2026-09-25": (1.0, 2.0)})
+
 
 if __name__ == "__main__":
     unittest.main()
