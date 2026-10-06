@@ -23,8 +23,7 @@ FIRMS = (
     (8, "NOCAP", None, 20.0, 1_000_000),
     (9, "NOFILE", 5e9, 20.0, 1_000_000),
 )
-TICKERS = {str(i): {"cik_str": c, "ticker": s.lower(), "title": s}
-           for i, (c, s, *_) in enumerate(FIRMS)}
+CIKS = {"%010d" % c: s for c, s, *_ in FIRMS}
 INDEX = "".join("10-K        %s   %d   20260301   edgar/data/%d/x.txt\n"
                 % (s, c, c) for c, s, *_ in FIRMS if s != "NOFILE")
 
@@ -50,7 +49,7 @@ def reference():
             for _, s, cap, *_ in FIRMS if cap is not None}
     caps["OKAY"].append({"known_at": "2026-09-28", "value": 1e6})
     return {"through": "2026-09-27",
-            "data": {"ciks": {}, "industry": {}, "market_cap": caps,
+            "data": {"ciks": CIKS, "industry": {}, "market_cap": caps,
                      "beta": {}}}
 
 
@@ -59,10 +58,7 @@ class BuildUniverseTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.dir = self._tmp.name
-        self.tickers = os.path.join(self.dir, "tickers.json")
         self.filers = os.path.join(self.dir, "form.idx")
-        with open(self.tickers, "w") as f:
-            json.dump(TICKERS, f)
         with open(self.filers, "w") as f:
             f.write(INDEX)
         for _, s, _, close, vol in FIRMS:
@@ -72,18 +68,17 @@ class BuildUniverseTest(unittest.TestCase):
             json.dump(reference(), f)
         self.lines = []
 
-    def run_cli(self, *extra):
+    def run_cli(self):
         with mock.patch.object(B, "EXCLUDE_LARGEST", 1):
-            return B.main(["--tickers", self.tickers, "--filers", self.filers,
-                           "--as-of", "2026-09-28", "--data", self.dir,
-                           *extra], log=self.lines.append)
+            return B.main(["--filers", self.filers,
+                           "--as-of", "2026-09-28", "--data", self.dir], log=self.lines.append)
 
     def symbols(self):
         return fetch_universe_bars.read_symbols(
             os.path.join(self.dir, "universe_symbols.txt"))
 
     def test_all_filters(self):
-        self.assertEqual(self.run_cli("--bars"), 0)
+        self.assertEqual(self.run_cli(), 0)
         # OKAY's 1e6 cap entry is dated as_of, so not yet known.
         self.assertEqual(self.symbols(),
                          ["BIL", "IEF", "MID", "OKAY", "SPY", "VTI"])
@@ -102,17 +97,18 @@ class BuildUniverseTest(unittest.TestCase):
         self.assertEqual(syms, sorted(set(syms)))
         self.assertNotIn("BIG", syms)
         self.assertNotIn("SMALL", syms)
-        self.assertIn("PENNY", syms)  # price filter needs --bars
+        self.assertNotIn("PENNY", syms)
 
-    def test_without_reference_skips_cap_filters(self):
+    def test_manifest_states_ticker_resolution(self):
+        self.run_cli()
+        with open(os.path.join(self.dir, "universe_manifest.json")) as f:
+            self.assertEqual(json.load(f)["ticker_resolution"],
+                             "reference.json ciks")
+
+    def test_missing_reference_refused(self):
         os.remove(os.path.join(self.dir, "reference.json"))
-        syms, m = B.build(TICKERS, [{"cik": c} for c, *_ in FIRMS], AS_OF)
-        self.assertIn("SMALL", syms)
-        self.assertFalse(m["filters"]["market_cap"])
-        self.assertIsNone(m["counts"]["short_eligible"])
-        _, m = B.build(TICKERS, [{"cik": c} for c, *_ in FIRMS], AS_OF,
-                       reference={"market_cap": {}})
-        self.assertEqual(m["counts"]["short_eligible"], 0)
+        with self.assertRaises(B.UniverseError):
+            self.run_cli()
 
     def test_stale_bars_excluded(self):
         write_bars(self.dir, "MID", 20.0, 1_000_000, end="2026-08-01")
@@ -134,10 +130,10 @@ class BuildUniverseTest(unittest.TestCase):
             self.run_cli()
 
     def test_rerun_is_identical(self):
-        self.run_cli("--bars")
+        self.run_cli()
         with open(os.path.join(self.dir, "universe_symbols.txt")) as f:
             first = f.read()
-        self.run_cli("--bars")
+        self.run_cli()
         with open(os.path.join(self.dir, "universe_symbols.txt")) as f:
             self.assertEqual(f.read(), first)
 
