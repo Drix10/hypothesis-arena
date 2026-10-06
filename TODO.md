@@ -186,6 +186,11 @@ Open:
         waits on a human run with network:
         `MIRO_CONTACT=<contact> python3 research/strategy/real_filing_probe.py`,
         which writes `research/reports/real_filing_probe.json`.
+  - [ ] Filing text-change dataset. Built (`research/strategy/build_filing_scores.py`,
+        fixtures only); waits on a human run with network and `reference.json` on
+        disk: `MIRO_CONTACT=<contact> python3 research/strategy/build_filing_scores.py`,
+        which caches filings under `research/data/filings` (rerun to resume) and
+        writes `research/data/filing_scores.json`.
   - [ ] Observation collectors for `ticker_map` (cover-page symbols, symbol-change
         corporate actions, Form 4 issuer symbols, former names) and event
         collectors for `last_trade` (Form 25, Form 15, 8-K items), so delisting

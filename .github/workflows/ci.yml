@@ -101,6 +101,7 @@ jobs:
           PYTHONWARNINGS=error python3 research/tests/test_deploy_check.py
           PYTHONWARNINGS=error python3 research/tests/test_backtest.py
           PYTHONWARNINGS=error python3 research/tests/test_bar_loader.py
+          PYTHONWARNINGS=error python3 research/tests/test_build_filing_scores.py
           PYTHONWARNINGS=error python3 research/tests/test_fetch_universe_bars.py
           PYTHONWARNINGS=error python3 research/tests/test_coverage_probe.py
           PYTHONWARNINGS=error python3 research/tests/test_customer_coverage_probe.py
