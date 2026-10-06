@@ -161,8 +161,8 @@ Open:
       (`strategy/backtest.py`) and the bar loader (`strategy/bar_loader.py`) are
       built on synthetic data. Left: a continuous, rate-capped exposure input to
       the harness on the US margin ledger, and real SIP datasets on disk. Human
-      run once the datasets are on disk (`research/data/`, layout in the header
-      of `strategy/run_connected_drift.py`): dry run
+      run once the datasets are on disk (`research/data/`, layout in
+      `read_dataset` of `strategy/run_connected_drift.py`): dry run
       `python3 research/strategy/run_connected_drift.py`, which prints coverage,
       the component correlation matrix and the effective signal count with no
       trial; registration only after that, with `--register --margin-rate <broker
@@ -193,9 +193,12 @@ Open:
       count; the runner `strategy/run_connected_drift.py` (tested on fixtures in
       `test_run_connected_drift`) prints them with the same dry-run command, then
       registers with `--register --margin-rate <rate>`, which refuses on a
-      touched holdout, missing or stale data or an unapproved prereg. Waits on the
-      real datasets it reads: bars, link store, filing scores, Form 4 events,
-      reference and veto data. The four older drafts under `research/prereg/`
+      touched holdout, missing or stale data, an unapproved prereg or an
+      incomplete book. Waits on the real datasets it reads (bars, link store,
+      filing scores, Form 4 events, reference and veto data) and, for
+      registration, on the book items in its `INCOMPLETE`: the 6% single-name
+      cap, 20% no-trade band, 10% volatility target, score-proportional sizing,
+      0.3 beta cap and point-in-time market cap and beta. The four older drafts under `research/prereg/`
       are removed in the cleanup.
 - [ ] **News co-mentions:** `sources/gdelt_gkg.py` parses GKG 2.1, resolves
       names by exact match and reports the resolution rate, on fixtures only.

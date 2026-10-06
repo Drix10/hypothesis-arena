@@ -1,6 +1,7 @@
 """run_connected_drift on synthetic on-disk datasets: the dry run opens no
 trial, --register refuses before the ledger on missing data, a touched holdout,
-stale data or an unapproved prereg, and the printed matrix is composite's."""
+stale data, an unapproved prereg or an incomplete book, and the printed matrix
+is composite's."""
 import contextlib
 import datetime
 import io
@@ -196,6 +197,13 @@ class RunnerTest(unittest.TestCase):
     def test_dry_run_excludes_holdout_bars(self):
         _, out, _ = self.run_cli()
         self.assertIn("2016-01-01..2018-06-30", out)
+
+    def test_register_refuses_incomplete_book(self):
+        code, _, err = self.register()
+        self.assertEqual(code, 1)
+        self.assertIn("book-incomplete:single-name cap 6%", err)
+        self.assertIn("point-in-time market_cap and beta", err)
+        self.assertFalse(os.path.exists(self.ledger))
 
     def test_register_refuses_on_missing_data(self):
         os.remove(os.path.join(self.dir, "form4_events.json"))

@@ -1,15 +1,6 @@
 """Real-data runner for connected_drift (plan/validation.md, plan/strategies.md).
-The default is a dry run: data coverage, the component correlation matrix and
-the effective signal count on the evaluation window before the holdout, and no
-trial. --register is the only path to the ledger and fails closed. Reads only
-the data directory; nothing here touches the network.
-
-Data directory: SIP split-adjusted daily bars (bar_loader) for every symbol in
-reference.json plus SPY, IEF and BIL; link_store.jsonl (engine.link_store,
-YYYYMMDD times); and four JSON datasets {"through": ISO date, "data": ...}:
-reference.json {ciks, industry, market_cap, beta}, filing_scores.json
-{symbol: [text_change.score]}, form4_events.json (form4.build_events rows) and
-vetoes.json {veto name: {symbol: bool}}, used only by --register."""
+The default is a dry run with no trial; --register is the only path to the
+ledger and fails closed. Reads only the data directory, never the network."""
 import argparse
 import datetime
 import json
@@ -37,19 +28,32 @@ GROSS = 1.5
 RETURN_SESSIONS = 21
 STALE_DAYS = 7
 SUPPORT = ("SPY", "IEF", "BIL")
+# Prereg and approved registration values the Book does not implement yet;
+# --register refuses while any remain, so the holdout is not spent on a book
+# that differs from the prereg.
+# lean: refuses every registration; implement each item and remove it here.
+INCOMPLETE = ("single-name cap 6%", "no-trade band 20%",
+              "volatility target 10%", "score-proportional sizing",
+              "beta cap 0.3", "point-in-time market_cap and beta")
+
+_day = datetime.date.fromisoformat
 
 
 class RunnerError(Exception):
     pass
 
 
-def _day(text):
-    return datetime.date.fromisoformat(text)
-
-
 def read_dataset(data_dir, name, need_through):
     """The `data` of a JSON dataset; a missing file or a `through` date before
-    `need_through` (less STALE_DAYS) is refused."""
+    `need_through` (less STALE_DAYS) is refused.
+
+    Data directory: SIP split-adjusted daily bars (bar_loader) for every symbol
+    in reference.json plus SPY, IEF and BIL; link_store.jsonl
+    (engine.link_store, YYYYMMDD times); and four datasets {"through": ISO
+    date, "data": ...}: reference.json {ciks, industry, market_cap, beta},
+    filing_scores.json {symbol: [text_change.score]}, form4_events.json
+    (form4.build_events rows) and vetoes.json {veto name: {symbol: bool}},
+    read only by --register."""
     path = os.path.join(data_dir, name)
     try:
         with open(path, encoding="utf-8") as f:
@@ -225,8 +229,7 @@ def holdout_untouched(pre, led):
 
 class Book:
     """Monthly composite tranches scaled by the ETF Trend exposure (rate-capped
-    state kept per instance). lean: no single-name cap, no-trade band or
-    volatility target; add them with the registration run."""
+    state kept per instance); INCOMPLETE lists what it lacks."""
 
     def __init__(self, sessions, bars, inputs):
         pick = composite.CompositeTarget(sessions, inputs, N_SIDE)
@@ -244,7 +247,7 @@ class Book:
 
 def register(pre, data_dir, ledger_path, margin_rate):
     """Run the backtest on the holdout and write the trial; every refusal
-    comes before the ledger is opened."""
+    comes before a ledger row is written."""
     if not approved(pre, ROADMAP):
         raise RunnerError("prereg-not-approved")
     prereg.require_valid(pre)
@@ -264,6 +267,8 @@ def register(pre, data_dir, ledger_path, margin_rate):
         if last is None or _day(last) < _day(end) - datetime.timedelta(
                 days=STALE_DAYS):
             raise RunnerError("dataset-stale:bars:" + s)
+    if INCOMPLETE:
+        raise RunnerError("book-incomplete:" + ",".join(INCOMPLETE))
     sessions = sorted(bars["SPY"])
     inputs = Inputs(bars, ref, store, filings, events, vetoes)
     return backtest.run_backtest(
