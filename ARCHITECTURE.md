@@ -215,8 +215,8 @@ loaded twice.
 - Market data: `sip_fetch` (SIP datasets with manifests; `load_alpaca_env`) and
   `bulk_bars` (throttled many-symbol fetch).
 - Event data: `form4` (insider filings, the routine-trade classifier and the
-  opportunistic flag with entry times), `earnings_surprise` (its SUE code is
-  unused; `read_symbols` feeds the coverage probe) and
+  opportunistic flag with entry times), `issuer_symbols` (cik to symbol lookups;
+  `read_symbols` feeds the coverage probe) and
   `sec_financial_statements` (SEC financial-statement data sets).
 - Candidates: `candidate_wire` (the writer for `candidates.jsonl`) and
   `passive_core` (the 60/40 passive core).
@@ -251,7 +251,7 @@ sources, each adapter, the harness (`test_stats`, `test_ledger`, `test_gates`,
 `test_universe`, `test_etf_trend`, `test_etf_trend_prereg`, `test_etf_trend_chain`,
 `test_composite`, `test_text_change`, `test_connected_drift_prereg`,
 `test_connected_drift_chain`, `test_bar_loader`, `test_backtest`), the event data
-modules (`test_form4`, `test_earnings_surprise`, `test_french_factors`,
+modules (`test_form4`, `test_issuer_symbols`, `test_french_factors`,
 `test_ticker_map`, `test_ticker_observations`, `test_shares_outstanding`,
 `test_form13f`, `test_last_trade`, `test_end_events`, `test_filing_sections`,
 `test_edgar_filings`, `test_gdelt_gkg`), the link graph (`test_link_store`, `test_text_peers`,

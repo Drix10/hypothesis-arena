@@ -90,6 +90,7 @@ jobs:
           PYTHONWARNINGS=error python3 research/tests/test_sip_fetch.py
           PYTHONWARNINGS=error python3 research/tests/test_tier_a.py
           PYTHONWARNINGS=error python3 research/tests/test_form4.py
+          PYTHONWARNINGS=error python3 research/tests/test_issuer_symbols.py
           PYTHONWARNINGS=error python3 research/tests/test_candidate_wire.py
           PYTHONWARNINGS=error python3 research/tests/test_passive_core.py
           PYTHONWARNINGS=error python3 research/tests/test_forward_ledgers.py

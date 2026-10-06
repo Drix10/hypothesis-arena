@@ -309,7 +309,7 @@ if __name__ == "__main__":
     tick = os.path.join(sfs.OUT, "company_tickers.json")
     if not os.path.exists(tick):
         sfs._get(sfs.TICKERS, ua, tick)
-    from research.strategy import earnings_surprise
+    from research.strategy import issuer_symbols
     ins = os.path.join(sfs.OUT, "..", "form345")
     os.makedirs(ins, exist_ok=True)
     paths = []
@@ -320,7 +320,7 @@ if __name__ == "__main__":
                 sfs._get(INSIDER_URL.format(y, q), ua, dest)
                 print("fetched", dest, flush=True)
             paths.append(dest)
-    history = earnings_surprise.read_symbols(paths)
+    history = issuer_symbols.read_symbols(paths)
     get_sub, get_bars, assets, current, sec_json = _live()
 
     def frames(url):

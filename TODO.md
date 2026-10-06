@@ -23,8 +23,8 @@ test output, or a report path).
   of 300 random 2016-2018 10-K filers map to a ticker with gap-free SIP bars; the
   95% interval is about 94.8-98.6%, so no paid data yet. For 11% of them the
   bars end before the filing-based end.
-- Event data: Form 4 reader with the routine-trade classifier, SUE from SEC
-  statement sets, SEC financial-statement fetcher. No 10-K, 10-Q or 8-K corpus,
+- Event data: Form 4 reader with the routine-trade classifier, issuer symbol
+  lookups, SEC financial-statement fetcher. No 10-K, 10-Q or 8-K corpus,
   no 13F parser, no point-in-time ticker map, no link graph, no event pipeline.
 - Engine: collector, six-node research graph, five Tier A adapters and the source
   seam. No reader tier, router, brain or verifier.
