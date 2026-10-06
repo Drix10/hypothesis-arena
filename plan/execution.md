@@ -10,9 +10,9 @@ binding.
 
 | Strategy | Signal time | Entry order | Protection | Normal exit |
 |---|---|---|---|---|
-| Link Momentum and Filing Change (monthly) | month-end official close (SIP) | next session: closes first (MOC), then opens; under the India set buys wait for settled proceeds | OTO stop-only, GTC catastrophe stop at 3 × the 20-day ATR; sell-stop for longs, buy-stop for shorts (`exit_link`) | MOC at the rebalance (its tranche, for Link Momentum) when the name leaves its band |
-| Event Ripple (events) | `ripple_hypothesis` availability | next session 10:00 ET marketable limit, unless already priced (`strategies.md`) | OTO stop-only, GTC (`exit_event`) | MOC on the horizon day |
-| ETF Trend, long-short (monthly) | month-end official close | next session: closes first, then opens | OTO stop-only, GTC (`exit_trend`) | MOC at the rebalance when the signal flips |
+| Connected Drift Book (monthly, 3-month tranches) | month-end official close (SIP) | next session: closes first (MOC), then opens; under the India set buys wait for settled proceeds | OTO stop-only, GTC catastrophe stop at 3 × the 20-day ATR; sell-stop for longs, buy-stop for shorts (`exit_link`) | MOC at the rebalance (its tranche) when the name leaves its band |
+| ETF Trend scaler and passive core (monthly) | month-end official close | next session: closes first, then opens | OTO stop-only, GTC (`exit_trend`) | MOC at the rebalance when the signal flips |
+| Event Ripple (parked) | `ripple_hypothesis` availability | next session 10:00 ET marketable limit, unless already priced (`strategies.md`) | OTO stop-only, GTC (`exit_event`) | MOC on the horizon day |
 
 Short-side rules (US set, after kernel short selling is built): a short open is
 a SELL on a symbol not held, sent only after `short_controls` pass at order
