@@ -207,9 +207,14 @@ Open:
       touched holdout, missing or stale data or an unapproved prereg. The book
       is built: score-proportional sizing, 6% single-name cap, 0.3 beta cap,
       10% volatility target and 20% no-trade band (`composite.py`, `Book`), with
-      market cap and beta read point in time from `reference.json`. Waits on the
-      real datasets it reads (bars, link store, filing scores, Form 4 events,
-      reference with dated market cap and beta, and veto data). The four older
+      market cap and beta read point in time from `reference.json`, which
+      `strategy/build_reference.py` writes (tested on fixtures in
+      `test_build_reference`). Human run, after the bars are fetched:
+      `MIRO_CONTACT=<contact> python3 research/strategy/build_reference.py
+      <symbols file> --yes`. Waits on the real datasets it reads (bars, link
+      store, filing scores, Form 4 events, the reference run and veto data).
+      Market cap before a split is understated by the split ratio until raw
+      bars are stored. The four older
       drafts under `research/prereg/` are removed in the cleanup.
 - [ ] **News co-mentions:** `sources/gdelt_gkg.py` parses GKG 2.1, resolves
       names by exact match and reports the resolution rate, on fixtures only.
