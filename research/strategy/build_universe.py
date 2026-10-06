@@ -1,11 +1,13 @@
 """Human-run builder of the Connected Drift symbol list (plan/strategies.md,
 Universe). Reads files the other fetchers wrote and downloads nothing: an EDGAR
 form.idx body of 10-K filers, reference.json (ciks, market_cap) and the SIP
-daily bars on disk. Writes universe_symbols.txt for fetch_universe_bars and a
-manifest with the filter counts."""
+daily bars on disk. Writes universe_symbols.txt for fetch_universe_bars, the
+pre-liquidity universe_candidates.txt whose bars the liquidity filter needs,
+and a manifest with the filter counts."""
 import argparse
 import datetime
 import json
+import math
 import os
 import statistics
 import sys
@@ -13,7 +15,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from research.strategy import customer_coverage_probe, issuer_symbols, sip_fetch
-from research.strategy.fetch_universe_bars import REQUIRED
+from research.strategy.fetch_universe_bars import REQUIRED, STALE_DAYS, _day
 
 MIN_PRICE = 5.0
 MIN_DOLLAR_VOLUME = 10e6
@@ -21,15 +23,10 @@ MEDIAN_SESSIONS = 60
 MIN_CAP = 500e6
 MIN_SHORT_CAP = 1e9
 EXCLUDE_LARGEST = 100
-STALE_DAYS = 7  # matches run_connected_drift.STALE_DAYS
 
 
 class UniverseError(ValueError):
     pass
-
-
-def _day(s):
-    return datetime.date.fromisoformat(s[:10])
 
 
 def listed_symbols(ciks, filers):
@@ -46,12 +43,14 @@ def listed_symbols(ciks, filers):
 
 def market_caps(reference, as_of):
     """{symbol: market cap} using the latest entry known strictly before
-    as_of; a symbol with no such entry is absent."""
+    as_of; a symbol with no such entry, or a non-finite one, is absent."""
     out = {}
     for sym, series in reference["market_cap"].items():
         known = [e for e in series if _day(e["known_at"]) < as_of]
         if known:
-            out[sym] = float(max(known, key=lambda e: e["known_at"])["value"])
+            cap = float(max(known, key=lambda e: e["known_at"])["value"])
+            if math.isfinite(cap):
+                out[sym] = cap
     return out
 
 
@@ -76,8 +75,9 @@ def liquidity(outdir, sym, as_of):
 
 
 def build(reference, filers, as_of, bars_dir):
-    """(symbols, manifest). A symbol without a market cap before as_of or
-    without current verified bars is excluded and counted by reason."""
+    """(symbols, candidates, manifest). A symbol without a market cap before
+    as_of or without current verified bars is excluded and counted by reason;
+    candidates are the stocks that passed the cap filters."""
     listed = listed_symbols(reference["ciks"], filers)
     caps = market_caps(reference, as_of)
     counts = {"listed_10k_filers": len(listed)}
@@ -89,6 +89,7 @@ def build(reference, filers, as_of, bars_dir):
     largest = set(sorted(keep, key=lambda s: (-caps[s], s))[:EXCLUDE_LARGEST])
     counts["largest_excluded"] = len(largest)
     keep -= largest
+    candidates = sorted(keep)
     liq = {s: liquidity(bars_dir, s, as_of) for s in keep}
     counts["no_current_bars"] = sum(v is None for v in liq.values())
     counts["below_price"] = sum(
@@ -104,14 +105,11 @@ def build(reference, filers, as_of, bars_dir):
     manifest = {"as_of": as_of.isoformat(), "counts": counts,
                 "symbols": len(symbols),
                 "ticker_resolution": "reference.json ciks"}
-    return symbols, manifest
+    return symbols, candidates, manifest
 
 
 def _write(path, text):
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
-    os.replace(tmp, path)
+    sip_fetch._atomic_write(path, text.encode("utf-8"))
 
 
 def _read_json(path):
@@ -134,9 +132,11 @@ def main(argv=None, log=print):
         raise UniverseError("dataset-stale:reference.json")
     with open(args.filers, encoding="utf-8") as f:
         filers = customer_coverage_probe.parse_index(f.read())
-    symbols, manifest = build(ds["data"], filers, as_of, args.data)
+    symbols, candidates, manifest = build(ds["data"], filers, as_of, args.data)
     _write(os.path.join(args.data, "universe_symbols.txt"),
            "".join(s + "\n" for s in symbols))
+    _write(os.path.join(args.data, "universe_candidates.txt"),
+           "".join(s + "\n" for s in candidates))
     _write(os.path.join(args.data, "universe_manifest.json"),
            json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     log(json.dumps(manifest["counts"], sort_keys=True))

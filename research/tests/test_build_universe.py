@@ -99,6 +99,26 @@ class BuildUniverseTest(unittest.TestCase):
         self.assertNotIn("SMALL", syms)
         self.assertNotIn("PENNY", syms)
 
+    def test_candidates_listed_before_any_stock_bars(self):
+        for _, s, *_ in FIRMS:
+            path, man = sip_fetch.dataset_paths(self.dir, s, "bars", "1Day",
+                                                "split")
+            for p in (path, man):
+                if os.path.exists(p):
+                    os.remove(p)
+        self.assertEqual(self.run_cli(), 0)
+        self.assertEqual(self.symbols(), list(fetch_universe_bars.REQUIRED))
+        self.assertEqual(fetch_universe_bars.read_symbols(
+            os.path.join(self.dir, "universe_candidates.txt")),
+            ["BIL", "IEF", "MID", "NOBAR", "OKAY", "PENNY", "SPY", "THIN",
+             "VTI"])
+
+    def test_non_finite_cap_counted_as_missing(self):
+        ref = reference()["data"]
+        ref["market_cap"]["MID"] = [{"known_at": "2026-06-01",
+                                     "value": float("nan")}]
+        self.assertNotIn("MID", B.market_caps(ref, AS_OF))
+
     def test_manifest_states_ticker_resolution(self):
         self.run_cli()
         with open(os.path.join(self.dir, "universe_manifest.json")) as f:
