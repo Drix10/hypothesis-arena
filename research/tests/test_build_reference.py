@@ -1,7 +1,7 @@
 """build_reference on synthetic bars and an injected SEC transport: beta and
 market cap are point in time, a symbol without shares or enough bars is
-omitted by reason, a rerun makes no SEC requests, and the output loads in
-run_connected_drift. No network."""
+omitted by reason, a rerun makes no SEC requests until it builds past the
+fetch date, and the output loads in run_connected_drift. No network."""
 import datetime
 import json
 import os
@@ -115,10 +115,10 @@ class BuildReferenceTest(unittest.TestCase):
                     "ZZZ\nSPY\n")
         self.logs = []
 
-    def run_main(self, transport, *extra, env=ENV):
+    def run_main(self, transport, *extra, env=ENV, today=None):
         return B.main([self.symbols, "--data", self.dir, "--yes", *extra],
-                      env=env, log=self.logs.append, transport=transport,
-                      sleeper=lambda s: None)
+                      env=env, log=self.logs.append, today=today,
+                      transport=transport, sleeper=lambda s: None)
 
     def reference(self):
         with open(os.path.join(self.dir, "reference.json")) as f:
@@ -162,6 +162,18 @@ class BuildReferenceTest(unittest.TestCase):
         again = Transport()
         self.assertEqual(self.run_main(again), 0)
         self.assertEqual(again.urls, [])
+
+    def test_later_build_refetches_records_fetched_before_its_end(self):
+        first = Transport()
+        self.run_main(first, "--end", "2017-06-30", today="2017-07-01")
+        self.assertEqual(self.reference()["through"], "2017-06-30")
+        again = Transport()
+        self.assertEqual(self.run_main(again, today="2017-10-02"), 0)
+        self.assertEqual(len([u for u in again.urls if "CIK" in u]),
+                         2 * len(SECS))
+        self.assertEqual(self.reference()["through"], "2017-09-29")
+        with open(os.path.join(self.dir, "reference_cache", "AAA.json")) as f:
+            self.assertEqual(json.load(f)["fetched"], "2017-10-02")
 
     def test_failed_fetch_writes_nothing(self):
         class Down(Transport):

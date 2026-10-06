@@ -1,7 +1,8 @@
 """Human-run build of research/data/reference.json for connected_drift: ciks,
 two-digit SIC industry, month-end market cap and 252-session beta to SPY, in the
 contract read by run_connected_drift. SEC requests need MIRO_CONTACT; the
-per-symbol SEC extract is cached, so a rerun resumes. Nothing is filled: a
+per-symbol SEC extract is cached until the build runs past its fetch date, so
+a rerun resumes. Nothing is filled: a
 symbol without shares or enough bars is omitted and counted by reason."""
 import argparse
 import collections
@@ -142,19 +143,31 @@ def _atomic_json(path, obj):
     os.replace(tmp, path)
 
 
-def load_records(universe, cache_dir, adapter, log):
-    """({symbol: record}, {symbol: reason}); records are cached per symbol and
-    only fetched when missing. A failed fetch is returned, never cached."""
+def cached(cache_dir, sym, end):
+    """The cached record for `sym` if it was fetched on or after `end`, else
+    None: an older record lacks shares filed after its fetch, so a build
+    through a later date refetches it."""
+    path = os.path.join(cache_dir, sym + ".json")
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        rec = json.load(f)
+    return rec if rec.get("fetched", "") >= end else None
+
+
+def load_records(universe, cache_dir, adapter, log, end, today):
+    """({symbol: record}, {symbol: reason}); records are cached per symbol,
+    stamped with the fetch date `today`, and fetched when missing or older than
+    `end`. A failed fetch is returned, never cached."""
     records, failed = {}, {}
     tickers, _state, err = adapter._load_tickers()
     if not tickers:
         raise OSError("company_tickers unavailable: %s" % err)
     os.makedirs(cache_dir, exist_ok=True)
     for sym in universe:
-        path = os.path.join(cache_dir, sym + ".json")
-        if os.path.exists(path):
-            with open(path, encoding="utf-8") as f:
-                records[sym] = json.load(f)
+        rec = cached(cache_dir, sym, end)
+        if rec is not None:
+            records[sym] = rec
             continue
         cik = tickers.get(sym.upper()) or tickers.get(sym.upper().replace(
             ".", "-"))
@@ -162,16 +175,16 @@ def load_records(universe, cache_dir, adapter, log):
             failed[sym] = "no-cik"
             continue
         try:
-            records[sym] = fetch_record(adapter, cik)
+            records[sym] = dict(fetch_record(adapter, cik), fetched=today)
         except (OSError, ValueError) as e:
             failed[sym] = "fetch-failed: %s" % e
             continue
-        _atomic_json(path, records[sym])
+        _atomic_json(os.path.join(cache_dir, sym + ".json"), records[sym])
         log("fetched %s" % sym)
     return records, failed
 
 
-def main(argv=None, env=None, log=print, **adapter_kw):
+def main(argv=None, env=None, log=print, today=None, **adapter_kw):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("symbols_file", help="one symbol per line, # comments")
     ap.add_argument("--data", default=DATA)
@@ -187,22 +200,23 @@ def main(argv=None, env=None, log=print, **adapter_kw):
         return 2
     universe = [s for s in fetch_universe_bars.read_symbols(a.symbols_file)
                 if s not in fetch_universe_bars.REQUIRED]
-    cache = a.cache or os.path.join(a.data, "reference_cache")
-    todo = [s for s in universe
-            if not os.path.exists(os.path.join(cache, s + ".json"))]
-    log("%d symbols, %d to fetch: about %d SEC requests" % (
-        len(universe), len(todo), 2 * len(todo) + 1))
-    if not a.yes:
-        log("not fetching: pass --yes to start")
-        return 2
-    adapter = edgar.Adapter(contact, cache_dir=cache, **adapter_kw)
-    records, failed = load_records(universe, cache, adapter, log)
     spy_days = sorted(bar_loader.load_prices(
         a.data, [BENCH], a.start, a.end or "9999-12-31")[BENCH])
     if not spy_days:
         log("no SPY bars on disk")
         return 1
     end = a.end or spy_days[-1]
+    cache = a.cache or os.path.join(a.data, "reference_cache")
+    todo = [s for s in universe if cached(cache, s, end) is None]
+    log("%d symbols, %d to fetch: about %d SEC requests" % (
+        len(universe), len(todo), 2 * len(todo) + 1))
+    if not a.yes:
+        log("not fetching: pass --yes to start")
+        return 2
+    adapter = edgar.Adapter(contact, cache_dir=cache, **adapter_kw)
+    today = today or datetime.datetime.now(datetime.timezone.utc).date(
+        ).isoformat()
+    records, failed = load_records(universe, cache, adapter, log, end, today)
     have = [s for s in universe if s in records]
     bars = {}
     for s in have + [BENCH]:
