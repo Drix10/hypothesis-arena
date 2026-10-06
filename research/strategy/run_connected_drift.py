@@ -28,13 +28,10 @@ GROSS = 1.5
 RETURN_SESSIONS = 21
 STALE_DAYS = 7
 SUPPORT = ("SPY", "IEF", "BIL")
-# Prereg and approved registration values the Book does not implement yet;
+# Prereg and approved registration values the Book does not implement;
 # --register refuses while any remain, so the holdout is not spent on a book
 # that differs from the prereg.
-# lean: refuses every registration; implement each item and remove it here.
-INCOMPLETE = ("single-name cap 6%", "no-trade band 20%",
-              "volatility target 10%", "score-proportional sizing",
-              "beta cap 0.3", "point-in-time market_cap and beta")
+INCOMPLETE = ()
 
 _day = datetime.date.fromisoformat
 
@@ -50,7 +47,9 @@ def read_dataset(data_dir, name, need_through):
     Data directory: SIP split-adjusted daily bars (bar_loader) for every symbol
     in reference.json plus SPY, IEF and BIL; link_store.jsonl
     (engine.link_store, YYYYMMDD times); and four datasets {"through": ISO
-    date, "data": ...}: reference.json {ciks, industry, market_cap, beta},
+    date, "data": ...}: reference.json {ciks, industry, market_cap, beta}
+    (market_cap and beta {symbol: [{known_at, value}]}, the latest entry
+    strictly before the as-of date is used),
     filing_scores.json {symbol: [text_change.score]}, form4_events.json
     (form4.build_events rows) and vetoes.json {veto name: {symbol: bool}},
     read only by --register."""
@@ -96,6 +95,28 @@ class Inputs:
         self.vetoes = None if vetoes is None else {
             n: (lambda s, m=m: m.get(s, True)) for n, m in vetoes.items()}
 
+    @staticmethod
+    def _pit(series, date):
+        """{symbol: value} of each symbol's latest finite entry known strictly
+        before `date`; a symbol with none is absent."""
+        out = {}
+        for s, entries in series.items():
+            best = None
+            for e in entries:
+                try:
+                    known, v = e["known_at"][:10], e["value"]
+                except (KeyError, TypeError):
+                    continue
+                if known < date and composite._finite(v) and (
+                        best is None or known >= best[0]):
+                    best = (known, v)
+            if best is not None:
+                out[s] = best[1]
+        return out
+
+    def betas(self, date):
+        return self._pit(self.ref["beta"], date)
+
     def _ret(self, sym, date):
         days = self.days.get(sym)
         if not days:
@@ -114,8 +135,8 @@ class Inputs:
         for s, r in returns.items():
             by_ind.setdefault(self.ref["industry"].get(s), []).append(r)
         asof = int(date.replace("-", ""))
-        data = {"market_cap": self.ref["market_cap"],
-                "beta": self.ref["beta"], "returns": returns,
+        data = {"market_cap": self._pit(self.ref["market_cap"], date),
+                "beta": self.betas(date), "returns": returns,
                 "industry": self.ref["industry"], "market_return": market,
                 "industry_returns": {k: sum(v) / len(v)
                                      for k, v in by_ind.items()},
@@ -134,7 +155,7 @@ def correlation(inputs, months):
     for d in months:
         data = inputs(d)
         comps = composite.components(data, d)
-        for s in sorted(data["market_cap"]):
+        for s in sorted(inputs.ref["market_cap"]):
             for n in NAMES:
                 cols[n].append(comps[n].get(s))
     corr = composite.component_correlation([cols[n] for n in NAMES])
@@ -160,6 +181,9 @@ def _datasets(data_dir, need):
     ref = read_dataset(data_dir, "reference.json", need)
     for k in ("ciks", "industry", "market_cap", "beta"):
         if not isinstance(ref.get(k), dict):
+            raise RunnerError("dataset-malformed:reference.json")
+    for k in ("market_cap", "beta"):
+        if not all(isinstance(v, list) for v in ref[k].values()):
             raise RunnerError("dataset-malformed:reference.json")
     return (ref, read_dataset(data_dir, "filing_scores.json", need),
             read_dataset(data_dir, "form4_events.json", need))
@@ -228,21 +252,34 @@ def holdout_untouched(pre, led):
 
 
 class Book:
-    """Monthly composite tranches scaled by the ETF Trend exposure (rate-capped
-    state kept per instance); INCOMPLETE lists what it lacks."""
+    """Monthly score-proportional composite tranches scaled by the ETF Trend
+    exposure (rate-capped state kept per instance), then the single-name cap,
+    the beta cap, the volatility target and the no-trade band against the
+    weights last emitted."""
 
     def __init__(self, sessions, bars, inputs):
         pick = composite.CompositeTarget(sessions, inputs, N_SIDE)
         self.tranches = tranches.Tranches(sessions, pick, gross=GROSS)
         self.bars = bars
+        self.inputs = inputs
         self.prev = None
+        self.held = {}
 
     def __call__(self, date, closes):
         w = self.tranches(date, closes)
         if w is None:
             return None
         self.prev = etf_trend.exposure_scale(self.bars, date, self.prev, "SPY")
-        return {s: x * self.prev for s, x in w.items()}
+        w = composite.cap_weights({s: x * self.prev for s, x in w.items()})
+        beta = self.inputs.betas(date)
+        w = composite.beta_limit(w, beta)
+        k = composite.vol_scale(w, self.bars, date)
+        w = {s: x * k for s, x in w.items()}
+        banded = composite.no_trade_band(w, self.held)
+        if abs(composite.net_beta(banded, beta)) <= composite.BETA_CAP:
+            w = banded
+        self.held = w
+        return w
 
 
 def register(pre, data_dir, ledger_path, margin_rate):
