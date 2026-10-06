@@ -209,7 +209,12 @@ Open:
       10% volatility target and 20% no-trade band (`composite.py`, `Book`), with
       market cap and beta read point in time from `reference.json`. Waits on the
       real datasets it reads (bars, link store, filing scores, Form 4 events,
-      reference with dated market cap and beta, and veto data). The four older
+      reference with dated market cap and beta, and veto data). The Form 4
+      events build is `strategy/build_form4_events.py` (human run:
+      `MIRO_CONTACT=<contact> python3 research/strategy/build_form4_events.py`;
+      it downloads the quarterly zips to `research/data/form4_zips/`, skips
+      those present, and writes `form4_events.json` only when no quarter is
+      missing). The four older
       drafts under `research/prereg/` are removed in the cleanup.
 - [ ] **News co-mentions:** `sources/gdelt_gkg.py` parses GKG 2.1, resolves
       names by exact match and reports the resolution rate, on fixtures only.
