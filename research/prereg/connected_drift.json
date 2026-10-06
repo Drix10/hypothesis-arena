@@ -1,0 +1,65 @@
+{
+  "schema": "prereg",
+  "experiment_id": "connected_drift",
+  "family": "connected_drift",
+  "created": "2026-10-05",
+  "constraint_set": "us",
+  "contamination_class": "deterministic",
+  "hypothesis": "A stock's next-quarter return rises with the residual past-month return of its linked firms, falls with large section-level changes in its own filings, and rises after opportunistic insider purchases, because each is slow, indirect information; the equal-weight composite of the three adds alpha to the reference book at 2x cost. Evidence grade B-, set by the Filing Change component.",
+  "strategy": "connected_drift",
+  "universe": ["US common stock, price at least $5, 60-day median dollar volume at least $10M, market cap at least $500M, links from at least two different edge sources, excluding the 100 largest firms; the short side also needs market cap of at least $1B, the broker borrow flag and the short crowding filter (risk.md)"],
+  "signal": "Month-end close, point in time. Components: link propagation (edge-weighted mean of linked firms' past-month residual returns; edges from customer and supplier disclosures, the 10 nearest 10-K text peers and 13F common ownership, equal-weighted across sources), section-level Filing Change (deterministic similarity of each 10-K and 10-Q to its prior-year counterpart, Item 1A and MD&A) and opportunistic insider purchases (open-market Form 4 buys in the trailing month, zero where no event fires). Each component is winsorized, ranked to a z-score and residualized against market beta, size, industry and the firm's own trailing one-month return (math.md, Composite score). Score = (z_link + z_filing + z_insider) / 3, a missing component is 0, no weight is fitted. Agreement gate: a candidate is dropped when any single component contradicts the composite's sign by more than the registered threshold (proposed: one standard deviation). Short vetoes: distress, no broker borrow flag or failing the crowding filter, concentrated forced-seller exposure from the 13F edges, market cap below $1B. Tranches: signal from the month-end close, trades the next session, monthly tranches with a 3-month hold (one third of the book re-ranked each month). Sizing: proportional to score magnitude with a single-name cap, at least 15 names a side (20 planned), 150% gross, 10% annual volatility target through the capped exposure scaler (math.md, Exposure scaler), absolute beta to VTI at most 0.3. Exit: signal exit at the rebalance with a broker-native GTC catastrophe stop at 3 x the 20-day ATR. Costs: the costs model at 1x and 2x with the borrow stress grid. Evaluation window from 2016, the free feed's start. Model involvement: none. The first harness output is the correlation matrix of the three component scores and the effective signal count, computed on the evaluation window excluding the holdout, before any Sharpe, return or spanning result.",
+  "variants": [
+    {"name": "equal_weight_scaled", "weights": "equal", "scaler": true, "edge_sources": ["customer_supplier", "text_peers", "common_ownership"]},
+    {"name": "ridge_to_equal", "weights": "ridge_toward_equal", "shrink_factors": 1, "scaler": true, "edge_sources": ["customer_supplier", "text_peers", "common_ownership"]},
+    {"name": "equal_weight_plus_news", "weights": "equal", "scaler": true, "edge_sources": ["customer_supplier", "text_peers", "common_ownership", "news_co_mentions_90d"]}
+  ],
+  "diagnostics": [
+    "drop-one ablation: no link component",
+    "drop-one ablation: no filing change component",
+    "drop-one ablation: no insider component",
+    "no scaler",
+    "own-firm skip-month",
+    "1-month hold",
+    "placebo graph",
+    "delisting sensitivity",
+    "event-day insider entry"
+  ],
+  "cost_model": "costs",
+  "split": {
+    "scheme": "walk_forward",
+    "n_splits": 2,
+    "label_horizon_days": 63,
+    "embargo_days": 63
+  },
+  "holdout": {
+    "start": "2023-10-04",
+    "end": "2026-10-04",
+    "rule": "untouched holdout, never used for any choice; the longer of the last 3 years and the last 25% of the sample (proposed); seen-window: the 2016-2026 window was already seen by an earlier long-only trend test, so any run that touches the trend scaler is labeled seen-window in its report and the shadow gate minimum doubles to 6 rebalances; the scaler is judged by its no-scaler diagnostic run, never as standalone evidence"
+  },
+  "decision": {
+    "min_net_sharpe": 1e-06,
+    "max_drawdown_pct": 20.0,
+    "min_cost_multiple": 2.0,
+    "min_days": 1,
+    "new_signal_tstat_min": 3.0
+  },
+  "open_questions": [
+    "trial budget: 3 selectable variants is a proposal inside the 3-6 trials the combination notes recommend; the diagnostics are listed above, are not selectable and do not count toward N_eff. The three variants form one Holm family with the other strategies (validation.md).",
+    "variants: the ridge-toward-equal variant needs one shrink factor chosen once; the plan gives no value, so none is stated here.",
+    "variants: the news co-mention edge (c) variant is named in the plan; its extractor and data source are not specified here.",
+    "agreement gate: one standard deviation is a proposal; confirm the threshold.",
+    "embargo: 63 sessions (the 3-month hold) is a proposal; the 1%-of-sample rule was not verified.",
+    "holdout: the longer of the last 3 years and the last 25% of the sample is a proposal; of a 2016 to 2026-10-04 sample 25% is about 2.7 years, so 3 years applies and holdout.start is 2023-10-04. It moves if the window changes.",
+    "holdout.end: the plan gives no date; the drafting-window end 2026-10-04 is used.",
+    "evaluation window: from 2016; 2007 for filings-based edges only if paid history is bought (data.md). The registration does not state the window start as a field.",
+    "universe: the plan gives filter rules and no ticker list; the list is built point in time, so the entry is a rule, not symbols. The extractor for customer and supplier edges is not built yet; coverage by year is measured before edge (a) is registered, and the book registers without it if coverage collapses.",
+    "decision.min_net_sharpe: the plan requires the 95% bootstrap CI lower bound above 0 and states no numeric floor; 1e-06 stands for 'above 0'.",
+    "decision.min_days: the plan states no minimum evaluation length for the backtest gate; 1 is a placeholder (MinTRL is computed by the harness).",
+    "decision.max_drawdown_pct: 20 is the plan default of 2x the 10% volatility target; confirm no stricter limit.",
+    "split.n_splits: the plan states no walk-forward split count; 2 is the validator minimum.",
+    "split.label_horizon_days: 63 is the 3-month hold in sessions; the plan gives no number.",
+    "single-name cap, no-trade band, scaler functional form and rate cap, and the distress veto definition: proposed at registration, no value stated here.",
+    "net-exposure band and short crowding filter thresholds: stated in risk.md, not restated here; confirm the registered values."
+  ]
+}
