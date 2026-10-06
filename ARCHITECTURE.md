@@ -139,7 +139,6 @@ engine trades.
   `collector.ctx_read`), production publish, the 7-day prune.
 - `cadence.py`: cadence and cost gating.
 - `resolver.py`: the deterministic evidence resolver (the model is advisory only).
-- `event_direction.py`: the deterministic event direction table.
 - `schema.py`: feature constants and builders (validity owned by
   `collector/ctx_read.py`).
 
@@ -244,7 +243,7 @@ Alpaca paper, BEA, FRED vintages and the model provider.
 ### tests/
 
 Suites for the engine (`test_engine`, `test_hardening`, `test_emit`,
-`test_source_seam`, `test_seam_graph`, `test_event_direction`), isolation and
+`test_source_seam`, `test_seam_graph`), isolation and
 sources, each adapter, the harness (`test_stats`, `test_ledger`, `test_gates`,
 `test_costs`, `test_settlement`, `test_portfolio`, `test_prereg`,
 `test_candidate_wire`, `test_passive_core`, `test_tranches`, `test_placebo`,
