@@ -1,9 +1,11 @@
 """Human-run build of research/data/filing_scores.json (plan/data.md EDGAR
-corpus, plan/math.md Text change): 10-K and 10-Q filings of the reference.json
+corpus, plan/math.md Text change): 10-K filings of the reference.json
 universe, Items 1A and 7 scored against the prior-year filing by
 text_change.score. known_at is the SEC acceptance time. The SEC contact string
 comes from MIRO_CONTACT only; filing bodies are cached under data/filings, so a
-rerun fetches only what is missing."""
+rerun fetches only what is missing. A run with any fetch failure keeps the
+previous rows of the affected symbols and writes nothing without a previous
+file."""
 import argparse
 import collections
 import datetime
@@ -19,7 +21,8 @@ from research.sources import edgar_filings, filing_sections
 from research.strategy import text_change
 
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK%010d.json"
-FORMS = ("10-K", "10-Q")
+PAGE_URL = "https://data.sec.gov/submissions/%s"
+FORMS = ("10-K",)
 DEFAULT_START = "2014-01-01"  # a year before the evaluation window, for priors
 MIN_INTERVAL_S = 0.125  # one request at a time, at most 8 per second overall
 SKIPS = ("no_prior", "parse_failure", "fetch_failure")
@@ -41,17 +44,44 @@ def _paced(transport, mono, sleep):
     return call
 
 
-def _submissions(fetcher, cik):
-    status, _, body = fetcher.transport(
-        SUBMISSIONS_URL % cik,
-        {"User-Agent": fetcher.ua, "Accept": "application/json"},
-        fetcher.timeout_s)
+def _get_json(fetcher, url):
+    try:
+        status, _, body = fetcher.transport(
+            url, {"User-Agent": fetcher.ua, "Accept": "application/json"},
+            fetcher.timeout_s)
+    except OSError as e:
+        raise edgar_filings.FilingError("%s: %s" % (url, e)) from None
     if status != 200:
-        raise edgar_filings.FilingError("HTTP %d for submissions" % status)
+        raise edgar_filings.FilingError("HTTP %d for %s" % (status, url))
     try:
         return json.loads(body)
     except ValueError:
-        raise edgar_filings.FilingError("submissions: not JSON") from None
+        raise edgar_filings.FilingError("%s: not JSON" % url) from None
+
+
+def _submissions(fetcher, cik, start):
+    """Submissions JSON with the older pages named in filings.files merged into
+    filings.recent. Pages that end before start are not fetched."""
+    sub = _get_json(fetcher, SUBMISSIONS_URL % cik)
+    try:
+        recent = sub["filings"]["recent"]
+        pages = sub["filings"].get("files", ())
+        merged = {k: list(v) for k, v in recent.items()}
+        for page in pages:
+            name = page["name"]
+            if name != os.path.basename(name) or not name.endswith(".json"):
+                raise edgar_filings.FilingError("unsafe submissions page name")
+            if page.get("filingTo", "9999") < start:
+                continue
+            extra = _get_json(fetcher, PAGE_URL % name)
+            if set(extra) != set(merged):
+                raise edgar_filings.FilingError("submissions page columns")
+            for k, v in extra.items():
+                merged[k] += v
+    except (KeyError, TypeError, AttributeError):
+        raise edgar_filings.FilingError("submissions: malformed") from None
+    sub["filings"] = {"recent": merged}
+    return sub
 
 
 def _stamp(s):
@@ -128,6 +158,16 @@ def read_universe(data_dir):
     return out
 
 
+def _previous(path):
+    """data of an existing output file, or None when absent or malformed."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)["data"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def main(argv=None, env=None, now=None, log=print, transport=None, mono=None,
          sleep=None):
     ap = argparse.ArgumentParser(description=__doc__)
@@ -152,26 +192,34 @@ def main(argv=None, env=None, now=None, log=print, transport=None, mono=None,
         log(str(e))
         return 2
     for sym in sorted(universe):
-        rows = []
+        rows, before = [], skips["fetch_failure"]
         try:
             for cik in universe[sym]:
-                rows += score_filer(_submissions(fetcher, cik), fetcher, cache,
-                                    a.start, skips)
+                rows += score_filer(_submissions(fetcher, cik, a.start),
+                                    fetcher, cache, a.start, skips)
         except (edgar_filings.FilingError, KeyError, TypeError):
+            failed.append(sym)
+            continue
+        if skips["fetch_failure"] > before:
             failed.append(sym)
             continue
         if rows:
             data[sym] = rows
         log("%s: %d scores" % (sym, len(rows)))
     out = os.path.join(a.data, "filing_scores.json")
-    with open(out + ".tmp", "w", encoding="utf-8", newline="\n") as f:
-        json.dump({"through": now.date().isoformat(), "data": data}, f,
-                  sort_keys=True)
-    os.replace(out + ".tmp", out)
+    previous = _previous(out) if failed else {}
+    if previous is None:
+        log("failures and no previous filing_scores.json: not written")
+    else:
+        data.update({s: previous[s] for s in failed if s in previous})
+        with open(out + ".tmp", "w", encoding="utf-8", newline="\n") as f:
+            json.dump({"through": now.date().isoformat(), "data": data}, f,
+                      sort_keys=True)
+        os.replace(out + ".tmp", out)
     log(json.dumps({"symbols": len(universe), "scored_symbols": len(data),
-                    "skips": dict(skips), "submissions_failed": failed},
+                    "skips": dict(skips), "failed_symbols": sorted(failed)},
                    sort_keys=True))
-    return 1 if failed or skips["fetch_failure"] else 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

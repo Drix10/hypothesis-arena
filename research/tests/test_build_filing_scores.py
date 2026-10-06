@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+import urllib.error
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -52,22 +53,33 @@ SUBS = {
                row("0000000002-20-000001", 2020)]),
     3: sub(3, [row("0000000003-20-000001", 2020)]),
 }
+PAGE = "CIK0000000001-submissions-001.json"
+OLD = filing_text("We face litigation risk.", "Revenue grew on widgets.")
 BODIES = {"0000000001-19-000001": GOOD[2019], "0000000001-20-000001": GOOD[2020],
+          "0000000001-21-000001": GOOD[2020],
           "0000000002-19-000001": BAD, "0000000002-20-000001": BAD,
           "0000000003-20-000001": GOOD[2020]}
+
+
+PAGES = {}
 
 
 class Server:
     def __init__(self, clock):
         self.clock, self.calls, self.times = clock, [], []
+        self.down, self.missing = (), ()
 
     def __call__(self, url, headers, timeout_s):
         self.calls.append(url)
         self.times.append(self.clock.t)
         if "contact=" not in headers["User-Agent"]:
             return 403, {}, b""
+        if url in self.down:
+            raise urllib.error.URLError("unreachable")
+        if url.endswith(PAGE):
+            return 200, {}, json.dumps(PAGES[PAGE]).encode()
         for cik, s in SUBS.items():
-            if url == SUB % cik:
+            if url == SUB % cik and cik not in self.missing:
                 return 200, {}, json.dumps(s).encode()
         for acc, text in BODIES.items():
             if acc.replace("-", "") in url:
@@ -97,16 +109,21 @@ class BuildTest(unittest.TestCase):
             json.dump({"through": "2026-10-06", "data": {"ciks": ciks}}, f)
         self.log = []
 
-    def run_build(self, env=None, server=None):
+    def run_build(self, env=None, server=None, now=NOW):
         clock = Clock()
         self.server = server or Server(clock)
         self.server.clock = clock
         code = B.main(["--data", self.dir],
                       env={"MIRO_CONTACT": "ops@example.com"}
                       if env is None else env,
-                      now=NOW, log=self.log.append, transport=self.server,
+                      now=now, log=self.log.append, transport=self.server,
                       mono=clock.mono, sleep=clock.sleep)
         return code
+
+    def failing(self, down=(), missing=()):
+        server = Server(None)
+        server.down, server.missing = down, missing
+        return server
 
     def output(self):
         with open(os.path.join(self.dir, "filing_scores.json")) as f:
@@ -122,27 +139,27 @@ class BuildTest(unittest.TestCase):
         self.assertEqual(list(out["data"]), ["AAA"])
         rows = out["data"]["AAA"]
         self.assertEqual([r["known_at"] for r in rows],
-                         ["2020-02-20T21:30:05+00:00"])
+                         ["2020-02-20T21:30:05+00:00",
+                          "2021-02-20T21:30:05+00:00"])
         self.assertGreater(rows[0]["delta"], 0)
         self.assertEqual(self.summary()["skips"],
                          {"no_prior": 2, "parse_failure": 2,
-                          "fetch_failure": 1})
+                          "fetch_failure": 0})
 
     def test_unparsed_symbol_is_absent_not_zero(self):
         self.run_build()
         self.assertNotIn("BBB", self.output()["data"])
         self.assertNotIn("CCC", self.output()["data"])
 
-    def test_fetch_failure_exits_nonzero(self):
-        self.assertEqual(self.run_build(), 1)
+    def test_clean_run_exits_zero(self):
+        self.assertEqual(self.run_build(), 0)
 
     def test_rerun_refetches_only_missing_filings(self):
         self.run_build()
         first = self.output()
         self.run_build()
         archive = [u for u in self.server.calls if "/Archives/" in u]
-        self.assertEqual(len(archive), 1)
-        self.assertIn("000000000121000001", archive[0])
+        self.assertEqual(archive, [])
         self.assertEqual(self.output(), first)
 
     def test_requests_are_paced_under_the_sec_limit(self):
@@ -162,7 +179,53 @@ class BuildTest(unittest.TestCase):
         self.addCleanup(lambda: SUBS.update({3: sub(3, [
             row("0000000003-20-000001", 2020)])}))
         self.run_build()
-        self.assertEqual(self.summary()["skips"]["fetch_failure"], 2)
+        self.assertEqual(self.summary()["skips"]["fetch_failure"], 1)
+        self.assertEqual(self.summary()["failed_symbols"], ["CCC"])
+
+    def test_failed_first_run_writes_nothing(self):
+        self.assertEqual(self.run_build(server=self.failing(missing=(1,))), 1)
+        self.assertFalse(os.path.exists(
+            os.path.join(self.dir, "filing_scores.json")))
+
+    def test_partial_rerun_keeps_previous_rows_of_failed_symbols(self):
+        self.run_build()
+        first = self.output()
+        later = NOW + datetime.timedelta(days=1)
+        code = self.run_build(server=self.failing(missing=(1,)), now=later)
+        out = self.output()
+        self.assertEqual(code, 1)
+        self.assertEqual(out["through"], "2026-10-07")
+        self.assertEqual(out["data"], first["data"])
+        self.assertEqual(self.summary()["failed_symbols"], ["AAA"])
+
+    def test_network_error_on_submissions_is_a_fetch_failure(self):
+        self.run_build()
+        code = self.run_build(server=self.failing(down=(SUB % 1,)))
+        self.assertEqual(code, 1)
+        self.assertEqual(self.summary()["failed_symbols"], ["AAA"])
+        self.assertIn("AAA", self.output()["data"])
+
+    def test_history_pages_are_read_and_paced(self):
+        SUBS[1]["filings"]["files"] = [
+            {"name": PAGE, "filingFrom": "2014-01-01", "filingTo": "2018-12-31"}]
+        PAGES[PAGE] = sub(1, [row("0000000001-18-000001", 2018)])["filings"]["recent"]
+        BODIES["0000000001-18-000001"] = OLD
+        self.addCleanup(SUBS[1]["filings"].pop, "files")
+        self.addCleanup(PAGES.pop, PAGE)
+        self.addCleanup(BODIES.pop, "0000000001-18-000001")
+        self.assertEqual(self.run_build(), 0)
+        known = [r["known_at"] for r in self.output()["data"]["AAA"]]
+        self.assertEqual(known[0], "2019-02-20T21:30:05+00:00")
+        self.assertEqual(len(known), 3)
+        t = self.server.times
+        self.assertTrue(all(b - a >= 0.1 for a, b in zip(t, t[1:])))
+
+    def test_page_older_than_start_is_not_fetched(self):
+        SUBS[1]["filings"]["files"] = [
+            {"name": PAGE, "filingFrom": "2001-01-01", "filingTo": "2010-12-31"}]
+        self.addCleanup(SUBS[1]["filings"].pop, "files")
+        self.run_build()
+        self.assertFalse(any(u.endswith(PAGE) for u in self.server.calls))
 
     def test_output_loads_in_the_runner(self):
         self.run_build()
