@@ -166,6 +166,10 @@ Open:
       (`strategy/backtest.py`) and the bar loader (`strategy/bar_loader.py`) are
       built on synthetic data. Left: a continuous, rate-capped exposure input to
       the harness on the US margin ledger, and real SIP datasets on disk.
+      Human: build the symbols file in two passes (needs reference.json):
+      `python3 research/strategy/build_universe.py --filers <form.idx> --as-of <date>`,
+      fetch `research/data/universe_candidates.txt` with the command below, then
+      build again; a symbol without current bars is excluded and counted.
       Human: fetch the datasets once with `ALPACA_KEY_ID` and `ALPACA_SECRET` exported:
       `python3 research/strategy/fetch_universe_bars.py <symbols file> --yes`
       (omit `--yes` for the request estimate; rerun to resume or refresh). Then
