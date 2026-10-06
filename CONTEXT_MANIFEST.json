@@ -1,4 +1,4 @@
-﻿{
+{
   "$schema": "./.agent-flow-runtime/schemas/context-manifest.schema.json",
   "version": "2",
   "repo": "hypothesis-arena",
