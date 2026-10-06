@@ -165,7 +165,10 @@ Open:
 - [ ] **ETF Trend scaler:** the signal (`strategy/etf_trend.py`), the runner
       (`strategy/backtest.py`) and the bar loader (`strategy/bar_loader.py`) are
       built on synthetic data. Left: a continuous, rate-capped exposure input to
-      the harness on the US margin ledger, and real SIP datasets on disk. Human
+      the harness on the US margin ledger, and real SIP datasets on disk.
+      Human: fetch the datasets once with `ALPACA_KEY_ID` and `ALPACA_SECRET` exported:
+      `python3 research/strategy/fetch_universe_bars.py <symbols file> --yes`
+      (omit `--yes` for the request estimate; rerun to resume or refresh). Then
       run once the datasets are on disk (`research/data/`, layout in
       `read_dataset` of `strategy/run_connected_drift.py`): dry run
       `python3 research/strategy/run_connected_drift.py`, which prints coverage,

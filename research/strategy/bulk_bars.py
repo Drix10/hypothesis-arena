@@ -27,9 +27,13 @@ class _Throttle:
         time.sleep(max(0.0, t - now))
 
 
-def fetch_all(symbols, adjustment, outdir, start, end, log=print):
-    """Returns (done, failed). Existing verified datasets are skipped."""
-    sip_fetch.load_alpaca_env()
+def fetch_all(symbols, adjustment, outdir, start, end, log=print,
+              load_env=True, **fetch_kw):
+    """Returns (done, failed). Existing verified datasets are skipped.
+    load_env False leaves the environment alone; fetch_kw (http_get, headers,
+    now) reaches sip_fetch.fetch."""
+    if load_env:
+        sip_fetch.load_alpaca_env()
     throttle = _Throttle(MIN_INTERVAL_S)
     lock = threading.Lock()
     state = {"done": 0, "seen": 0}
@@ -45,7 +49,8 @@ def fetch_all(symbols, adjustment, outdir, start, end, log=print):
                 try:
                     throttle.wait()
                     sip_fetch.write_dataset(s, "bars", start, end, outdir,
-                                            "1Day", adjustment)
+                                            "1Day", adjustment,
+                                            **fetch_kw)
                     ok = True
                     break
                 except Exception as e:
