@@ -168,7 +168,14 @@ Open:
       the harness on the US margin ledger, and real SIP datasets on disk.
       Human: fetch the datasets once with `ALPACA_KEY_ID` and `ALPACA_SECRET` exported:
       `python3 research/strategy/fetch_universe_bars.py <symbols file> --yes`
-      (omit `--yes` for the request estimate; rerun to resume or refresh). Then
+      (omit `--yes` for the request estimate; rerun to resume or refresh).
+      The symbols file is built by `strategy/build_universe.py` from the SEC
+      `company_tickers.json`, an EDGAR 10-K `form.idx` body and `reference.json`
+      (no network): `python3 research/strategy/build_universe.py --tickers
+      <company_tickers.json> --filers <form.idx> --as-of <ISO date>` writes
+      `research/data/universe_symbols.txt` and `universe_manifest.json`; rerun
+      with `--bars` after the fetch to apply the price and dollar volume
+      filters. Waits on `reference.json` for the market cap filters. Then
       run once the datasets are on disk (`research/data/`, layout in
       `read_dataset` of `strategy/run_connected_drift.py`): dry run
       `python3 research/strategy/run_connected_drift.py`, which prints coverage,
