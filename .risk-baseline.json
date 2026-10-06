@@ -1,6 +1,6 @@
 {
   "version": "2",
-  "lastScan": "2026-10-06T13:23:20.995Z",
+  "lastScan": "2026-10-06T13:35:02.875Z",
   "surfaces": [
     {
       "key": "auth:research/engine/workers.py",
@@ -233,6 +233,16 @@
         357
       ],
       "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "data-mutation:research/strategy/fetch_universe_bars.py",
+      "type": "data-mutation",
+      "path": "research/strategy/fetch_universe_bars.py",
+      "detail": "data-mutation pattern",
+      "lines": [
+        80
+      ],
+      "firstSeen": "2026-10-06T13:35:02.471Z"
     },
     {
       "key": "data-mutation:research/strategy/sec_financial_statements.py",
