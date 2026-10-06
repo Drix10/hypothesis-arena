@@ -5,7 +5,9 @@ Reports the paper balance and margin multiplier, shortable and
 easy_to_borrow flags for a 20-name sample, whether a 1-share test short of a
 liquid ETF is accepted, and whether a fractional short is accepted. Places at
 most one 1-share and one fractional sell order, cancels each, and refuses to
-run unless the base URL is the paper endpoint. Keys come from the environment
+run unless the base URL is the paper endpoint, the market is closed (a queued
+day order cannot fill before the cancel) and the account holds none of the
+ETF (else the sell is not a short). Keys come from the environment
 only (ALPACA_KEY_ID, ALPACA_SECRET), never argv, .env or the report.
 Usage: python3 research/sandbox/alpaca_short_probe.py [--out PATH]
 """
@@ -17,6 +19,8 @@ import urllib.request
 
 PAPER = "https://paper-api.alpaca.markets"
 ETF = "SPY"
+# lean: hardcoded liquid sample, no allowlist file exists; read it from the
+# allowlist file once one exists
 SAMPLE = ["AAPL", "MSFT", "AMZN", "GOOGL", "META", "NVDA", "TSLA", "JPM",
           "XOM", "JNJ", "PG", "KO", "WMT", "DIS", "INTC", "F", "SPY", "QQQ",
           "IWM", "GLD"]
@@ -24,7 +28,11 @@ UA = "MiroHedge/phase0 contact=research-plane-alpaca"
 
 
 def http_transport(kid, secret):
-    """transport(method, base, path, body) -> (status, parsed-or-None)."""
+    """transport(method, base, path, body) -> (status, parsed-or-None).
+
+    A network failure returns (None, None) so a failed cancel still reaches
+    the report.
+    """
     def call(method, base, path, body=None):
         data = None if body is None else json.dumps(body).encode()
         req = urllib.request.Request(
@@ -40,11 +48,13 @@ def http_transport(kid, secret):
                 return e.code, json.loads(e.read(1 << 16))
             except ValueError:
                 return e.code, None
+        except (urllib.error.URLError, OSError, ValueError):
+            return None, None
     return call
 
 
 def _order(transport, base, symbol, qty):
-    """Submit one market sell, cancel it if it was accepted."""
+    """Submit one market sell, cancel it if accepted, read its final state."""
     status, body = transport("POST", base, "/v2/orders", {
         "symbol": symbol, "qty": str(qty), "side": "sell",
         "type": "market", "time_in_force": "day"})
@@ -52,9 +62,12 @@ def _order(transport, base, symbol, qty):
     if status not in (200, 201) or not body.get("id"):
         return {"accepted": False, "http": status,
                 "message": str(body.get("message", ""))[:120]}
-    cstatus, _ = transport("DELETE", base, "/v2/orders/" + body["id"])
+    path = "/v2/orders/" + body["id"]
+    cstatus, _ = transport("DELETE", base, path)
+    fstatus, final = transport("GET", base, path)
+    final = final if fstatus == 200 and isinstance(final, dict) else {}
     return {"accepted": True, "http": status, "order_status": body.get("status"),
-            "cancel_http": cstatus}
+            "cancel_http": cstatus, "final_status": final.get("status")}
 
 
 def run(transport, base=PAPER, sample=None, etf=ETF):
@@ -77,6 +90,15 @@ def run(transport, base=PAPER, sample=None, etf=ETF):
                       "easy_to_borrow": a.get("easy_to_borrow"),
                       "fractionable": a.get("fractionable")})
     ev["assets"] = flags
+
+    status, clock = transport("GET", base, "/v2/clock", None)
+    if status != 200 or not isinstance(clock, dict) \
+            or clock.get("is_open") is not False:
+        raise RuntimeError("refusing to order: market open or clock unread")
+    status, _ = transport("GET", base, "/v2/positions/" + etf, None)
+    if status != 404:
+        raise RuntimeError("refusing to order: %s position exists or unread "
+                           "(http %s)" % (etf, status))
 
     ev["short_1_share"] = dict(_order(transport, base, etf, 1), symbol=etf)
     ev["orders_placed"] += 1

@@ -11,13 +11,20 @@ ACCT = {"status": "ACTIVE", "currency": "USD", "cash": "100000",
 
 
 class Fake:
-    def __init__(self, short_ok=True, frac_ok=False):
+    def __init__(self, short_ok=True, frac_ok=False, market_open=False,
+                 position=False, cancel_ok=True):
         self.calls, self.short_ok, self.frac_ok = [], short_ok, frac_ok
+        self.market_open, self.position = market_open, position
+        self.cancel_ok = cancel_ok
 
     def __call__(self, method, base, path, body=None):
         self.calls.append((method, path, body))
         if path == "/v2/account":
             return 200, ACCT
+        if path == "/v2/clock":
+            return 200, {"is_open": self.market_open}
+        if path.startswith("/v2/positions/"):
+            return (200, {"qty": "10"}) if self.position else (404, {})
         if path.startswith("/v2/assets/"):
             return 200, {"shortable": True, "easy_to_borrow": path.endswith(
                 "SPY"), "fractionable": True}
@@ -27,7 +34,9 @@ class Fake:
                 return 201, {"id": "o-" + body["qty"], "status": "accepted"}
             return 403, {"message": "fractional short not allowed"}
         if method == "DELETE":
-            return 204, None
+            return (204, None) if self.cancel_ok else (None, None)
+        if method == "GET" and path.startswith("/v2/orders/"):
+            return 200, {"status": "canceled" if self.cancel_ok else "new"}
         raise AssertionError(path)
 
 
@@ -49,6 +58,35 @@ class ShortProbe(unittest.TestCase):
         self.assertEqual([c[2]["side"] for c in posts], ["sell", "sell"])
         self.assertEqual([c[1] for c in f.calls if c[0] == "DELETE"],
                          ["/v2/orders/o-1"])
+        self.assertEqual(ev["short_1_share"]["final_status"], "canceled")
+
+    def test_market_open_places_no_order(self):
+        f = Fake(market_open=True)
+        with self.assertRaises(RuntimeError):
+            P.run(f)
+        self.assertFalse([c for c in f.calls if c[0] == "POST"])
+
+    def test_existing_position_places_no_order(self):
+        f = Fake(position=True)
+        with self.assertRaises(RuntimeError):
+            P.run(f)
+        self.assertFalse([c for c in f.calls if c[0] == "POST"])
+
+    def test_failed_cancel_is_reported(self):
+        ev = P.run(Fake(cancel_ok=False))
+        self.assertIsNone(ev["short_1_share"]["cancel_http"])
+        self.assertEqual(ev["short_1_share"]["final_status"], "new")
+
+    def test_transport_maps_network_error(self):
+        def refuse(req, timeout):
+            raise P.urllib.error.URLError("refused")
+        saved, P.urllib.request.urlopen = P.urllib.request.urlopen, refuse
+        try:
+            call = P.http_transport("k", "s")
+            self.assertEqual(call("DELETE", P.PAPER, "/v2/orders/o-1"),
+                             (None, None))
+        finally:
+            P.urllib.request.urlopen = saved
 
     def test_rejected_short_is_not_cancelled(self):
         f = Fake(short_ok=False)
