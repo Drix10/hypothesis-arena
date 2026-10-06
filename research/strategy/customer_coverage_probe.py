@@ -111,20 +111,22 @@ def probe(years, get_index, get_text, aliases, observations,
     year is the filing year."""
     rows, incomplete = {}, False
     for y in years:
-        texts, failed, empty = [], 0, 0
+        texts, failed, empty, first_error = [], 0, 0, ""
         sample = sample_filers(parse_index(get_index(y)), n, seed)
         for f in sample:
             try:
                 text = get_text(f["file"])
-            except (OSError, edgar_filings.FilingError):
+            except (OSError, edgar_filings.FilingError) as e:
                 failed += 1
+                first_error = first_error or str(e)[:120]
                 continue
             if text.strip():
                 texts.append(text)
             else:
                 empty += 1
         rows[y] = _year_row(texts, aliases, observations, date(y, 12, 31))
-        rows[y].update(fetch_failed=failed, empty_text=empty)
+        rows[y].update(fetch_failed=failed, empty_text=empty,
+                       first_error=first_error)
         incomplete |= not sample or 2 * (failed + empty) > len(sample)
     summary = collapse(rows)
     if incomplete:
