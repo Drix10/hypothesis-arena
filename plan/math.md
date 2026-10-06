@@ -117,13 +117,13 @@ Form 4 purchases in the trailing month; undefined where no event fires).
   Stage 1). A firm with no insider event is excluded from that component's
   ranking and regression and its score set to 0 afterwards.
 - **Composite:** `S_i = (z_link,i + z_filing,i + z_ins,i) / 3`, with `z` the
-  rescaled residual and a missing `z` equal to 0 (*registered*). The primary
-  weights are fixed and never fitted; only the registered ridge-toward-equal
-  variant fits `ŵ_k`, shrinking weights `w_k = (1 − λ)/3 + λ ŵ_k` with one
-  shrink factor `λ` chosen once under CPCV.
+  rescaled residual and a missing `z` equal to 0 (*registered*). The weights
+  are fixed and never fitted. A later ridge-toward-equal registration may fit
+  `ŵ_k`, shrinking weights `w_k = (1 − λ)/3 + λ ŵ_k` with one shrink factor
+  `λ` chosen once under CPCV.
 - **Agreement gate:** candidate `i` is dropped when `sign(z_k,i) ≠ sign(S_i)`
   and `|z_k,i| > τ` for any component `k` with `z_k,i ≠ 0`. `τ` is registered
-  (proposed 1.0).
+  (1.0).
 - **Exposure scaler:** gross is `G_t = G · clip(s_t, 0, 1)`, where `s_t` is a
   continuous function of the ETF Trend state and trailing volatility, and the
   change per rebalance is capped: `|s_t − s_{t−1}| ≤ δ`. The functional form,

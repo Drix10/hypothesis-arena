@@ -43,9 +43,9 @@ Necessary, never sufficient.
   graphs, source ablations, delisting sensitivity) write ledger rows of kind
   `diagnostic`, linked to their trial; they can never be selected, so they do
   not enter `N_eff`.
-- **Trial budget for `connected_drift`:** 3 selectable variants (proposed;
-  `strategies.md`, Pre-registration fields), so the family floor of `N_eff` is
-  3. Drop-one ablations, the run without the scaler, the own-firm skip-month and
+- **Trial budget for `connected_drift`:** one selectable variant
+  (`strategies.md`, Pre-registration fields), so the family floor of `N_eff` is
+  1. Drop-one ablations, the run without the scaler, the own-firm skip-month and
   1-month hold, the placebo graph, delisting sensitivity and event-day insider
   entry are diagnostic runs: each writes a ledger row, none is selectable, none
   counts toward `N_eff`. A diagnostic result that is used to choose or change
@@ -146,7 +146,7 @@ within 20 bp). It is extended for the US set (shorts, margin, borrow, short
 dividends and the short-side cost terms) before a US-set strategy enters shadow.
 Multiple-testing families are kept apart so one hypothesis does not tax an
 unrelated one: the strategies in `strategies.md` form one Holm family, which
-holds the Connected Drift Book's 3 selectable variants plus any other strategy
+holds the Connected Drift Book's selectable variant plus any other strategy
 registered later, and model-component tests (the link-component model twin,
 any parked card's judgment-class test, the X corroboration test) form another.
 
@@ -184,7 +184,7 @@ A challenger may be proposed for promotion only when all of the following hold:
    results) voids the run. Search correction: a Holm step-down at α = 0.05 over
    the family's tested variants on the primary metric, with the declared variant
    count setting the multiplicity and no post-hoc discounting. The Connected
-   Drift Book's 3 selectable variants count as 3 tested variants; diagnostic
+   Drift Book's selectable variant counts as one tested variant; diagnostic
    runs do not. The construction: H0 is challenger net Sharpe at most champion
    net Sharpe (one-sided; the challenger must be strictly better); the test
    statistic is the paired bootstrap difference of net Sharpes on the same

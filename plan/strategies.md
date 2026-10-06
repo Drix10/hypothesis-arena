@@ -210,30 +210,27 @@ Values marked *proposed* are not decided; they are listed under Open items.
 | Datasets | Link-graph store (text peers, 13F edges, customer and supplier edges when the extractor exists), 10-K and 10-Q text, Form 4 events, daily bars, T-bill leg; manifest hashes at registration. |
 | Signal | The composite above, from the month-end close. |
 | Holding | Monthly tranches, 3-month hold, next-session execution. |
-| Sizing | Proportional to score magnitude with a single-name cap; at least 15 names a side at 150% gross (20 planned); 10% annual volatility target with the capped scaler; beta to VTI at most 0.3 absolute. Cap and band values: *proposed*. |
+| Sizing | Proportional to score magnitude with a single-name cap; at least 15 names a side at 150% gross (20 planned); 10% annual volatility target with the capped scaler; beta to VTI at most 0.3 absolute. Single-name cap 6%, no-trade band 20%. |
 | Drawdown limit | Default 2 × the annual volatility target (20%). |
 | Evaluation window | From 2016 (the free feed's start); 2007 only for filings-based edges if paid history is bought (`data.md`). |
 | Splits | Walk-forward with purging and embargo where labels overlap; CPCV only to choose among the registered variants. |
-| Embargo | 63 sessions, the 3-month hold (*proposed*). |
-| Holdout | The last 3 years or last 25% of the sample, whichever is longer (*proposed*), never used for any choice. The 2016-2026 window was already seen by an earlier long-only trend test, so a run touching the scaler is labeled `seen-window` and the shadow minimum doubles to 6 rebalances (`validation.md`). |
-| Variants (3, *proposed*) | (1) equal-weight composite with scaler (primary); (2) ridge-toward-equal weights with one shrink factor chosen once; (3) the primary plus edge (c), news co-mentions over the trailing 90 days. |
+| Embargo | 63 sessions, the 3-month hold. |
+| Holdout | The last 3 years or last 25% of the sample, whichever is longer, never used for any choice. The 2016-2026 window was already seen by an earlier long-only trend test, so a run touching the scaler is labeled `seen-window` and the shadow minimum doubles to 6 rebalances (`validation.md`). |
+| Variants (1) | The equal-weight composite with scaler. Ridge-toward-equal weights and edge (c), news co-mentions over the trailing 90 days, are later registrations. |
 | Diagnostic runs | Drop-one ablations (three), no scaler, own-firm skip-month, 1-month hold, placebo graph, delisting sensitivity, event-day insider entry. Not selectable, not in `N_eff`. |
-| Multiple testing | `N_eff` floored at the family's 3; DSR at least 0.95; PBO at most 0.2; MinTRL met; the 50% haircut still clears 2× cost; spanning-alpha CI lower bound above 0 against the reference book. |
+| Multiple testing | `N_eff` floored at the family's 1; DSR at least 0.95; PBO at most 0.2; MinTRL met; the 50% haircut still clears 2× cost; spanning-alpha CI lower bound above 0 against the reference book. |
 | Account mechanics | US set: margin, borrow and short-dividend ledger. |
 | Model involvement | None. |
 
-### Open items for operator approval
+### Registered values
 
-- Agreement-gate threshold: one standard deviation (proposed).
-- Selectable variants: 3 (proposed), inside the 3-6 trials the combination
-  notes recommend (an inference, not a sourced rule).
-- Embargo: 63 sessions (proposed; the 1%-of-sample rule was not verified).
-- Holdout: the last 3 years or 25%, whichever is longer (proposed).
-- Single-name cap and no-trade band values (proposed).
-- Scaler functional form and rate cap `δ` (proposed at registration;
-  `math.md`, Exposure scaler).
-- Distress veto definition (proposed at registration). The evidence report
-  names the veto but fixes no measure.
+- Agreement-gate threshold: one standard deviation.
+- Selectable variants: 1.
+- Minimum test length 756 sessions; 4 walk-forward splits.
+- Distress veto: going-concern language in the latest filing, or Altman Z
+  below 1.8 where computable.
+- Scaler form and rate cap: `strategy/etf_trend.py` (linear across plus or
+  minus 5% excess return, floor 0, ceiling 1, rate cap 0.25).
 
 The separate Link Momentum, Filing Change, insider and ETF Trend registrations
 are folded into this book (approved in chat 2026-10-05).

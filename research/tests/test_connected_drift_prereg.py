@@ -28,7 +28,7 @@ class ConnectedDriftPreregTest(unittest.TestCase):
             self.assertIn(term, self.p["signal"] + self.p["universe"][0])
 
     def test_variants_and_diagnostics(self):
-        self.assertEqual(len(self.p["variants"]), 3)
+        self.assertEqual(len(self.p["variants"]), 1)
         self.assertEqual(len(self.p["diagnostics"]), 9)
         names = {v["name"] for v in self.p["variants"]}
         self.assertFalse(names & set(self.p["diagnostics"]))

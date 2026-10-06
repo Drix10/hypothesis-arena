@@ -31,11 +31,10 @@ Shorts in the harness -> Text-change signal -----------------+
 
 ## Go/no-go review
 
-After the `connected_drift` backtest gate, which judges its three selectable
-variants as one family:
+After the `connected_drift` backtest gate, which judges its one selectable
+variant:
 
-1. **It passes.** The best variant (by the pre-registered primary metric; ties go
-   to the simpler variant) starts its shadow gate at the registered paper book
+1. **It passes.** The variant starts its shadow gate at the registered paper book
    size under the US set. Kernel short selling unblocks.
 2. **It fails and meets the paid-data trigger** (`data.md`, Paid data). Buy the
    paid dataset for the strategy, run its fixed spec once on the extended
@@ -49,9 +48,9 @@ If the component correlation matrix shows the components are highly correlated,
 the composite collapses to one signal and the stronger component alone is
 registered instead of the blend.
 
-Trial budget before the review: 3 selectable variants of `connected_drift` are
-proposed (equal-weight composite with trend scaler, ridge-toward-equal weights,
-the primary plus the news edge). Diagnostic runs (drop-one ablations, no trend
+Trial budget before the review: one selectable variant of `connected_drift`
+(equal-weight composite with trend scaler). The ridge-toward-equal and news
+co-mention variants are separate later registrations. Diagnostic runs (drop-one ablations, no trend
 scaler, own-firm skip-month, placebo graph, delisting sensitivity, event-day
 insider entry) are not selectable and sit outside the effective trial count.
 Exceeding the budget needs an operator-approved entry in the approvals log.
@@ -268,7 +267,9 @@ MANIFEST HASH: <sha256>
   separate Link Momentum, Filing Change, insider and ETF Trend registrations are
   folded into it. Approved in chat, 2026-10-05.
 
-Open items for operator approval (proposed, not decided): the agreement-gate
-threshold (one standard deviation), the 3 selectable variants, the embargo
-(63 sessions) and the holdout (last 3 years or 25% of the sample, whichever is
-longer).
+- `connected_drift` registration values: agreement gate 1.0 standard deviation,
+  one selectable variant, 63-session embargo, holdout the longer of the last 3
+  years and 25% of the sample, minimum test length 756 sessions, 4 walk-forward
+  splits, single-name cap 6%, no-trade band 20%, the distress veto (going-concern
+  language or Altman Z below 1.8 where computable). Approved in chat,
+  2026-10-06.
