@@ -21,20 +21,11 @@ NAMED = "We sold products to Apple Inc. and Zeta Widgets in the year."
 BARE = "We make widgets."
 
 
-def two_year_sub(cik):
-    return {"cik": cik, "filings": {"recent": {
-        "accessionNumber": ["0-1-%d" % cik, "0-2-%d" % cik],
-        "form": ["10-K", "10-K"],
-        "filingDate": ["2017-02-01", "2022-02-01"],
-        "acceptanceDateTime": ["x", "x"],
-        "primaryDocument": ["d.htm", "d.htm"]}}}
-
-
 class T(unittest.TestCase):
     def test_parse_index(self):
         self.assertEqual(P.parse_index(INDEX), [
-            {"cik": 1, "name": "ACME CORP"},
-            {"cik": 2, "name": "BETA HOLDINGS INC"}])
+            {"cik": 1, "name": "ACME CORP", "file": "edgar/a.txt"},
+            {"cik": 2, "name": "BETA HOLDINGS INC", "file": "edgar/d.txt"}])
 
     def test_sample_is_seeded_and_capped(self):
         filers = [{"cik": i, "name": "n"} for i in range(30)]
@@ -46,21 +37,18 @@ class T(unittest.TestCase):
     def test_plain_text(self):
         self.assertEqual(P.plain_text("<p>a&amp;b</p>\n<b>c</b>"), "a&b c")
 
-    def run_probe(self, texts, get_sub):
+    def run_probe(self, get_text, years=(2017, 2022)):
         aliases, obs = P.alias_tables(TICKERS)
-        return P.probe((2017, 2022), lambda y: INDEX, get_sub,
-                       lambda f: texts[f["filing_date"][:4]],
-                       aliases, obs, n=2)
+        return P.probe(years, lambda y: INDEX, get_text, aliases, obs, n=2)
 
     def test_shares(self):
-        rep = self.run_probe({"2017": NAMED, "2022": BARE}, two_year_sub)
-        y17, y22 = rep["years"]["2017"], rep["years"]["2022"]
-        self.assertEqual((y17["filings"], y17["named_share"]), (2, 1.0))
-        self.assertEqual((y17["mentions"], y17["resolved"]), (4, 2))
+        texts = {"edgar/a.txt": NAMED, "edgar/d.txt": BARE}
+        rep = self.run_probe(texts.__getitem__, years=(2017,))
+        y17 = rep["years"]["2017"]
+        self.assertEqual((y17["filings"], y17["named_share"]), (2, 0.5))
+        self.assertEqual((y17["mentions"], y17["resolved"]), (2, 1))
         self.assertEqual(y17["resolved_share"], 0.5)
-        self.assertEqual((y22["named_share"], y22["resolved_share"]),
-                         (0.0, None))
-        self.assertTrue(rep["collapsed"])
+        self.assertFalse(rep["incomplete"])
 
     def test_collapse(self):
         rows = {2017: {"filings": 2, "named": 2},
@@ -69,12 +57,23 @@ class T(unittest.TestCase):
         rows[2022]["named"] = 2
         self.assertFalse(P.collapse(rows)["collapsed"])
 
-    def test_failures_are_skipped_not_zero(self):
-        def get_sub(cik):
-            raise edgar_filings.FilingError("down")
-        row = self.run_probe({}, get_sub)["years"]["2017"]
-        self.assertEqual((row["filings"], row["skipped"]), (0, 2))
+    def test_skips_counted_by_reason(self):
+        def get_text(f):
+            if f == "edgar/a.txt":
+                raise OSError("down")
+            return " "
+        rep = self.run_probe(get_text, years=(2017,))
+        row = rep["years"]["2017"]
+        self.assertEqual((row["filings"], row["fetch_failed"],
+                          row["empty_text"]), (0, 1, 1))
         self.assertIsNone(row["named_share"])
+
+    def test_all_skipped_year_is_incomplete(self):
+        def get_text(f):
+            raise edgar_filings.FilingError("down")
+        rep = self.run_probe(get_text)
+        self.assertTrue(rep["incomplete"])
+        self.assertIsNone(rep["collapsed"])
 
 
 if __name__ == "__main__":

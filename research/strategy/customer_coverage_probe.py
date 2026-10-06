@@ -23,13 +23,14 @@ YEARS = tuple(range(2016, 2026))
 PRE_YEARS, POST_YEARS = (2016, 2019), (2021, 2025)
 COLLAPSE_RATIO = 0.5  # lean: judgment threshold, the plan names no number
 INDEX_URL = "https://www.sec.gov/Archives/edgar/full-index/{}/QTR{}/form.idx"
-SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK%010d.json"
+ARCHIVE_URL = "https://www.sec.gov/Archives/"
+MAX_BYTES = 8 * 1024 * 1024
 TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 _TAG = re.compile(r"<[^>]+>")
 
 
 def parse_index(text):
-    """10-K filers from an EDGAR form.idx body: [{cik, name}], one per cik.
+    """10-K filers from an EDGAR form.idx body: [{cik, name, file}], one per cik.
     Columns are fixed-width but the name holds spaces, so the three trailing
     fields (cik, date, file name) are split off the right."""
     out = {}
@@ -38,8 +39,9 @@ def parse_index(text):
             continue
         parts = line[5:].rsplit(None, 3)
         if len(parts) == 4 and parts[1].isdigit():
-            out.setdefault(int(parts[1]), parts[0].strip())
-    return [{"cik": c, "name": n} for c, n in sorted(out.items())]
+            out.setdefault(int(parts[1]), (parts[0].strip(), parts[3]))
+    return [{"cik": c, "name": n, "file": f}
+            for c, (n, f) in sorted(out.items())]
 
 
 def sample_filers(filers, n=N_PER_YEAR, seed=SEED):
@@ -99,63 +101,62 @@ def collapse(rows):
                           else post < COLLAPSE_RATIO * pre)}
 
 
-def probe(years, get_index, get_sub, get_text, aliases, observations,
+def probe(years, get_index, get_text, aliases, observations,
           n=N_PER_YEAR, seed=SEED):
-    """`get_index(year)` is the year's form.idx text, `get_sub(cik)` the EDGAR
-    submissions record, `get_text(filing)` the plain filing text. A filer
-    with no 10-K in its recent filings, or whose fetch fails, is counted in
-    `skipped` and never read as a filing without customers. The fiscal year
-    is the filing year."""
-    rows = {}
+    """`get_index(year)` is the year's form.idx text, `get_text(file_name)` the
+    plain text of that index row's filing. A failed fetch or an empty text is
+    counted in the year's `fetch_failed` / `empty_text` and never read as a
+    filing without customers. A year with more than half its sample skipped
+    makes the report `incomplete`, and `collapsed` is then None. The fiscal
+    year is the filing year."""
+    rows, incomplete = {}, False
     for y in years:
-        texts, skipped = [], 0
-        for f in sample_filers(parse_index(get_index(y)), n, seed):
+        texts, failed, empty = [], 0, 0
+        sample = sample_filers(parse_index(get_index(y)), n, seed)
+        for f in sample:
             try:
-                found = edgar_filings.list_filings(
-                    get_sub(f["cik"]), forms=("10-K",),
-                    start="%d-01-01" % y, end="%d-12-31" % y)
-                if not found:
-                    skipped += 1
-                    continue
-                texts.append(get_text(found[0]))
-            except edgar_filings.FilingError:
-                skipped += 1
+                text = get_text(f["file"])
+            except (OSError, edgar_filings.FilingError):
+                failed += 1
+                continue
+            if text.strip():
+                texts.append(text)
+            else:
+                empty += 1
         rows[y] = _year_row(texts, aliases, observations, date(y, 12, 31))
-        rows[y]["skipped"] = skipped
-    return {"years": {str(y): r for y, r in rows.items()}, **collapse(rows)}
+        rows[y].update(fetch_failed=failed, empty_text=empty)
+        incomplete |= not sample or 2 * (failed + empty) > len(sample)
+    summary = collapse(rows)
+    if incomplete:
+        summary["collapsed"] = None
+    return {"years": {str(y): r for y, r in rows.items()},
+            "incomplete": incomplete, **summary}
 
 
-def _live(contact, out_dir):
-    fetcher = edgar_filings.Fetcher(contact, out_dir)
+def _live(contact):
+    if not contact.strip():
+        raise edgar_filings.FilingError("MIRO_CONTACT missing")
+    ua = "%s contact=%s" % (edgar_filings.UA_BASE, contact.strip())
     last = [0.0]
 
-    def sec_get(url):
+    def sec_get(url, limit=None):
         wait = last[0] - time.monotonic()
         if wait > 0:
             time.sleep(wait)
         last[0] = time.monotonic() + 0.12
-        req = urllib.request.Request(url, headers={"User-Agent": fetcher.ua})
+        req = urllib.request.Request(url, headers={"User-Agent": ua})
         with urllib.request.urlopen(req, timeout=60) as r:
-            return r.read()
+            return r.read(limit)
 
     def get_index(year):
         return "".join(sec_get(INDEX_URL.format(year, q)).decode("latin-1")
                        for q in range(1, 5))
 
-    def get_sub(cik):
-        try:
-            return json.loads(sec_get(SUBMISSIONS_URL % cik))
-        except OSError:
-            raise edgar_filings.FilingError("submissions fetch failed")
+    def get_text(file_name):
+        raw = sec_get(ARCHIVE_URL + file_name, MAX_BYTES)
+        return plain_text(raw.decode("utf-8", errors="replace"))
 
-    def get_text(filing):
-        row = fetcher.fetch(filing)
-        path = os.path.join(out_dir, "%010d" % row["cik"], row["accession"],
-                            row["primary_document"])
-        with open(path, encoding="utf-8", errors="replace") as f:
-            return plain_text(f.read())
-
-    return sec_get, get_index, get_sub, get_text
+    return sec_get, get_index, get_text
 
 
 if __name__ == "__main__":
@@ -163,10 +164,9 @@ if __name__ == "__main__":
     if not contact.strip():
         sys.exit("MIRO_CONTACT missing: export the SEC contact string")
     root = os.path.join(os.path.dirname(__file__), "..")
-    sec_get, get_index, get_sub, get_text = _live(
-        contact, os.path.join(root, "data", "filings"))
+    sec_get, get_index, get_text = _live(contact)
     aliases, obs = alias_tables(json.loads(sec_get(TICKERS_URL)))
-    rep = probe(YEARS, get_index, get_sub, get_text, aliases, obs)
+    rep = probe(YEARS, get_index, get_text, aliases, obs)
     print({k: v for k, v in rep.items() if k != "years"}, flush=True)
     out = os.path.join(root, "reports", "customer_coverage.json")
     with open(out, "w", encoding="utf-8") as f:
