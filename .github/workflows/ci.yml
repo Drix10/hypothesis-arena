@@ -105,6 +105,7 @@ jobs:
           PYTHONWARNINGS=error python3 research/tests/test_build_form4_events.py
           PYTHONWARNINGS=error python3 research/tests/test_build_reference.py
           PYTHONWARNINGS=error python3 research/tests/test_build_universe.py
+          PYTHONWARNINGS=error python3 research/tests/test_build_vetoes.py
           PYTHONWARNINGS=error python3 research/tests/test_build_link_store.py
           PYTHONWARNINGS=error python3 research/tests/test_fetch_universe_bars.py
           PYTHONWARNINGS=error python3 research/tests/test_coverage_probe.py

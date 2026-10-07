@@ -234,7 +234,13 @@ Open:
       <symbols file> --yes`. Market cap before a split is understated by the
       split ratio until raw bars are stored. Waits on the
       real datasets it reads (bars, link store, filing scores, Form 4 events,
-      the reference run and veto data). The Form 4
+      the reference run and veto data). The short vetoes build is
+      `strategy/build_vetoes.py` (tested on fixtures in `test_build_vetoes`;
+      human run, after the reference, filing and link store builds and the
+      FSDS download: `ALPACA_KEY_ID=<id> ALPACA_SECRET=<secret> python3
+      research/strategy/build_vetoes.py`; it writes `vetoes.json` with an
+      `unavailable` list, and the forced-seller overlap threshold is
+      unregistered). The Form 4
       events build is `strategy/build_form4_events.py` (human run:
       `MIRO_CONTACT=<contact> python3 research/strategy/build_form4_events.py`;
       it downloads the quarterly zips to `research/data/form4_zips/`, skips
