@@ -1,6 +1,6 @@
 {
   "version": "2",
-  "lastScan": "2026-10-06T13:35:02.875Z",
+  "lastScan": "2026-10-07T14:41:45.027Z",
   "surfaces": [
     {
       "key": "auth:research/engine/workers.py",
@@ -563,6 +563,18 @@
         108
       ],
       "firstSeen": "2026-10-01T14:24:26.745Z"
+    },
+    {
+      "key": "external-api:research/strategy/build_form4_events.py",
+      "type": "external-api",
+      "path": "research/strategy/build_form4_events.py",
+      "detail": "external-api pattern",
+      "lines": [
+        12,
+        56,
+        58
+      ],
+      "firstSeen": "2026-10-07T14:41:44.250Z"
     },
     {
       "key": "external-api:research/strategy/coverage_probe.py",
