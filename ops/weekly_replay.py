@@ -25,6 +25,7 @@ DAY_NS = 86400 * 10 ** 9
 GENESIS = "0" * 64
 # A decision with no cid exists only for these rejections (kernel/runner/paper_loop.cpp).
 CIDLESS = ("cand-shape", "cand-schema", "cand-cid-mismatch", "line-too-long")
+INPUTS = ("journal.jsonl", "candidates.jsonl", "decisions.jsonl")
 CANDIDATE_KEYS = ("schema", "created_ns", "candidate")
 UNDECIDED_GRACE_NS = DAY_NS  # the loop may not have reached a late line yet
 
@@ -92,6 +93,23 @@ def load_candidates(d):
         os.path.join(d, "candidates.jsonl")) if ln.strip()]
 
 
+def read_decisions(d):
+    """(rows, bad): decoded decision rows and the count of undecodable lines."""
+    rows, bad = [], 0
+    for ln in monitor.read_lines(os.path.join(d, "decisions.jsonl")):
+        if not ln.strip():
+            continue
+        try:
+            row = json.loads(ln)
+        except ValueError:
+            row = None
+        if isinstance(row, dict):
+            rows.append(row)
+        else:
+            bad += 1
+    return rows, bad
+
+
 def week_bounds(week_ending):
     end = datetime.datetime.combine(week_ending + datetime.timedelta(days=1),
                                     datetime.time(), datetime.timezone.utc)
@@ -102,14 +120,19 @@ def week_bounds(week_ending):
 def replay(d, week_ending):
     """List of mismatch strings for the week; empty means the week reproduces."""
     lo, hi = week_bounds(week_ending)
-    out = []
+    out = ["missing input: " + n for n in INPUTS
+           if not os.path.isfile(os.path.join(d, n))]
+    if out:
+        return out
     rows, torn = read_journal(d)
     err = chain_error(rows, torn)
     if err:
         out.append("journal: " + err)
     cands = load_candidates(d)
     by_cid = {c["cid"]: c for rej, c in cands if c}
-    decisions = monitor.jrows(os.path.join(d, "decisions.jsonl"))
+    decisions, bad = read_decisions(d)
+    if bad:
+        out.append("decisions: %d undecodable line(s)" % bad)
     seen = {}
     for dec in decisions:
         cid = dec.get("cid")
@@ -118,9 +141,12 @@ def replay(d, week_ending):
     submitted_in_week = 0
     for dec in decisions:
         ts = dec.get("ts_ns")
-        if not isinstance(ts, int) or not lo <= ts < hi:
-            continue
         cid, reason = dec.get("cid") or "", dec.get("reason")
+        cand = by_cid.get(cid)
+        # A moved ts_ns must not hide a decision for a candidate of this week.
+        if not (isinstance(ts, int) and lo <= ts < hi) and not (
+                cand and lo <= int(cand["snapshot_ts_ns"]) < hi):
+            continue
         label = "decision %s" % (cid[:12] or reason)
         proceed, qty = dec.get("proceed"), dec.get("qty")
         if proceed and not (isinstance(qty, int) and qty > 0

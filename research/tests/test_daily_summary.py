@@ -73,6 +73,13 @@ class SummaryTest(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("model spend: UNAVAILABLE", page)
 
+    def test_missing_inputs_are_unavailable_not_zero(self):
+        build(self.d)
+        os.remove(os.path.join(self.d, "alerts.jsonl"))
+        rc, page = run(self.d)
+        self.assertEqual(rc, 1)
+        self.assertIn("alerts.jsonl: UNAVAILABLE", page)
+
     def test_broken_journal_fails(self):
         build(self.d)
         p = os.path.join(self.d, "journal.jsonl")

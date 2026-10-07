@@ -94,6 +94,24 @@ class ReplayTest(unittest.TestCase):
         rewrite(p, "|intent|i0|", "|intent|iX|")
         self.assertIn("journal:", " ".join(R.replay(self.d, WEEK_END)))
 
+    def test_corrupted_decision_row_is_reported(self):
+        write_run(self.d, [self.line], [decision(self.cid, "VTI")])
+        with open(os.path.join(self.d, "decisions.jsonl"), "a") as f:
+            f.write("{not json\n")
+        self.assertIn("undecodable", " ".join(R.replay(self.d, WEEK_END)))
+
+    def test_missing_input_files_are_reported(self):
+        self.assertEqual(len(R.replay(self.d, WEEK_END)), 3)
+        write_run(self.d, [self.line], [decision(self.cid, "VTI")])
+        os.remove(os.path.join(self.d, "decisions.jsonl"))
+        self.assertIn("missing input: decisions.jsonl", R.replay(self.d, WEEK_END))
+
+    def test_moved_timestamp_does_not_hide_tamper(self):
+        bad = decision(self.cid, "ZZZ")
+        bad["ts_ns"] = HI + R.DAY_NS
+        write_run(self.d, [self.line], [bad])
+        self.assertIn("symbol", " ".join(R.replay(self.d, WEEK_END)))
+
 
 if __name__ == "__main__":
     unittest.main()

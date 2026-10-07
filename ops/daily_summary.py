@@ -11,7 +11,6 @@ no prices, so fills are counted and costs are the cost model applied to the
 decided quantity at the candidate reference price. Exit 1 when the journal chain
 fails or any figure is unavailable. Read-only apart from the summary file."""
 import datetime
-import json
 import os
 import sqlite3
 import sys
@@ -55,7 +54,7 @@ def trade_costs(decisions, by_cid):
     return cost, net
 
 
-def shadow_lines(d, lo, hi):
+def shadow_lines(d, day):
     """Per shadow ledger: net return over the day and the symbols it targets."""
     sd = os.path.join(d, "ledgers")
     out, targets = [], {}
@@ -68,8 +67,6 @@ def shadow_lines(d, lo, hi):
         except (ValueError, KeyError, OSError):
             out.append("  %-20s %s (ledger chain)" % (sid, UNAVAILABLE))
             continue
-        day = datetime.datetime.fromtimestamp(lo // 10 ** 9, datetime.timezone.utc
-                                              ).date().isoformat()
         row = next((r for r in rows if r["date"] == day), None)
         if row is None:
             out.append("  %-20s no session %s" % (sid, day))
@@ -98,6 +95,11 @@ def summarize(d, day, now):
     lo, hi = day_bounds(day)
     ok = True
     out = ["MiroHedge paper daily summary, %s UTC (net figures)" % day, ""]
+    missing = [n for n in R.INPUTS + ("alerts.jsonl",)
+               if not os.path.isfile(os.path.join(d, n))]
+    for n in missing:
+        out.append("%s: %s (file missing)" % (n, UNAVAILABLE))
+    ok = not missing
     rows, torn = R.read_journal(d)
     err = R.chain_error(rows, torn)
     if err:
@@ -112,8 +114,8 @@ def summarize(d, day, now):
         kinds.get("fill", 0), kinds.get("partial", 0), kinds.get("cancel", 0),
         kinds.get("unknown", 0)))
 
-    decisions = [x for x in monitor.jrows(os.path.join(d, "decisions.jsonl"))
-                 if in_day(x, "ts_ns", lo, hi)]
+    all_decisions = monitor.jrows(os.path.join(d, "decisions.jsonl"))
+    decisions = [x for x in all_decisions if in_day(x, "ts_ns", lo, hi)]
     holds = {}
     for x in decisions:
         if not x.get("proceed"):
@@ -133,7 +135,7 @@ def summarize(d, day, now):
         out.append("costs: $%.2f modelled (spread floor %.1f bp + SEC and TAF fees)"
                    % (priced[0], costs.MIN_COST_BPS))
 
-    exposure = trade_costs([x for x in monitor.jrows(os.path.join(d, "decisions.jsonl"))
+    exposure = trade_costs([x for x in all_decisions
                             if x.get("proceed") and x.get("submit") == "submitted"
                             and x.get("ts_ns", 0) < hi], by_cid)
     out.append("exposure: %s" % (UNAVAILABLE if exposure is None else
@@ -152,13 +154,16 @@ def summarize(d, day, now):
             ms[0], ms[1], "  OVER CAP" if ms[0] > ms[1] else ""))
 
     out.append("shadow ledgers:")
-    lines, targets = shadow_lines(d, lo, hi)
+    lines, targets = shadow_lines(d, day.isoformat())
     out.extend(lines or ["  none"])
-    held = set()
-    for x in decisions:
+    held = {}
+    for x in all_decisions:
         c = by_cid.get(x.get("cid"))
-        if c and x.get("proceed") and x.get("submit") == "submitted" and c["side"] == "BUY":
-            held.add(c["symbol"])
+        if (c and x.get("proceed") and x.get("submit") == "submitted"
+                and x.get("ts_ns", 0) < hi):
+            held[c["symbol"]] = held.get(c["symbol"], 0) + (
+                x["qty"] if c["side"] == "BUY" else -x["qty"])
+    held = {s for s, q in held.items() if q > 0}
     for sid, want in sorted(targets.items()):
         out.append("divergence from %s: shadow-only %s, paper-only %s" % (
             sid, sorted(want - held) or "none", sorted(held - want) or "none"))
