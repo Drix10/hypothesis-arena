@@ -230,6 +230,18 @@ def eval_line(ev, sid, last):
         return "    " + col("EVAL unreadable", YEL)
 
 
+def decay_line(dc, sid):
+    """DECAY line from ledgers/decay.json (read-only); a pause or demotion
+    signal is red. Benchmarks are not monitored and have no entry."""
+    try:
+        e = dc.get(sid)
+        if e is None:
+            return "    " + col("DECAY n/a (benchmark or not evaluated yet)", DIM)
+        return "    " + col(e["line"], RED if e["signal"] != "none" else DIM)
+    except (KeyError, TypeError, AttributeError):
+        return "    " + col("DECAY unreadable", YEL)
+
+
 def panel_ledgers(d, out):
     out.append(col("SHADOW LEDGERS (virtual $100k each, no orders)", BOLD))
     sd = os.path.join(d, "ledgers")
@@ -241,6 +253,11 @@ def panel_ledgers(d, out):
             ev = json.load(f)
     except (OSError, ValueError):
         ev = {}
+    try:  # written by ops/decay_monitor.py; absent is fine
+        with open(os.path.join(sd, "decay.json")) as f:
+            dc = json.load(f)
+    except (OSError, ValueError):
+        dc = {}
     for n in names:
         rows = jrows(os.path.join(sd, n))
         if not rows:
@@ -257,6 +274,7 @@ def panel_ledgers(d, out):
         out.append("  %-24s %s  equity %10.2f  %+6.2f%%  (%d sessions)%s" % (
             n[:-6], last, eq, pct, len(rows), flag))
         out.append(eval_line(ev, n[:-6], last))
+        out.append(decay_line(dc, n[:-6]))
 
 
 def panel_broker(broker, out):

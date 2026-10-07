@@ -307,8 +307,11 @@ The paper run starts with `bash ops/deploy/start.sh ~/g2` (see
 
 - [ ] Shadow testing for every backtest-gate passer under its constraint set;
       the shadow gate per strategy.
-- [ ] Decay monitors: rolling 24-month spanning alpha and a one-sided CUSUM on
-      monthly net returns (`plan/math.md`), kill-only.
+- [x] Decay monitors: rolling 24-month spanning alpha and a one-sided CUSUM on
+      monthly net returns (`plan/math.md`), kill-only. `ops/decay_monitor.py`
+      writes `ledgers/decay.json`; waits on a ledger mapped in
+      `forward_eval.MAPPING`, 24 complete months of history and the haircut
+      expectation per ledger in `ledgers/decay_expected.json`.
 - [ ] Netting router, built with the stop-before-close fix once two strategies
       share an account.
 - [ ] Paper orders: one champion through the kernel (needs the kernel build, a

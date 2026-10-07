@@ -136,6 +136,7 @@ jobs:
           PYTHONWARNINGS=error python3 research/tests/test_connected_drift_prereg.py
           PYTHONWARNINGS=error python3 research/tests/test_run_connected_drift.py
           PYTHONWARNINGS=error python3 research/tests/test_customer_edges.py
+          PYTHONWARNINGS=error python3 research/tests/test_decay_monitor.py
           PYTHONWARNINGS=error python3 research/tests/test_text_change.py
           PYTHONWARNINGS=error python3 research/tests/test_universe.py
 
