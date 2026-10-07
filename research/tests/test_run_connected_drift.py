@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from research.engine import link_store
 from research.strategy import composite as C
+from research.strategy import gates
 from research.strategy import ledger as L
 from research.strategy import run_connected_drift as R
 from research.strategy import sip_fetch
@@ -164,6 +165,9 @@ class RunnerTest(unittest.TestCase):
         write_json(self.dir, "form4_events.json", events)
         write_json(self.dir, "vetoes.json", {n: {} for n in C.VETOES})
         write_json(self.dir, "end_events.json", {})
+        write_json(self.dir, "french_factors.json",
+                   [[d, dict.fromkeys(
+                       gates.FACTOR_NAMES + ("RF",), 0.0)] for d in CLOSES["SPY"]])
         write_store(self.dir)
 
     def run_cli(self, *extra):
@@ -272,6 +276,13 @@ class RunnerTest(unittest.TestCase):
         code, _, err = self.register()
         self.assertEqual(code, 1)
         self.assertIn("dataset-missing:form4_events.json", err)
+        self.assertFalse(os.path.exists(self.ledger))
+
+    def test_register_refuses_on_missing_factors(self):
+        os.remove(os.path.join(self.dir, "french_factors.json"))
+        code, _, err = self.register()
+        self.assertEqual(code, 1)
+        self.assertIn("dataset-missing:french_factors.json", err)
         self.assertFalse(os.path.exists(self.ledger))
 
     def test_register_refuses_on_missing_bars(self):

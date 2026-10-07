@@ -65,6 +65,7 @@ cleanup.
 - [ ] One live check, run from a normal shell: fetch one Ken French zip and one
       real 10-K through `french_factors.fetch` and `edgar_filings`, and look at
       units, headers and the section parser's output (see Unverified claims).
+      The factor file comes from `MIRO_CONTACT=... python3 research/strategy/fetch_french_factors.py`; it writes `research/data/french_factors.json`, which `--register` needs.
 
 ## Unverified claims
 

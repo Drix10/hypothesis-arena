@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from research.engine import link_store
 from research.strategy import backtest, bar_loader, composite, delisting
-from research.strategy import etf_trend
+from research.strategy import etf_trend, gates
 from research.strategy import ledger as ledger_mod
 from research.strategy import margin, prereg, tranches
 
@@ -54,7 +54,9 @@ def read_dataset(data_dir, name, need_through):
     filing_scores.json {symbol: [text_change.score]}, form4_events.json
     (form4.build_events rows) and vetoes.json {veto name: {symbol: bool}},
     and end_events.json {symbol: [last_trade event]}, both read only by
-    --register."""
+    --register; french_factors.json {through, data: [[ISO date, {factor:
+    decimal return}]]} (fetch_french_factors), read only by --register for
+    the gate's factor alpha."""
     path = os.path.join(data_dir, name)
     try:
         with open(path, encoding="utf-8") as f:
@@ -191,6 +193,23 @@ def _datasets(data_dir, need):
             read_dataset(data_dir, "form4_events.json", need))
 
 
+def read_factors(data_dir, need_through):
+    """french_factors rows for gates.breadth; a row without every factor and
+    RF is refused."""
+    rows = read_dataset(data_dir, "french_factors.json", need_through)
+    need = set(gates.FACTOR_NAMES) | {"RF"}
+    try:
+        ok = isinstance(rows, list) and rows and all(
+            isinstance(v, dict) and need <= set(v) and all(
+                composite._finite(v[k]) for k in need)
+            for _, v in rows)
+    except (TypeError, ValueError):
+        ok = False
+    if not ok:
+        raise RunnerError("dataset-malformed:french_factors.json")
+    return rows
+
+
 def _store(data_dir):
     path = os.path.join(data_dir, "link_store.jsonl")
     if not os.path.exists(path):
@@ -297,6 +316,7 @@ def register(pre, data_dir, ledger_path, margin_rate):
     ref, filings, events = _datasets(data_dir, end)
     vetoes = read_dataset(data_dir, "vetoes.json", end)
     end_events = read_dataset(data_dir, "end_events.json", end)
+    factors = read_factors(data_dir, end)
     store = _store(data_dir)
     bars, missing = load_bars(data_dir, sorted(set(ref["market_cap"])
                                                | set(SUPPORT)), EVAL_START, end)
@@ -314,7 +334,7 @@ def register(pre, data_dir, ledger_path, margin_rate):
     ends, unverified = delisting.session_ends(bars, end_events, sessions[-1])
     delisting.require_verified(unverified, len(bars))
     return backtest.run_backtest(
-        pre, bars, Book(sessions, bars, inputs), led, ends=ends,
+        pre, bars, Book(sessions, bars, inputs), led, ends=ends, factors=factors,
         margin=margin.MarginTerms(margin_rate=margin_rate))
 
 
