@@ -306,7 +306,16 @@ The paper run starts with `bash ops/deploy/start.sh ~/g2` (see
 `ops/deploy/README.md`).
 
 - [ ] Shadow testing for every backtest-gate passer under its constraint set;
-      the shadow gate per strategy.
+      the shadow gate per strategy. Connected Drift: the month-end emitter
+      `ops/emit_connected_drift.py` and its 1x and 2x cost shadow ledgers
+      (`ops/forward_ledgers.py`, minimum 6 rebalances) are built and tested on
+      fixtures (`test_emit_connected_drift`). Human run, after the datasets in
+      `research/data/` are built and the strategy is in `approved.json`:
+      `python3 ops/emit_connected_drift.py ~/g2 --constraint-set india` (HOLD
+      exits 3); the ledgers need `CONNECTED_DRIFT_MARGIN_RATE=<broker rate>`
+      and join `ops/forward_ledgers.py ~/g2` once `reference.json` exists. Waits
+      on the backtest gate, the forward trial registration and kernel short
+      selling for the US set.
 - [x] Decay monitors: rolling 24-month spanning alpha and a one-sided CUSUM on
       monthly net returns (`plan/math.md`), kill-only. `ops/decay_monitor.py`
       writes `ledgers/decay.json`; waits on a ledger mapped in
