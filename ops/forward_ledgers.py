@@ -30,7 +30,9 @@ import urllib.error
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from research.strategy import portfolio, sip_fetch
+from research.engine import link_store
+from research.strategy import margin, portfolio, sip_fetch
+from research.strategy import run_connected_drift as book
 
 FORWARD_START = "2026-09-30"   # first session recorded
 HISTORY_START = "2016-01-01T00:00:00Z"
@@ -39,6 +41,22 @@ SIP_DELAY_MIN = 16
 TOL = 0.002  # whole-share rounding moves a replay by a few bp; look-ahead moves it far more
 
 CORE_WEIGHTS = {"VTI": 0.6, "IEF": 0.4}
+
+# Connected Drift Book ledgers at 1x and 2x modeled cost (cost_mult), signed and
+# on margin. The ledger joins once research/data/reference.json exists and fails
+# closed on a stale or missing dataset. The minimum is validation.md's shadow
+# minimum for a monthly strategy: 3 rebalances, doubled because the run touched
+# the scaler on the seen window.
+CD = "connected_drift"
+CD_2X = "connected_drift_2x_cost"
+BOOK_COST_MULT = {CD: 1.0, CD_2X: 2.0}
+SHADOW_MIN_REBALANCES = {CD: 6, CD_2X: 6}
+DATA_DIR = book.DATA
+MARGIN_RATE_ENV = "CONNECTED_DRIFT_MARGIN_RATE"  # the broker's published rate
+
+
+class DataRefused(ValueError):
+    """A ledger's inputs are missing or stale; its row is not written."""
 
 # Benchmark / control ledgers (same engine, schema and chain as the strategies,
 # plan/validation.md). Buy-and-hold: one allocation, no rebalance.
@@ -68,8 +86,57 @@ def core_fn():
     return hold_fn(CORE_WEIGHTS)
 
 
-def ledger_specs():
-    """id -> (universe incl. cash leg, factory(sessions) -> target_fn, spec)."""
+def book_universe(data_dir):
+    """Symbols of the book's ledgers, or None before the reference dataset
+    exists."""
+    try:
+        with open(os.path.join(data_dir, "reference.json"),
+                  encoding="utf-8") as f:
+            syms = sorted(json.load(f)["data"]["market_cap"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return sorted(set(syms) | set(book.SUPPORT))
+
+
+def book_factory(data_dir):
+    """factory(sessions, prices) -> the Book; the datasets must reach the last
+    session."""
+    def make(sessions, prices):
+        need = sessions[-1]
+        try:
+            ref, filings, events = book._datasets(data_dir, need)
+            vetoes = book.read_dataset(data_dir, "vetoes.json", need)
+            store = book._store(data_dir)
+        except (book.RunnerError, link_store.LinkStoreError) as e:
+            raise DataRefused(str(e)) from None
+        inputs = book.Inputs(prices, ref, store, filings, events, vetoes)
+        return book.Book(sessions, prices, inputs)
+    return make
+
+
+def book_options(sid):
+    try:
+        rate = float(os.environ[MARGIN_RATE_ENV])
+        return {"margin": margin.MarginTerms(margin_rate=rate),
+                "cost_mult": BOOK_COST_MULT[sid]}
+    except (KeyError, ValueError):
+        raise DataRefused("margin-rate-required") from None
+
+
+def ledger_specs(data_dir=None):
+    """id -> (universe incl. cash leg, factory(sessions) -> target_fn, spec);
+    a book ledger's factory also takes the prices. The book ledgers are in
+    only when `data_dir` holds the reference dataset."""
+    specs = _core_specs()
+    universe = book_universe(data_dir) if data_dir else None
+    if universe:
+        for sid, mult in BOOK_COST_MULT.items():
+            specs[sid] = (universe, book_factory(data_dir),
+                          "connected_drift book at %gx cost" % mult)
+    return specs
+
+
+def _core_specs():
     return {
         "passive_core": (list(CORE_WEIGHTS), lambda s: core_fn(),
                             "60/40 buy and hold"),
@@ -118,11 +185,18 @@ def common_sessions(prices):
 
 def replay(strategy, prices, spec_factory, symbols):
     """Rows for every session >= FORWARD_START, from a full-history run."""
-    px = {s: prices[s] for s in symbols}
-    sessions = common_sessions(px)
+    is_book = strategy in BOOK_COST_MULT
+    # lean: a book name with no bars is dropped, not refused; refuse it when a
+    # shadow ledger must hold every name.
+    px = {s: prices[s] for s in symbols if prices[s] or not is_book}
+    sessions = sorted(px["SPY"]) if is_book else common_sessions(px)
     if not sessions:
         return []
-    res = portfolio.run(sessions, px, spec_factory(sessions), cash0=CASH0)
+    if is_book:
+        res = portfolio.run(sessions, px, spec_factory(sessions, px),
+                            cash0=CASH0, **book_options(strategy))
+    else:
+        res = portfolio.run(sessions, px, spec_factory(sessions), cash0=CASH0)
     targets = {d: w for d, w in res["weights"]}
     idx = [i for i, d in enumerate(sessions) if d >= FORWARD_START]
     if not idx:
@@ -191,14 +265,19 @@ def _settle(d, sid, fresh, spec, verify, bad, summary):
                     "equity": rows[-1]["equity"] if rows else None}
 
 
-def run(d, now, verify=False, http_get=sip_fetch.default_http_get):
-    specs = ledger_specs()
+def run(d, now, verify=False, http_get=sip_fetch.default_http_get,
+        data_dir=None):
+    specs = ledger_specs(data_dir)
     symbols = sorted({s for u, _, _ in specs.values() for s in u})
     prices = fetch_prices(symbols, now, http_get)
     os.makedirs(os.path.join(d, "ledgers"), exist_ok=True)
     bad, summary = [], {}
     for sid, (universe, factory, spec) in specs.items():
-        fresh = replay(sid, prices, factory, universe)
+        try:
+            fresh = replay(sid, prices, factory, universe)
+        except DataRefused as e:
+            summary[sid] = {"refused": str(e)}
+            continue
         _settle(d, sid, fresh, spec, verify, bad, summary)
     write_status(d)
     return bad, summary
@@ -227,6 +306,10 @@ def write_status(d):
         state = "hard" if dd >= HARD_DD else "soft" if dd >= SOFT_DD else "ok"
         out[name[:-6]] = {"date": rows[-1]["date"], "equity": rows[-1]["equity"],
                           "peak": peak, "drawdown": round(dd, 6), "state": state}
+        need = SHADOW_MIN_REBALANCES.get(name[:-6])
+        if need:
+            n = sum(1 for r in rows if r["target"] is not None)
+            out[name[:-6]].update(rebalances=n, shadow_min_rebalances=need)
     tmp = os.path.join(sd, "status.json.tmp")
     os.makedirs(sd, exist_ok=True)
     with open(tmp, "w") as f:
@@ -272,7 +355,8 @@ def main(argv, now=None):
     while True:
         n = now or datetime.datetime.now(datetime.timezone.utc)
         try:
-            bad, summary = run(args[0], n, verify="--verify" in argv)
+            bad, summary = run(args[0], n, verify="--verify" in argv,
+                               data_dir=DATA_DIR)
         except (ValueError, OSError, sip_fetch.SipError) as e:
             print(json.dumps({"error": str(e)}), file=sys.stderr)
             if "--loop" not in argv:
