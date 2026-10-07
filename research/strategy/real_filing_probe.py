@@ -19,6 +19,7 @@ from research.strategy import customer_coverage_probe as ccp
 N_FILINGS, SEED, YEAR = 20, 1, 2024
 F13_YEAR, F13_QTR, F13_TRIES = 2024, 4, 5
 MIN_SECTION, MAX_SHARE = 2000, 0.6
+SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK%010d.json"
 ITEMS = {"1A": "item_1a", "7": "mdna"}
 FOLDER_URL = "https://www.sec.gov/Archives/edgar/data/%d/%s/index.json"
 TABLE_URL = "https://www.sec.gov/Archives/edgar/data/%d/%s/%s"
@@ -146,7 +147,13 @@ def table_report(xml_bytes, cik, filing_date):
 
 def _live(contact, out_dir):
     fetcher = edgar_filings.Fetcher(contact, out_dir)
-    sec_get, get_index, get_sub, _ = ccp._live(contact, out_dir)
+    sec_get, get_index, _ = ccp._live(contact)
+
+    def get_sub(cik):
+        try:
+            return json.loads(sec_get(SUBMISSIONS_URL % cik))
+        except OSError:
+            raise edgar_filings.FilingError("submissions fetch failed")
 
     def get_raw(filing):
         row = fetcher.fetch(filing)

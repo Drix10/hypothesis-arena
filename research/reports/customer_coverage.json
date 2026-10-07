@@ -1,0 +1,118 @@
+{
+ "collapsed": false,
+ "incomplete": false,
+ "post_share": 0.3581081081081081,
+ "pre_share": 0.375,
+ "years": {
+  "2016": {
+   "empty_text": 0,
+   "fetch_failed": 0,
+   "filings": 30,
+   "first_error": "",
+   "mentions": 42,
+   "named": 12,
+   "named_share": 0.4,
+   "resolved": 2,
+   "resolved_share": 0.047619047619047616
+  },
+  "2017": {
+   "empty_text": 0,
+   "fetch_failed": 0,
+   "filings": 30,
+   "first_error": "",
+   "mentions": 74,
+   "named": 10,
+   "named_share": 0.3333333333333333,
+   "resolved": 7,
+   "resolved_share": 0.0945945945945946
+  },
+  "2018": {
+   "empty_text": 0,
+   "fetch_failed": 0,
+   "filings": 30,
+   "first_error": "",
+   "mentions": 126,
+   "named": 8,
+   "named_share": 0.26666666666666666,
+   "resolved": 21,
+   "resolved_share": 0.16666666666666666
+  },
+  "2019": {
+   "empty_text": 0,
+   "fetch_failed": 0,
+   "filings": 30,
+   "first_error": "",
+   "mentions": 52,
+   "named": 15,
+   "named_share": 0.5,
+   "resolved": 9,
+   "resolved_share": 0.17307692307692307
+  },
+  "2020": {
+   "empty_text": 0,
+   "fetch_failed": 0,
+   "filings": 30,
+   "first_error": "",
+   "mentions": 47,
+   "named": 9,
+   "named_share": 0.3,
+   "resolved": 17,
+   "resolved_share": 0.3617021276595745
+  },
+  "2021": {
+   "empty_text": 0,
+   "fetch_failed": 0,
+   "filings": 30,
+   "first_error": "",
+   "mentions": 32,
+   "named": 13,
+   "named_share": 0.43333333333333335,
+   "resolved": 9,
+   "resolved_share": 0.28125
+  },
+  "2022": {
+   "empty_text": 0,
+   "fetch_failed": 0,
+   "filings": 30,
+   "first_error": "",
+   "mentions": 37,
+   "named": 15,
+   "named_share": 0.5,
+   "resolved": 0,
+   "resolved_share": 0.0
+  },
+  "2023": {
+   "empty_text": 0,
+   "fetch_failed": 0,
+   "filings": 30,
+   "first_error": "",
+   "mentions": 28,
+   "named": 10,
+   "named_share": 0.3333333333333333,
+   "resolved": 3,
+   "resolved_share": 0.10714285714285714
+  },
+  "2024": {
+   "empty_text": 0,
+   "fetch_failed": 1,
+   "filings": 29,
+   "first_error": "HTTP Error 503: Service Unavailable",
+   "mentions": 54,
+   "named": 9,
+   "named_share": 0.3103448275862069,
+   "resolved": 0,
+   "resolved_share": 0.0
+  },
+  "2025": {
+   "empty_text": 0,
+   "fetch_failed": 1,
+   "filings": 29,
+   "first_error": "HTTP Error 503: Service Unavailable",
+   "mentions": 16,
+   "named": 6,
+   "named_share": 0.20689655172413793,
+   "resolved": 1,
+   "resolved_share": 0.0625
+  }
+ }
+}
