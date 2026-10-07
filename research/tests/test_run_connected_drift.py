@@ -163,6 +163,7 @@ class RunnerTest(unittest.TestCase):
         write_json(self.dir, "filing_scores.json", filings)
         write_json(self.dir, "form4_events.json", events)
         write_json(self.dir, "vetoes.json", {n: {} for n in C.VETOES})
+        write_json(self.dir, "end_events.json", {})
         write_store(self.dir)
 
     def run_cli(self, *extra):

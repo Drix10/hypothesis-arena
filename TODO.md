@@ -198,11 +198,24 @@ Open:
         failure exits 1 and keeps the previous rows of the failed symbols.
   - [ ] 10-Q scoring waits on a 10-Q layout in `research/sources/filing_sections.py`
         (Part I Item 2 as MD&A, Part II Item 1A); a separate slice.
-  - [ ] Observation collectors for `ticker_map` (cover-page symbols, symbol-change
-        corporate actions, Form 4 issuer symbols, former names) and event
-        collectors for `last_trade` (Form 25, Form 15, 8-K items), so delisting
-        returns (`plan/math.md`, Point-in-time discipline) rest on a dated event;
-        the coverage probe leaves 11% of eligible firms with an unverified end.
+  - [ ] Observation collectors for `ticker_map` and event collectors for
+        `last_trade`, so delisting returns (`plan/math.md`, Point-in-time
+        discipline) rest on a dated event; the coverage probe leaves 11% of
+        eligible firms with an unverified end. Built
+        (`research/sources/collect_ticker_observations.py`,
+        `collect_end_events.py`, fixtures only) and wired: `portfolio.run` and
+        `backtest.run_backtest` take `ends` from `strategy/delisting.py` and close
+        an ended name at -30% (long), 0% (short or acquisition); the report
+        carries the delisting sensitivity; `--register` reads `end_events.json`
+        and refuses when over 5% of series end unverified. Waits on a human run
+        with network and `reference.json` and the Form 4 zips on disk:
+        `MIRO_CONTACT=<contact> python3 research/sources/collect_end_events.py --yes`
+        writes `research/data/end_events.json`;
+        `MIRO_CONTACT=<contact> ALPACA_KEY_ID=<id> ALPACA_SECRET=<secret> python3
+        research/sources/collect_ticker_observations.py --yes` writes
+        `research/data/ticker_observations.jsonl`. Rerun either to resume. The
+        ticker map is not yet read by the universe build, and the end events
+        cover 8-K items 3.01 and 2.01, not 1.03.
 - [ ] **Link graph:** a bitemporal store; text peers and common ownership first
       (deterministic, dense); customer and supplier patterns with a precision
       audit (200 labeled filings, at least 0.9), knowing that 10-K disclosure

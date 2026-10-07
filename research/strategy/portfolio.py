@@ -7,6 +7,7 @@ import math
 from datetime import date as _date
 
 from research.strategy import costs as C
+from research.strategy import delisting
 from research.strategy.margin import MarginLedger
 from research.strategy.settlement import CashLedger
 
@@ -17,7 +18,8 @@ class PortfolioError(ValueError):
 
 def run(sessions, prices, target_fn, cash0=100000.0, spread_bps=2.0,
         cost_mult=1.0, median_volume=None, min_trade_usd=50.0,
-        min_trade_pct=0.005, cash_returns=None, margin=None, dividends=None):
+        min_trade_pct=0.005, cash_returns=None, margin=None, dividends=None,
+        ends=None, long_return=delisting.LONG_RETURN):
     """prices[sym][date] = (open, close). target_fn(date, closes) returns
     {sym: weight} (weights >= 0, sum <= 1) or None to hold, where
     closes[sym] lists closes through `date`. An unfinished target is retried
@@ -26,11 +28,14 @@ def run(sessions, prices, target_fn, cash0=100000.0, spread_bps=2.0,
     weights). With `margin` (a MarginTerms) weights are signed with gross at
     most terms.gross_max, `dividends[sym][date]` is the per-share amount paid
     on that session, and the result adds carry_usd and breaches (see
-    _run_margin)."""
+    _run_margin). `ends` (delisting.session_ends) closes a position on the
+    first session after its series ends, at the last close times one plus the
+    delisting return (`long_return` for a long)."""
     if margin is not None:
         return _run_margin(sessions, prices, target_fn, cash0, spread_bps,
                            cost_mult, median_volume, min_trade_usd,
-                           min_trade_pct, cash_returns, margin, dividends)
+                           min_trade_pct, cash_returns, margin, dividends,
+                           ends, long_return)
     if dividends is not None:
         raise PortfolioError("dividends-need-margin")
     if cash_returns is not None and len(cash_returns) != len(sessions):
@@ -45,6 +50,9 @@ def run(sessions, prices, target_fn, cash0=100000.0, spread_bps=2.0,
             led.advance(d)
             if cash_returns is not None:
                 led.accrue(led.total_cash() * cash_returns[i])
+            for sym, _, cash in delisting.closeouts(led.shares, prices, ends,
+                                                    d, long_return):
+                led.close_out(sym, cash)
         if pending is not None and i < len(sessions) - 1:
             cost, unfinished = _rebalance(led, prices, d, pending,
                                           spread_bps, cost_mult,
@@ -160,7 +168,8 @@ def _rebalance(led, prices, d, pending, spread_bps, mult, vol, min_usd,
 
 
 def _run_margin(sessions, prices, target_fn, cash0, spread_bps, mult, vol,
-                min_usd, min_pct, cash_returns, terms, dividends):
+                min_usd, min_pct, cash_returns, terms, dividends, ends,
+                long_return):
     """Margin-account run. Idle credit cash earns nothing (no short rebate), so
     `cash_returns` is refused. A close with equity below the maintenance
     requirement is a breach: the book is flattened at the next open and the
@@ -188,6 +197,9 @@ def _run_margin(sessions, prices, target_fn, cash0, spread_bps, mult, vol,
             carry_total += led.accrue_carry(prev, days)
             for s in list(led.shares):
                 led.dividend(s, (dividends or {}).get(s, {}).get(d, 0.0))
+            for sym, qty, cash in delisting.closeouts(led.shares, prices, ends,
+                                                      d, long_return):
+                led.trade(sym, -qty, cash)
         if pending is not None and i < len(sessions) - 1:
             cost, unfinished = _rebalance_margin(
                 led, prices, d, pending, spread_bps, mult, vol, min_usd,

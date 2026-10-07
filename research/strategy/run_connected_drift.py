@@ -12,7 +12,8 @@ from bisect import bisect_right
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from research.engine import link_store
-from research.strategy import backtest, bar_loader, composite, etf_trend
+from research.strategy import backtest, bar_loader, composite, delisting
+from research.strategy import etf_trend
 from research.strategy import ledger as ledger_mod
 from research.strategy import margin, prereg, tranches
 
@@ -52,7 +53,8 @@ def read_dataset(data_dir, name, need_through):
     strictly before the as-of date is used),
     filing_scores.json {symbol: [text_change.score]}, form4_events.json
     (form4.build_events rows) and vetoes.json {veto name: {symbol: bool}},
-    read only by --register."""
+    and end_events.json {symbol: [last_trade event]}, both read only by
+    --register."""
     path = os.path.join(data_dir, name)
     try:
         with open(path, encoding="utf-8") as f:
@@ -294,6 +296,7 @@ def register(pre, data_dir, ledger_path, margin_rate):
     end = pre["holdout"]["end"]
     ref, filings, events = _datasets(data_dir, end)
     vetoes = read_dataset(data_dir, "vetoes.json", end)
+    end_events = read_dataset(data_dir, "end_events.json", end)
     store = _store(data_dir)
     bars, missing = load_bars(data_dir, sorted(set(ref["market_cap"])
                                                | set(SUPPORT)), EVAL_START, end)
@@ -308,8 +311,10 @@ def register(pre, data_dir, ledger_path, margin_rate):
         raise RunnerError("book-incomplete:" + ",".join(INCOMPLETE))
     sessions = sorted(bars["SPY"])
     inputs = Inputs(bars, ref, store, filings, events, vetoes)
+    ends, unverified = delisting.session_ends(bars, end_events, sessions[-1])
+    delisting.require_verified(unverified, len(bars))
     return backtest.run_backtest(
-        pre, bars, Book(sessions, bars, inputs), led,
+        pre, bars, Book(sessions, bars, inputs), led, ends=ends,
         margin=margin.MarginTerms(margin_rate=margin_rate))
 
 
