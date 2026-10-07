@@ -317,6 +317,9 @@ The paper run starts with `bash ops/deploy/start.sh ~/g2` (see
 - [ ] Paper orders: one champion through the kernel (needs the kernel build, a
       shadow gate pass, and kernel short selling for a US-set champion).
 - [ ] Daily summary, weekly replay and the outage drills on the live loop.
+      Built: `python3 ops/daily_summary.py <dir> [--date D]` (08:00 UTC) and
+      `python3 ops/weekly_replay.py <dir> [--week-ending D]`. Waits on the
+      outage drills, a spend ledger at `<dir>/spend.ledger.sqlite3` and a live loop.
 - [ ] 30 clean paper-trading days, the paper-to-tiny criteria in
       `plan/stages.md` and the sign-off.
 
