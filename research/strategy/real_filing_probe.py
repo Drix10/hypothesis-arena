@@ -82,6 +82,15 @@ def parse_index_13f(text):
     return out
 
 
+def table_name(items):
+    """The information table XML among a 13F folder's listed items, or None
+    (a combination report has none)."""
+    names = [i["name"] for i in items
+             if i["name"].lower().endswith(".xml")
+             and i["name"].lower() != "primary_doc.xml"]
+    return names[0] if names else None
+
+
 def fetch_table(index_text, get_json, get_bytes, seed=SEED, tries=F13_TRIES):
     """First seeded 13F-HR filing whose folder lists an information table XML
     (a combination report has none): (filing, xml bytes), or None."""
@@ -91,11 +100,9 @@ def fetch_table(index_text, get_json, get_bytes, seed=SEED, tries=F13_TRIES):
         folder = f["accession"].replace("-", "")
         try:
             items = get_json(FOLDER_URL % (f["cik"], folder))["directory"]["item"]
-            names = [i["name"] for i in items
-                     if i["name"].lower().endswith(".xml")
-                     and i["name"].lower() != "primary_doc.xml"]
-            if names:
-                return f, get_bytes(TABLE_URL % (f["cik"], folder, names[0]))
+            name = table_name(items)
+            if name:
+                return f, get_bytes(TABLE_URL % (f["cik"], folder, name))
         except (edgar_filings.FilingError, KeyError, TypeError, ValueError):
             continue
     return None
