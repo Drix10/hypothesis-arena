@@ -349,12 +349,12 @@
     },
     {
       "name": "research",
-      "command": "for t in test_alert_relay test_backtest test_bar_loader test_bea test_bls test_candidate_wire test_costs test_coverage_probe test_deploy_check test_edgar test_edgar_filings test_end_events test_etf_trend test_etf_trend_chain test_filing_sections test_form13f test_form4 test_forward_eval test_forward_ledgers test_forward_register test_fred test_french_factors test_gates test_gdelt_gkg test_isolation test_issuer_symbols test_last_trade test_ledger test_link_store test_ownership_edges test_placebo test_portfolio test_prereg test_settlement test_shares_outstanding test_sip_fetch test_source_seam test_stats test_text_peers test_ticker_map test_ticker_observations test_tier_a test_composite test_connected_drift_chain test_connected_drift_prereg test_customer_coverage_probe test_customer_edges test_text_change test_tranches test_treasury test_alpaca_short_probe test_real_filing_probe test_run_connected_drift test_build_filing_scores test_build_form4_events test_build_link_store test_build_reference test_build_universe test_fetch_universe_bars test_universe; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
+      "command": "for t in test_alert_relay test_backtest test_bar_loader test_bea test_bls test_candidate_wire test_costs test_coverage_probe test_deploy_check test_edgar test_edgar_filings test_end_events test_etf_trend test_etf_trend_chain test_filing_sections test_form13f test_form4 test_forward_eval test_forward_ledgers test_forward_register test_fred test_french_factors test_gates test_gdelt_gkg test_isolation test_issuer_symbols test_last_trade test_ledger test_link_store test_ownership_edges test_placebo test_portfolio test_prereg test_settlement test_shares_outstanding test_sip_fetch test_source_seam test_stats test_text_peers test_ticker_map test_ticker_observations test_tier_a test_composite test_connected_drift_chain test_connected_drift_prereg test_customer_coverage_probe test_customer_edges test_text_change test_tranches test_treasury test_alpaca_short_probe test_real_filing_probe test_run_connected_drift test_build_filing_scores test_build_form4_events test_build_link_store test_build_reference test_build_universe test_fetch_universe_bars test_build_vetoes test_collect_end_events test_collect_ticker_observations test_daily_summary test_decay_monitor test_fetch_french_factors test_weekly_replay test_universe; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
       "timeout_seconds": 1800
     },
     {
       "name": "research-posix",
-      "command": "for t in test_passive_core test_sources; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
+      "command": "for t in test_passive_core test_sources test_emit_connected_drift; do PYTHONWARNINGS=error python3 research/tests/$t.py || exit 1; done",
       "os": [
         "linux"
       ],

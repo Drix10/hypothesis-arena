@@ -1,6 +1,6 @@
 {
   "version": "2",
-  "lastScan": "2026-10-07T14:41:45.027Z",
+  "lastScan": "2026-10-07T17:36:25.518Z",
   "surfaces": [
     {
       "key": "auth:research/engine/workers.py",
@@ -575,6 +575,18 @@
         58
       ],
       "firstSeen": "2026-10-07T14:41:44.250Z"
+    },
+    {
+      "key": "external-api:research/strategy/build_vetoes.py",
+      "type": "external-api",
+      "path": "research/strategy/build_vetoes.py",
+      "detail": "external-api pattern",
+      "lines": [
+        17,
+        163,
+        166
+      ],
+      "firstSeen": "2026-10-07T17:36:24.725Z"
     },
     {
       "key": "external-api:research/strategy/coverage_probe.py",
