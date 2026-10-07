@@ -19,7 +19,6 @@ from research.strategy import customer_coverage_probe as ccp
 N_FILINGS, SEED, YEAR = 20, 1, 2024
 F13_YEAR, F13_QTR, F13_TRIES = 2024, 4, 5
 MIN_SECTION, MAX_SHARE = 2000, 0.6
-SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK%010d.json"
 ITEMS = {"1A": "item_1a", "7": "mdna"}
 FOLDER_URL = "https://www.sec.gov/Archives/edgar/data/%d/%s/index.json"
 TABLE_URL = "https://www.sec.gov/Archives/edgar/data/%d/%s/%s"
@@ -42,26 +41,37 @@ def section_row(raw):
     return row
 
 
-def probe_sections(year, get_index, get_sub, get_raw, n=N_FILINGS, seed=SEED):
-    """`get_raw(filing)` is the filing body as fetched. A filer with no 10-K in
-    its recent filings, or whose fetch fails, is counted in `skipped`."""
-    rows, skipped = [], 0
-    for f in ccp.sample_filers(ccp.parse_index(get_index(year)), n, seed):
+def probe_sections(year, get_index, get_raw, n=N_FILINGS, seed=SEED):
+    """`get_raw(file_name)` is the body of that form.idx row's filing as
+    fetched. A failed fetch, an empty body or a body with no sections is
+    counted in `skipped` by reason and never read as a measurement; more than
+    half the sample skipped makes the report `incomplete`."""
+    rows, first_error = [], ""
+    skipped = {"fetch_failed": 0, "empty_body": 0, "parse_failed": 0}
+    sample = ccp.sample_filers(ccp.parse_index(get_index(year)), n, seed)
+    for f in sample:
         try:
-            found = edgar_filings.list_filings(
-                get_sub(f["cik"]), forms=("10-K",),
-                start="%d-01-01" % year, end="%d-12-31" % year)
-            if not found:
-                skipped += 1
-                continue
-            row = section_row(get_raw(found[0]))
-        except edgar_filings.FilingError:
-            skipped += 1
+            raw = get_raw(f["file"])
+        except (OSError, edgar_filings.FilingError) as e:
+            skipped["fetch_failed"] += 1
+            first_error = first_error or str(e)[:120]
             continue
-        rows.append({"cik": f["cik"], "accession": found[0]["accession"],
-                     **row})
+        if not raw.strip():
+            skipped["empty_body"] += 1
+            continue
+        row = section_row(raw)
+        if not row["parsed"]:
+            skipped["parse_failed"] += 1
+            first_error = first_error or row["reason"][:120]
+            continue
+        rows.append({"cik": f["cik"],
+                     "accession": f["file"].rsplit("/", 1)[-1]
+                     .removesuffix(".txt"), **row})
+    total = sum(skipped.values())
     return {"year": year, "filings": len(rows), "skipped": skipped,
-            "parsed": sum(r["parsed"] for r in rows),
+            "first_error": first_error,
+            "incomplete": not sample or 2 * total > len(sample),
+            "parsed": len(rows),
             "suspect": sum(r[k]["suspect"] for r in rows
                            for k in ITEMS.values()),
             "rows": rows}
@@ -145,22 +155,12 @@ def table_report(xml_bytes, cik, filing_date):
     return out
 
 
-def _live(contact, out_dir):
-    fetcher = edgar_filings.Fetcher(contact, out_dir)
+def _live(contact):
     sec_get, get_index, _ = ccp._live(contact)
 
-    def get_sub(cik):
-        try:
-            return json.loads(sec_get(SUBMISSIONS_URL % cik))
-        except OSError:
-            raise edgar_filings.FilingError("submissions fetch failed")
-
-    def get_raw(filing):
-        row = fetcher.fetch(filing)
-        path = os.path.join(out_dir, "%010d" % row["cik"], row["accession"],
-                            row["primary_document"])
-        with open(path, encoding="utf-8", errors="replace") as f:
-            return f.read()
+    def get_raw(file_name):
+        return sec_get(ccp.ARCHIVE_URL + file_name, ccp.MAX_BYTES).decode(
+            "utf-8", errors="replace")
 
     def get_bytes(url):
         try:
@@ -171,7 +171,7 @@ def _live(contact, out_dir):
     def get_json(url):
         return json.loads(get_bytes(url))
 
-    return sec_get, get_index, get_sub, get_raw, get_json, get_bytes
+    return sec_get, get_index, get_raw, get_json, get_bytes
 
 
 if __name__ == "__main__":
@@ -179,9 +179,9 @@ if __name__ == "__main__":
     if not contact.strip():
         sys.exit("MIRO_CONTACT missing: export the SEC contact string")
     root = os.path.join(os.path.dirname(__file__), "..")
-    sec_get, get_index, get_sub, get_raw, get_json, get_bytes = _live(
-        contact, os.path.join(root, "data", "filings"))
-    rep = {"sections": probe_sections(YEAR, get_index, get_sub, get_raw)}
+    sec_get, get_index, get_raw, get_json, get_bytes = _live(contact)
+    rep = {"sections": probe_sections(YEAR, get_index, get_raw)}
+    rep["incomplete"] = rep["sections"]["incomplete"]
     print({k: v for k, v in rep["sections"].items() if k != "rows"},
           flush=True)
     idx = sec_get(ccp.INDEX_URL.format(F13_YEAR, F13_QTR)).decode("latin-1")

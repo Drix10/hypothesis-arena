@@ -24,13 +24,6 @@ def filing_text(heads):
                    for i in ("1", "1A", "2", "7", "7A", "8"))
 
 
-def sub(cik):
-    return {"cik": cik, "filings": {"recent": {
-        "accessionNumber": ["0-1-%d" % cik], "form": ["10-K"],
-        "filingDate": ["2024-02-01"], "acceptanceDateTime": ["x"],
-        "primaryDocument": ["d.htm"]}}}
-
-
 def row(cusip, put_call="", shares="10", unit="SH"):
     return ("<infoTable><nameOfIssuer>A</nameOfIssuer><cusip>%s</cusip>"
             "<value>5</value><shrsOrPrnAmt><sshPrnamtType>%s</sshPrnamtType>"
@@ -56,15 +49,30 @@ class T(unittest.TestCase):
         self.assertFalse(r["item_1a"]["found"])
         self.assertIn("missing heading", r["reason"])
 
-    def test_probe_sections_counts_skips(self):
-        def get_sub(cik):
-            if cik == 2:
+    def test_probe_sections_counts_skips_by_reason(self):
+        def get_raw(name):
+            if name == "edgar/a.txt":
                 raise edgar_filings.FilingError("down")
-            return sub(cik)
-        rep = P.probe_sections(2024, lambda y: INDEX, get_sub,
-                               lambda f: filing_text({"1A": "short"}), n=2)
-        self.assertEqual((rep["filings"], rep["skipped"]), (1, 1))
+            return filing_text({"1A": "short"})
+        rep = P.probe_sections(2024, lambda y: INDEX, get_raw, n=3)
+        self.assertEqual(rep["filings"], 1)
+        self.assertEqual(rep["skipped"], {"fetch_failed": 1, "empty_body": 0,
+                                          "parse_failed": 0})
+        self.assertEqual(rep["first_error"], "down")
         self.assertEqual(rep["suspect"], 1)
+        self.assertFalse(rep["incomplete"])
+        self.assertEqual(rep["rows"][0]["accession"], "b")
+
+    def test_all_skipped_sample_is_incomplete(self):
+        for body in ("", "Item 1. Business\n" + BODY):
+            rep = P.probe_sections(2024, lambda y: INDEX, lambda f: body)
+            self.assertEqual(rep["filings"], 0)
+            self.assertTrue(rep["incomplete"])
+        def fail(name):
+            raise OSError("blocked")
+        rep = P.probe_sections(2024, lambda y: INDEX, fail)
+        self.assertEqual(rep["skipped"]["fetch_failed"], 2)
+        self.assertTrue(rep["incomplete"])
 
     def test_parse_index_13f(self):
         self.assertEqual(P.parse_index_13f(INDEX), [

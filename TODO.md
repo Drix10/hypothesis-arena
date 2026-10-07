@@ -190,7 +190,8 @@ Open:
         live information table. Built (`research/strategy/real_filing_probe.py`);
         waits on a human run with network:
         `MIRO_CONTACT=<contact> python3 research/strategy/real_filing_probe.py`,
-        which writes `research/reports/real_filing_probe.json`.
+        which writes `research/reports/real_filing_probe.json`. The 10-K half takes file names from form.idx
+        and reports skips by reason with an `incomplete` flag; a live rerun is needed after the first run skipped 20 of 20.
   - [ ] Filing text-change dataset. Built (`research/strategy/build_filing_scores.py`,
         fixtures only); waits on a human run with network and `reference.json` on
         disk: `MIRO_CONTACT=<contact> python3 research/strategy/build_filing_scores.py`,
