@@ -5,6 +5,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from research.strategy import benchmarks as B
+from research.strategy import delisting as D
 from research.strategy import margin as M
 from research.strategy import portfolio as P
 
@@ -283,6 +284,76 @@ class Margin(unittest.TestCase):
                   cash_returns=[0.0] * len(sess))
         with self.assertRaises(P.PortfolioError):
             P.run(sess, px, lambda d, h: None, dividends={})
+
+
+def truncated(px, sym, last):
+    return {s: ({d: v for d, v in series.items() if d <= last}
+                if s == sym else series) for s, series in px.items()}
+
+
+class Delisting(unittest.TestCase):
+    def setUp(self):
+        self.sess, full = mkdata()
+        self.last = self.sess[9]
+        self.px = truncated(full, "AAA", self.last)
+        self.ends = {"AAA": {"date": self.last, "type": "delisting"}}
+
+    def hold(self, w):
+        return lambda d, h: w if d == self.sess[0] else None
+
+    def test_long_is_closed_at_the_delisting_return(self):
+        fn = self.hold({"AAA": 1.0})
+        r = P.run(self.sess, self.px, fn, ends=self.ends)
+        qty = r["trades"][0][3]
+        last_close = self.px["AAA"][self.last][1]
+        self.assertAlmostEqual(r["equity"][10],
+                               r["equity"][9] + qty * last_close * D.LONG_RETURN)
+        self.assertEqual(r["equity"][-1], r["equity"][10])
+
+    def test_without_ends_the_last_close_is_carried_forward(self):
+        r = P.run(self.sess, self.px, self.hold({"AAA": 1.0}))
+        self.assertEqual(r["equity"][-1], r["equity"][9])
+
+    def test_acquisition_closes_a_long_at_the_last_price(self):
+        ends = {"AAA": {"date": self.last, "type": "acquisition"}}
+        r = P.run(self.sess, self.px, self.hold({"AAA": 1.0}), ends=ends)
+        self.assertAlmostEqual(r["equity"][10], r["equity"][9])
+        self.assertEqual(r["equity"][-1], r["equity"][10])
+
+    def test_long_return_is_a_parameter(self):
+        fn = self.hold({"AAA": 1.0})
+        a = P.run(self.sess, self.px, fn, ends=self.ends)["equity"][-1]
+        b = P.run(self.sess, self.px, fn, ends=self.ends,
+                  long_return=-1.0)["equity"][-1]
+        self.assertLess(b, a)
+
+    def test_short_is_covered_at_the_last_price(self):
+        sess, full = mkdata()
+        px = truncated(full, "BBB", sess[9])
+        ends = {"BBB": {"date": sess[9], "type": "delisting"}}
+        r = P.run(sess, px, self.hold({"BBB": -0.5}), margin=TERMS, ends=ends)
+        self.assertEqual(r["trades"][-1][0], sess[0 + 1])
+        self.assertLess(abs(r["equity"][10] - r["equity"][9]), 1.0)
+        self.assertEqual(r["equity"][-1], r["equity"][10])
+
+    def test_margin_long_takes_the_delisting_return(self):
+        fn = self.hold({"AAA": 0.5})
+        base = P.run(self.sess, self.px, fn, margin=TERMS)
+        r = P.run(self.sess, self.px, fn, margin=TERMS, ends=self.ends)
+        self.assertLess(r["equity"][10], base["equity"][10])
+
+    def test_session_ends_flags_unverified_series(self):
+        prices = {"AAA": self.px["AAA"], "BBB": self.px["BBB"]}
+        ev = {"AAA": [{"form": "25", "date": "2024-01-08", "accession": "a-1",
+                       "security_class": "common"}]}
+        ends, unverified = D.session_ends(prices, ev, self.sess[-1])
+        self.assertEqual(ends, {"AAA": {"date": self.last, "type": "delisting"}})
+        self.assertEqual(unverified, [])
+        ends, unverified = D.session_ends(prices, {}, self.sess[-1])
+        self.assertEqual((list(ends), unverified), (["AAA"], ["AAA"]))
+        with self.assertRaises(D.DelistingError):
+            D.require_verified(unverified, 10)
+        D.require_verified(unverified, 20)
 
 
 if __name__ == "__main__":

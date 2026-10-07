@@ -74,6 +74,14 @@ class CashLedger:
             del self.shares[sym]
         self.pending.append((self.today + 1, proceeds))
 
+    def close_out(self, sym, proceeds):
+        """Delisting: the whole position leaves for `proceeds`, settled at once
+        because the issuer, not a trade, pays it."""
+        if not math.isfinite(proceeds) or proceeds < 0 or sym not in self.shares:
+            raise SettlementError("bad-close-out")
+        del self.shares[sym]
+        self.settled += proceeds
+
     def credit(self, amount):
         """Dividends: cash on receipt (already settled by the issuer)."""
         if not math.isfinite(amount) or amount < 0:
