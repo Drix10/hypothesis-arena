@@ -7,6 +7,7 @@ symbol without shares or enough bars is omitted and counted by reason."""
 import argparse
 import collections
 import datetime
+import functools
 import json
 import math
 import os
@@ -24,6 +25,8 @@ BETA_SESSIONS = 252
 BENCH = "SPY"
 KEEP = (shares_outstanding.SHARES_CONCEPT, "TradingSymbol")
 DATA = os.path.join(ROOT, "data")
+# SEC companyfacts for large filers exceeds the poller's 2 MiB body cap.
+MAX_BODY_BYTES = 256 << 20
 
 _day = datetime.date.fromisoformat
 
@@ -121,11 +124,39 @@ def _prune(facts):
             "facts": {"dei": {k: dei[k] for k in KEEP if k in dei}}}
 
 
+class NoFacts(Exception):
+    """SEC has no record for the CIK (HTTP 404): permanent, not a fetch fault."""
+
+
+def failure_class(reason):
+    """Class of a `load_records` failure reason, for the printed summary."""
+    if not reason.startswith("fetch-failed"):
+        return reason
+    if "HTTP 429" in reason:
+        return "http-429"
+    if "HTTP 5" in reason:
+        return "http-5xx"
+    if "HTTP " in reason:
+        return "http-other"
+    if "oversized" in reason:
+        return "oversized"
+    if "imeout" in reason or "timed out" in reason:
+        return "timeout"
+    if "bad json" in reason:
+        return "bad-json"
+    return "network"
+
+
 def _get_json(adapter, url):
-    _status, _headers, body, err = adapter._get(url)
+    status, _headers, body, err = adapter._get(url)
+    if status == 404:
+        raise NoFacts(err)
     if err or body is None:
         raise OSError(err or "empty body")
-    return json.loads(body.decode("utf-8"))
+    try:
+        return json.loads(body.decode("utf-8"))
+    except ValueError as e:
+        raise OSError("bad json: %s" % e)
 
 
 def fetch_record(adapter, cik):
@@ -176,6 +207,9 @@ def load_records(universe, cache_dir, adapter, log, end, today):
             continue
         try:
             records[sym] = dict(fetch_record(adapter, cik), fetched=today)
+        except NoFacts:
+            failed[sym] = "no-facts"
+            continue
         except (OSError, ValueError) as e:
             failed[sym] = "fetch-failed: %s" % e
             continue
@@ -213,7 +247,10 @@ def main(argv=None, env=None, log=print, today=None, **adapter_kw):
     if not a.yes:
         log("not fetching: pass --yes to start")
         return 2
-    adapter = edgar.Adapter(contact, cache_dir=cache, **adapter_kw)
+    adapter_kw.setdefault("transport", functools.partial(
+        edgar._default_transport, limit=MAX_BODY_BYTES))
+    adapter = edgar.Adapter(contact, cache_dir=cache,
+                            max_body_bytes=MAX_BODY_BYTES, **adapter_kw)
     today = today or datetime.datetime.now(datetime.timezone.utc).date(
         ).isoformat()
     records, failed = load_records(universe, cache, adapter, log, end, today)
@@ -226,6 +263,12 @@ def main(argv=None, env=None, log=print, today=None, **adapter_kw):
             pass
     data, omitted = build(have, records, bars, end)
     omitted.update(failed)
+    first = {}
+    for sym, r in failed.items():
+        first.setdefault(failure_class(r), (sym, r))
+    for cls, (sym, r) in sorted(first.items()):
+        n = sum(failure_class(v) == cls for v in failed.values())
+        log("%s: %d, first %s (%s)" % (cls, n, sym, r))
     counts = collections.Counter(r.split(":")[0] for r in omitted.values())
     log(json.dumps({"symbols": len(data["market_cap"]),
                     "omitted": dict(sorted(counts.items()))}))

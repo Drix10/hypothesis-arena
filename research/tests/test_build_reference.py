@@ -187,6 +187,54 @@ class BuildReferenceTest(unittest.TestCase):
         self.assertEqual(self.run_main(Transport()), 0)
         self.assertIn("BBB", self.reference()["data"]["market_cap"])
 
+    def test_body_over_the_poller_cap_fits_the_build_cap(self):
+        class Big(Transport):
+            def __call__(self, url, headers, timeout_s):
+                st, h, body = super().__call__(url, headers, timeout_s)
+                if "companyfacts" in url:
+                    pad = " " * (edgar.MAX_BODY_BYTES + 1)
+                    body = body + pad.encode()
+                return st, h, body
+        self.assertEqual(self.run_main(Big()), 0)
+        self.assertIn("AAA", self.reference()["data"]["market_cap"])
+
+    def test_default_transport_reads_up_to_its_limit(self):
+        class Resp:
+            def __init__(self, n):
+                self.left = n
+
+            def read(self, k):
+                k = min(k, self.left)
+                self.left -= k
+                return b"x" * k
+        n = edgar.MAX_BODY_BYTES + 5
+        self.assertEqual(len(edgar._read_capped(Resp(n), 2 * n)), n)
+        self.assertEqual(len(edgar._read_capped(Resp(n))),
+                         edgar.MAX_BODY_BYTES + 1)
+
+    def test_404_is_omitted_as_no_facts_and_the_file_is_written(self):
+        class Gone(Transport):
+            def __call__(self, url, headers, timeout_s):
+                if "CIK0000000002" in url:
+                    return 404, {}, b""
+                return super().__call__(url, headers, timeout_s)
+        self.assertEqual(self.run_main(Gone()), 0)
+        self.assertEqual(set(self.reference()["data"]["market_cap"]), {"AAA"})
+        self.assertEqual(json.loads(self.logs[-1])["omitted"]["no-facts"], 1)
+        self.assertIn("no-facts: 1, first BBB (no-facts)", self.logs)
+
+    def test_503_blocks_the_write_and_prints_its_error(self):
+        class Down(Transport):
+            def __call__(self, url, headers, timeout_s):
+                if "CIK0000000002" in url:
+                    return 503, {}, b""
+                return super().__call__(url, headers, timeout_s)
+        self.assertEqual(self.run_main(Down()), 1)
+        self.assertFalse(os.path.exists(os.path.join(self.dir,
+                                                     "reference.json")))
+        self.assertTrue(any("http-5xx: 1, first BBB (fetch-failed: HTTP 503)"
+                            in m for m in self.logs))
+
     def test_refuses_without_contact_or_yes(self):
         t = Transport()
         self.assertEqual(self.run_main(t, env={}), 2)

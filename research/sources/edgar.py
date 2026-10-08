@@ -142,9 +142,9 @@ def contact_from_env(env=None):
     return src.get("MIRO_CONTACT", "").strip()
 
 
-def _read_capped(r):
+def _read_capped(r, limit=MAX_BODY_BYTES):
     chunks = []
-    left = MAX_BODY_BYTES + 1
+    left = limit + 1
     while left > 0:
         b = r.read(min(65536, left))
         if not b:
@@ -154,7 +154,7 @@ def _read_capped(r):
     return b"".join(chunks)
 
 
-def _default_transport(url, headers, timeout_s):
+def _default_transport(url, headers, timeout_s, limit=MAX_BODY_BYTES):
     """Stdlib urllib; honors HTTP(S)_PROXY from the environment.
 
     urlopen raises HTTPError for non-2xx, so it is normalized back into
@@ -163,11 +163,11 @@ def _default_transport(url, headers, timeout_s):
     try:
         with urllib.request.urlopen(req, timeout=timeout_s) as r:
             h = {k.lower(): v for k, v in r.getheaders()}
-            return r.status, h, _read_capped(r)
+            return r.status, h, _read_capped(r, limit)
     except urllib.error.HTTPError as e:
         try:
             try:
-                body = _read_capped(e)
+                body = _read_capped(e, limit)
             except Exception:
                 body = b""
             try:
@@ -196,7 +196,7 @@ class Adapter:
     def __init__(self, contact, transport=None, clock=None, sleeper=None,
                  jitter=None, backoff_base_s=BACKOFF_BASE_S,
                  cache_dir=None, timeout_s=DEFAULT_TIMEOUT_S, mono=None,
-                 entity_map=None):
+                 entity_map=None, max_body_bytes=MAX_BODY_BYTES):
         if not contact or not contact.strip():
             raise ConfigError("edgar: MIRO_CONTACT missing — refusing "
                               "to poll without SEC fair-access contact")
@@ -211,6 +211,7 @@ class Adapter:
         self.jitter = jitter or (lambda a, b: a + (b - a) * 0.5)
         self.backoff_base = backoff_base_s
         self.timeout_s = timeout_s
+        self.max_body_bytes = max_body_bytes
         self.cache_dir = cache_dir
         # Pinned {SYMBOL: cik}: when supplied it is the only CIK source
         # (the SEC ticker file is not consulted); derive it from
@@ -283,7 +284,7 @@ class Adapter:
                 return 304, h, b"", ""  # conditional: use cache
             if status != 200:
                 return status, h, None, "HTTP %d" % status
-            if len(body) > MAX_BODY_BYTES:
+            if len(body) > self.max_body_bytes:
                 return status, h, None, "oversized: %d bytes" % len(body)
             return status, h, body, ""
         return 0, {}, None, err or "transport failed"

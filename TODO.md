@@ -246,7 +246,9 @@ Open:
       `strategy/build_reference.py` writes (tested on fixtures in
       `test_build_reference`). Human run, after the bars are fetched:
       `MIRO_CONTACT=<contact> python3 research/strategy/build_reference.py
-      <symbols file> --yes`. Market cap before a split is understated by the
+      <symbols file> --yes` (rerun it after the oversized-body failure: cached symbols are
+      not refetched; a 404 is omitted as `no-facts`, any other failure blocks
+      the write and is printed per class). Market cap before a split is understated by the
       split ratio until raw bars are stored. Waits on the
       real datasets it reads (bars, link store, filing scores, Form 4 events,
       the reference run and veto data). The short vetoes build is
