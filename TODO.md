@@ -262,7 +262,9 @@ Open:
       `MIRO_CONTACT=<contact> python3 research/strategy/build_form4_events.py`;
       it downloads the quarterly zips to `research/data/form4_zips/`, skips
       those present, and writes `form4_events.json` only when no quarter is
-      missing). The four older
+      missing, except 404s on the trailing quarters, which are logged as
+      not yet published and write `through` at the last present quarter; any
+      other gap or status prints and writes nothing). The four older
       drafts under `research/prereg/` are removed in the cleanup.
 - [ ] **News co-mentions:** `sources/gdelt_gkg.py` parses GKG 2.1, resolves
       names by exact match and reports the resolution rate, on fixtures only.

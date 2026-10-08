@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
+import urllib.error
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from research.strategy import build_form4_events as B
@@ -29,17 +30,21 @@ def fixture_zip(path, buy=None):
 
 
 class FakeNet:
-    """Opener serving fixture zips by URL; `gone` quarters answer 404."""
+    """Opener serving fixture zips by URL; `gone` quarters answer 404 or the
+    given status, and a status of None is a network error."""
 
-    def __init__(self, tmp, gone=()):
+    def __init__(self, tmp, gone=(), status=404):
         self.tmp, self.gone, self.urls, self.headers = tmp, set(gone), [], []
+        self.status = status
 
     def __call__(self, url, headers, timeout_s):
         self.urls.append(url)
         self.headers.append(headers)
         name = url.rsplit("/", 1)[1]
         if name.split("_")[0] in self.gone:
-            return 404, None
+            if self.status is None:
+                raise urllib.error.URLError("connection reset")
+            return self.status, None
         p = os.path.join(self.tmp, "src_" + name)
         buy = {"2016q1": Q1_2016, "2020q1": Q1_2020}.get(name.split("_")[0])
         fixture_zip(p, buy)
@@ -95,6 +100,7 @@ class BuildTest(unittest.TestCase):
 
     def test_missing_quarter_is_reported_and_nothing_written(self):
         self.assertEqual(self.run_build(FakeNet(self.tmp, gone=["2018q2"])), 1)
+        self.assertIn("2018q2: HTTP 404", self.logs)
         self.assertIn("missing quarters: 2018q2", self.logs)
         self.assertFalse(os.path.exists(self.out))
         self.assertFalse(os.path.exists(os.path.join(self.zips,
@@ -103,6 +109,64 @@ class BuildTest(unittest.TestCase):
         net = FakeNet(self.tmp)
         self.assertEqual(self.run_build(net), 0)
         self.assertEqual(len(net.urls), 1)
+
+    def test_unpublished_trailing_quarters_write_through_last_present(self):
+        net = FakeNet(self.tmp, gone=["2019q4", "2020q1"])
+        self.assertEqual(self.run_build(net), 0)
+        self.assertIn("2019q4: HTTP 404", self.logs)
+        self.assertIn("2020q1: HTTP 404", self.logs)
+        warn = [m for m in self.logs if m.startswith("warning")]
+        self.assertEqual(len(warn), 1)
+        self.assertIn("2019q4 2020q1", warn[0])
+        self.assertIn("through 2019-09-30", warn[0])
+        events = R.read_dataset(self.data, B.OUT_NAME, "2019-09-30")
+        self.assertEqual([e["date"] for e in events], ["2016-01-12"])
+        # a rerun fetches only the quarters that were missing and refreshes through
+        net = FakeNet(self.tmp)
+        self.assertEqual(self.run_build(net), 0)
+        self.assertEqual(len(net.urls), 2)
+        events = R.read_dataset(self.data, B.OUT_NAME, "2020-03-31")
+        self.assertEqual(len(events), 2)
+
+    def test_stale_through_refuses_late_window_but_loads_earlier(self):
+        net = FakeNet(self.tmp, gone=["2019q4", "2020q1"])
+        self.assertEqual(self.run_build(net), 0)
+        with self.assertRaises(R.RunnerError) as c:
+            R.read_dataset(self.data, B.OUT_NAME, "2020-03-31")
+        self.assertEqual(str(c.exception), "dataset-stale:" + B.OUT_NAME)
+        self.assertEqual(len(R.read_dataset(self.data, B.OUT_NAME,
+                                            "2019-09-30")), 1)
+
+    def test_gap_before_a_present_quarter_writes_nothing(self):
+        net = FakeNet(self.tmp, gone=["2019q3", "2020q1"])
+        self.assertEqual(self.run_build(net), 1)
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_non_404_failures_write_nothing(self):
+        for status in (403, 429, 503, None):
+            self.logs.clear()
+            net = FakeNet(self.tmp, gone=["2020q1"], status=status)
+            self.assertEqual(self.run_build(net), 1, status)
+            self.assertFalse(os.path.exists(self.out))
+            want = "HTTP %d" % status if status else "error:"
+            self.assertTrue(any(m.startswith("2020q1: " + want)
+                                for m in self.logs), (status, self.logs))
+
+    def test_mixed_404_and_throttle_on_trailing_quarters_writes_nothing(self):
+        net = FakeNet(self.tmp, gone=["2019q4"])
+        orig = net.__call__
+
+        def mixed(url, headers, timeout_s):
+            if "2020q1" in url:
+                return 429, None
+            return orig(url, headers, timeout_s)
+        self.assertEqual(self.run_build(mixed), 1)
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_all_quarters_unpublished_writes_nothing(self):
+        every = ["%dq%d" % yq for yq in B.quarters(2016, TODAY)]
+        self.assertEqual(self.run_build(FakeNet(self.tmp, gone=every)), 1)
+        self.assertFalse(os.path.exists(self.out))
 
     def test_no_contact_refuses_before_any_request(self):
         net = FakeNet(self.tmp)

@@ -1,7 +1,9 @@
 """Human-run build of research/data/form4_events.json from SEC's quarterly
 insider-transaction sets, 2016 to date (plan/data.md, plan/math.md). Downloads
 missing quarters (SEC contact from MIRO_CONTACT, paced), skips zips already on
-disk, and writes the dataset only when every quarter is present."""
+disk, and writes the dataset when every quarter is present. Only 404s on the
+trailing quarters count as not yet published: the dataset is written through
+the last present quarter. Any other gap or failure writes nothing."""
 import argparse
 import datetime
 import json
@@ -61,13 +63,17 @@ def _open(url, headers, timeout_s):
 
 
 def download(y, q, zdir, ua, opener, sleep):
-    """Fetch one quarter to zdir through a .part file; True when stored."""
+    """Fetch one quarter to zdir through a .part file; None when stored, else
+    the HTTP status or error text."""
     path = os.path.join(zdir, zip_name(y, q))
     part = path + ".part"
     sleep(INTERVAL_S)
-    status, r = opener(URL % (y, q), {"User-Agent": ua}, TIMEOUT_S)
+    try:
+        status, r = opener(URL % (y, q), {"User-Agent": ua}, TIMEOUT_S)
+    except OSError as e:
+        return "error: %s" % e
     if status != 200:
-        return False
+        return "HTTP %d" % status
     try:
         with open(part, "wb") as f:
             while True:
@@ -78,17 +84,18 @@ def download(y, q, zdir, ua, opener, sleep):
     finally:
         r.close()
     os.replace(part, path)
-    return True
+    return None
 
 
 def build(zdir, out, first_year=FIRST_YEAR, contact="", today=None,
           opener=None, sleep=time.sleep, log=print):
-    """0 when written; 1 when a quarter is missing (nothing written)."""
+    """0 when written; 1 when a quarter is missing for any reason but a 404 on
+    the trailing quarters (nothing written)."""
     today = today or datetime.date.today()
     qs = quarters(first_year, today)
     have = lambda yq: os.path.exists(os.path.join(zdir, zip_name(*yq)))
     todo = [yq for yq in qs if not have(yq)]
-    missing = []
+    failed = {}
     if todo:
         if not contact.strip():
             raise BuildError("MIRO_CONTACT missing: refusing to fetch "
@@ -96,11 +103,20 @@ def build(zdir, out, first_year=FIRST_YEAR, contact="", today=None,
         os.makedirs(zdir, exist_ok=True)
         ua = "%s contact=%s" % (UA_BASE, contact.strip())
         for y, q in todo:
-            if not download(y, q, zdir, ua, opener or _open, sleep):
-                missing.append("%dq%d" % (y, q))
-    if missing:
-        log("missing quarters: " + " ".join(missing))
-        return 1
+            err = download(y, q, zdir, ua, opener or _open, sleep)
+            if err:
+                failed[(y, q)] = err
+                log("%dq%d: %s" % (y, q, err))
+    if failed:
+        log("missing quarters: " + " ".join("%dq%d" % yq for yq in failed))
+        keep = qs[:len(qs) - len(failed)]
+        if (not keep or any(yq not in failed for yq in qs[len(keep):])
+                or set(failed.values()) != {"HTTP 404"}):
+            return 1
+        log("warning: quarters not yet published: %s; dataset through %s"
+            % (" ".join("%dq%d" % yq for yq in failed),
+               _quarter_end(*keep[-1]).isoformat()))
+        qs = keep
     rows = []
     for y, q in qs:
         rows += form4.read_quarter(os.path.join(zdir, zip_name(y, q)))
