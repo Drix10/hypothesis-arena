@@ -144,7 +144,8 @@ def score_filer(sub, fetcher, cache, start, skips):
 
 
 def read_universe(data_dir):
-    """{symbol: [cik]} from reference.json."""
+    """{symbol: [cik]} from reference.json, narrowed to universe_symbols.txt
+    when that file exists."""
     try:
         with open(os.path.join(data_dir, "reference.json"),
                   encoding="utf-8") as f:
@@ -155,7 +156,13 @@ def read_universe(data_dir):
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         raise edgar_filings.FilingError("reference.json: missing or "
                                         "malformed ciks") from None
-    return out
+    try:
+        with open(os.path.join(data_dir, "universe_symbols.txt"),
+                  encoding="utf-8") as f:
+            keep = {line.strip() for line in f if line.strip()}
+    except OSError:
+        return out
+    return {s: c for s, c in out.items() if s in keep}
 
 
 def _previous(path):
@@ -197,10 +204,12 @@ def main(argv=None, env=None, now=None, log=print, transport=None, mono=None,
             for cik in universe[sym]:
                 rows += score_filer(_submissions(fetcher, cik, a.start),
                                     fetcher, cache, a.start, skips)
-        except (edgar_filings.FilingError, KeyError, TypeError):
+        except (edgar_filings.FilingError, KeyError, TypeError) as e:
+            log("%s: failed: %s" % (sym, e))
             failed.append(sym)
             continue
         if skips["fetch_failure"] > before:
+            log("%s: failed: filing fetch" % sym)
             failed.append(sym)
             continue
         if rows:

@@ -146,6 +146,17 @@ class BuildTest(unittest.TestCase):
                          {"no_prior": 2, "parse_failure": 2,
                           "fetch_failure": 0})
 
+    def test_universe_file_narrows_the_symbols_fetched(self):
+        with open(os.path.join(self.dir, "universe_symbols.txt"), "w") as f:
+            f.write("BBB\n")
+        self.run_build()
+        self.assertEqual(self.summary()["symbols"], 1)
+        self.assertNotIn("AAA", self.output()["data"])
+
+    def test_failed_symbol_is_logged(self):
+        self.run_build(server=self.failing(down=(SUB % 1,)))
+        self.assertTrue(any(l.startswith("AAA: failed") for l in self.log))
+
     def test_unparsed_symbol_is_absent_not_zero(self):
         self.run_build()
         self.assertNotIn("BBB", self.output()["data"])

@@ -133,6 +133,21 @@ class FetchTest(Base):
         with open(self.doc_path(), "rb") as f:
             self.assertEqual(f.read(), BODY)
 
+    def test_chunked_body_without_length_accepted(self):
+        t = Transport()
+        del t.headers["content-length"]
+        t.headers["transfer-encoding"] = "chunked"
+        self.fetcher(t).fetch(self.k10())
+        with open(self.doc_path(), "rb") as f:
+            self.assertEqual(f.read(), BODY)
+
+    def test_missing_length_without_chunked_refused(self):
+        t = Transport()
+        del t.headers["content-length"]
+        with self.assertRaisesRegex(FilingError, "content-length"):
+            self.fetcher(t).fetch(self.k10())
+        self.assertEqual(os.listdir(self.dir), [])
+
     def test_truncated_body_refused_and_nothing_written(self):
         with self.assertRaisesRegex(FilingError, "truncated"):
             self.fetcher(Transport(length=len(BODY) + 5)).fetch(self.k10())

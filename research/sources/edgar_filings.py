@@ -115,6 +115,9 @@ class Fetcher:
         ctype = headers.get("content-type", "").split(";")[0].strip().lower()
         if ctype not in CONTENT_TYPES:
             raise FilingError("unexpected content type %r" % ctype)
+        if ("content-length" not in headers
+                and headers.get("transfer-encoding", "").lower() == "chunked"):
+            return body  # urllib raises IncompleteRead on a cut chunked body
         try:
             declared = int(headers["content-length"])
         except (KeyError, ValueError):
