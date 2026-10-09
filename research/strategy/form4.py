@@ -7,6 +7,7 @@ import csv
 import datetime
 import io
 import re
+import xml.etree.ElementTree as ET
 import zipfile
 from collections import defaultdict
 
@@ -14,6 +15,7 @@ ROUTINE_YEARS = 3
 SESSION_OPEN = datetime.time(9, 30)
 FILING_DAY_END = datetime.time(23, 59)
 SYMBOL_RE = re.compile(r"^[A-Z]{1,5}(?:[.-][A-Z])?$")
+_OWNERSHIP = re.compile(r"<ownershipDocument>.*?</ownershipDocument>", re.S)
 csv.field_size_limit(1 << 24)
 
 
@@ -71,6 +73,57 @@ def read_quarter(path):
                             "code": r["TRANS_CODE"], "shares": sh,
                             "price": px})
         return out
+
+
+def _text(node, path):
+    found = node.find(path)
+    return (found.text or "").strip() if found is not None else ""
+
+
+def read_filing(text, filing_date):
+    """Rows of one Form 4 submission text, the same shape and filter as
+    read_quarter. filing_date is the form.idx date. Raises ValueError when no
+    well-formed ownershipDocument is present; a filing the quarterly sets would
+    drop (other document type, unusable symbol) yields no rows."""
+    m = _OWNERSHIP.search(text)
+    if not m:
+        raise ValueError("no ownershipDocument")
+    try:
+        doc = ET.fromstring(m.group(0))
+        cik = "%010d" % int(_text(doc, "issuer/issuerCik"))
+    except (ET.ParseError, ValueError):
+        raise ValueError("malformed ownershipDocument") from None
+    sym = _text(doc, "issuer/issuerTradingSymbol").strip("\"'").upper()
+    if _text(doc, "documentType") != "4" or not SYMBOL_RE.match(sym):
+        return []
+    owners = []
+    for o in doc.iterfind("reportingOwner"):
+        rel = o.find("reportingOwnerRelationship")
+        flag = lambda tag: _text(rel, tag).lower() in ("1", "true") \
+            if rel is not None else False
+        owners.append((_text(o, "reportingOwnerId/rptOwnerCik"),
+                       flag("isOfficer") or flag("isDirector")))
+    out = []
+    for t in doc.iterfind("nonDerivativeTable/nonDerivativeTransaction"):
+        code = _text(t, "transactionCoding/transactionCode")
+        if code not in ("P", "S"):
+            continue
+        if "common" not in _text(t, "securityTitle/value").lower():
+            continue
+        try:
+            td = datetime.date.fromisoformat(_text(t, "transactionDate/value")[:10])
+            sh = float(_text(t, "transactionAmounts/transactionShares/value"))
+            px = float(_text(t, "transactionAmounts/transactionPricePerShare/value"))
+        except ValueError:
+            continue
+        if not (sh > 0 and px > 0):
+            continue
+        for owner, officer in owners:
+            out.append({"filing_date": filing_date, "trans_date": td,
+                        "cik": cik, "symbol": sym, "owner": owner,
+                        "officer_or_director": officer, "code": code,
+                        "shares": sh, "price": px})
+    return out
 
 
 def is_routine(history, year, month):

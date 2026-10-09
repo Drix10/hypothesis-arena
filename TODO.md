@@ -264,7 +264,14 @@ Open:
       those present, and writes `form4_events.json` only when no quarter is
       missing, except 404s on the trailing quarters, which are logged as
       not yet published and write `through` at the last present quarter; any
-      other gap or status prints and writes nothing). The four older
+      other gap or status prints and writes nothing). `--fill-from-filings`
+      (fixtures only) builds the quarters the zips lack through the quarter in
+      progress from the universe issuers' own Form 4 filings (form.idx list,
+      submission texts cached in `research/data/form4_xml/`); it needs
+      `universe_symbols.txt` and `reference.json` and waits on a human run
+      with network, then `run_connected_drift.py --register`. New external
+      surface for the baseline accept: `full-index/<y>/QTR<q>/form.idx` and
+      `Archives/edgar/data/<cik>/<acc>/<acc>.txt` on www.sec.gov. The four older
       drafts under `research/prereg/` are removed in the cleanup.
 - [ ] **News co-mentions:** `sources/gdelt_gkg.py` parses GKG 2.1, resolves
       names by exact match and reports the resolution rate, on fixtures only.
