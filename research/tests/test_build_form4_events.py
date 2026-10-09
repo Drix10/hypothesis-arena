@@ -1,5 +1,6 @@
 import datetime
 import io
+import json
 import os
 import sys
 import tempfile
@@ -9,6 +10,7 @@ import urllib.error
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from research.strategy import build_form4_events as B
 from research.strategy import run_connected_drift as R
+from research.strategy import form4
 from research.tests.test_form4 import make_zip
 
 TODAY = datetime.date(2020, 4, 5)
@@ -52,7 +54,7 @@ class FakeNet:
             return 200, io.BytesIO(f.read())
 
 
-class BuildTest(unittest.TestCase):
+class Workdir(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -66,6 +68,9 @@ class BuildTest(unittest.TestCase):
     def run_build(self, net, contact=CONTACT, first=2016):
         return B.build(self.zips, self.out, first, contact, TODAY, net,
                        self.sleeps.append, self.logs.append)
+
+
+class BuildTest(Workdir):
 
     def test_quarters_exclude_the_one_in_progress(self):
         qs = B.quarters(2016, TODAY)
@@ -200,6 +205,196 @@ class BuildTest(unittest.TestCase):
             sys.stderr = real
         self.assertEqual(code, 1)
         self.assertFalse(os.path.exists(self.out))
+
+
+def filing_text(cik="0000000001", symbol="ABC", owner="111", code="P",
+                traded="2020-03-04", doc_type="4"):
+    return ("<SEC-DOCUMENT>\n<XML>\n<?xml version=\"1.0\"?>\n"
+            "<ownershipDocument><documentType>%s</documentType>"
+            "<issuer><issuerCik>%s</issuerCik>"
+            "<issuerTradingSymbol>%s</issuerTradingSymbol></issuer>"
+            "<reportingOwner><reportingOwnerId><rptOwnerCik>%s</rptOwnerCik>"
+            "</reportingOwnerId><reportingOwnerRelationship>"
+            "<isDirector>0</isDirector><isOfficer>true</isOfficer>"
+            "</reportingOwnerRelationship></reportingOwner>"
+            "<nonDerivativeTable><nonDerivativeTransaction>"
+            "<securityTitle><value>Common Stock</value></securityTitle>"
+            "<transactionDate><value>%s</value></transactionDate>"
+            "<transactionCoding><transactionCode>%s</transactionCode>"
+            "</transactionCoding><transactionAmounts>"
+            "<transactionShares><value>100</value></transactionShares>"
+            "<transactionPricePerShare><value>10</value>"
+            "</transactionPricePerShare></transactionAmounts>"
+            "</nonDerivativeTransaction></nonDerivativeTable>"
+            "</ownershipDocument>\n</XML>\n</SEC-DOCUMENT>\n"
+            % (doc_type, cik, symbol, owner, traded, code))
+
+
+def idx_line(cik, day, acc):
+    return "4         Some Name Inc   %d  %s  edgar/data/%d/%s.txt\n" % (
+        cik, day, cik, acc)
+
+
+class FakeSec:
+    """Transport serving form.idx bodies by (year, quarter) and filing texts by
+    accession; `fail` maps a URL fragment to a status."""
+
+    def __init__(self, idx, filings, fail=None):
+        self.idx, self.filings, self.fail = idx, filings, fail or {}
+        self.urls = []
+
+    def __call__(self, url, headers, timeout_s):
+        self.urls.append(url)
+        for frag, status in self.fail.items():
+            if frag in url:
+                return status, {}, b""
+        if url.endswith("form.idx"):
+            y, q = url.split("/")[-3], url.split("/")[-2][3:]
+            body = self.idx[(int(y), int(q))]
+        else:
+            body = self.filings[url.rsplit("/", 1)[1][:-4]]
+        body = body.encode()
+        return 200, {"content-type": "text/plain",
+                     "content-length": str(len(body))}, body
+
+
+ACC1, ACC2, ACC3 = ("0000000001-20-00000%d" % i for i in range(1, 4))
+
+
+class FillTest(Workdir):
+    def sec(self, **kw):
+        idx = {(2020, 1): idx_line(1, "2020-03-05", ACC1)
+               + idx_line(2, "2020-03-06", ACC2),
+               (2020, 2): idx_line(1, "2020-04-02", ACC3)}
+        filings = {ACC1: filing_text(), ACC2: filing_text(cik="0000000002"),
+                   ACC3: filing_text(traded="2020-04-01")}
+        return FakeSec(idx, filings, **kw)
+
+    def run_fill(self, sec, ciks=frozenset({1})):
+        return B.build(self.zips, self.out, 2016, CONTACT, TODAY,
+                       FakeNet(self.tmp, gone=["2020q1"]), self.sleeps.append,
+                       self.logs.append, xml_dir=os.path.join(self.tmp, "xml"),
+                       ciks=ciks, transport=sec)
+
+    def events(self):
+        with open(self.out, encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_gap_quarters_are_filled_from_filings(self):
+        self.assertEqual(self.run_fill(self.sec()), 0)
+        doc = self.events()
+        self.assertEqual(doc["through"], "2020-04-02")
+        self.assertEqual([e["date"] for e in doc["data"]],
+                         ["2016-01-12", "2020-03-05", "2020-04-02"])
+        self.assertIn("2020q1: 1 filings of the universe (1 fetched, "
+                      "0 cached), 0 malformed, 1 rows; index through "
+                      "2020-03-06", self.logs)
+
+    def test_universe_filter_never_fetches_other_issuers(self):
+        sec = self.sec()
+        self.run_fill(sec)
+        self.assertFalse(any(ACC2 in u for u in sec.urls))
+        self.assertTrue(all(e["cik"] == "0000000001"
+                            for e in self.events()["data"][1:]))
+
+    def test_filing_rows_match_the_zip_path(self):
+        with tempfile.TemporaryDirectory() as d:
+            z = os.path.join(d, "q.zip")
+            make_zip(z, [[ACC1, "05-MAR-2020", "4", "0000000001", "ABC"]],
+                     [[ACC1, "111", "Officer"]],
+                     [[ACC1, "Common Stock", "04-MAR-2020", "P", "100", "10"]])
+            want = form4.build_events(form4.read_quarter(z))
+        got = form4.build_events(form4.read_filing(
+            filing_text(), datetime.date(2020, 3, 5)))
+        self.assertEqual(got, want)
+        self.assertEqual(list(got[0]), list(want[0]))
+
+    def test_filing_filter_matches_the_zip_filter(self):
+        day = datetime.date(2020, 3, 5)
+        self.assertEqual(form4.read_filing(filing_text(code="A"), day), [])
+        self.assertEqual(form4.read_filing(filing_text(doc_type="4/A"), day),
+                         [])
+        self.assertEqual(form4.read_filing(filing_text(symbol="BAD SYM"),
+                                           day), [])
+        self.assertEqual(len(form4.read_filing(filing_text(code="S"), day)), 1)
+
+    def test_malformed_filing_is_counted_not_fatal(self):
+        sec = self.sec()
+        sec.filings[ACC1] = "<ownershipDocument><broken></ownershipDocument>"
+        old, B.MAX_PARSE_FAIL_RATE = B.MAX_PARSE_FAIL_RATE, 0.5
+        self.addCleanup(setattr, B, "MAX_PARSE_FAIL_RATE", old)
+        self.assertEqual(self.run_fill(sec), 0)
+        self.assertTrue(any("1 malformed" in m for m in self.logs))
+        self.assertEqual([e["date"] for e in self.events()["data"]],
+                         ["2016-01-12", "2020-04-02"])
+
+    def test_malformed_rate_over_the_ceiling_writes_nothing(self):
+        sec = self.sec()
+        sec.filings[ACC1] = "no xml here"
+        with self.assertRaises(B.BuildError):
+            self.run_fill(sec)
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_rerun_skips_cached_filings_and_ended_quarter_indexes(self):
+        self.run_fill(self.sec())
+        sec = self.sec()
+        self.logs.clear()
+        self.assertEqual(self.run_fill(sec), 0)
+        self.assertEqual([u.rsplit("/", 2)[-2:] for u in sec.urls],
+                         [["QTR2", "form.idx"]])
+        self.assertIn("2020q2: 1 filings of the universe (0 fetched, "
+                      "1 cached), 0 malformed, 1 rows; index through "
+                      "2020-04-02", self.logs)
+
+    def test_index_fetched_mid_quarter_is_refetched_once_ended(self):
+        sec = self.sec()
+        fetcher = B.edgar_filings.Fetcher(CONTACT, os.path.join(self.tmp, "xml"),
+                                          transport=sec, sleep=lambda s: None)
+        B._index(fetcher, 2020, 1, datetime.date(2020, 3, 20))
+        B._index(fetcher, 2020, 1, datetime.date(2020, 4, 5))
+        B._index(fetcher, 2020, 1, datetime.date(2020, 4, 6))
+        self.assertEqual(len([u for u in sec.urls if "QTR1" in u]), 2)
+
+    def test_non_404_filing_error_writes_nothing(self):
+        for status in (403, 429, 503):
+            sec = self.sec(fail={ACC1.replace("-", ""): status})
+            with self.assertRaises(B.BuildError):
+                self.run_fill(sec)
+            self.assertFalse(os.path.exists(self.out))
+
+    def test_missing_filing_is_a_gap_not_a_skip(self):
+        with self.assertRaises(B.BuildError):
+            self.run_fill(self.sec(fail={ACC1.replace("-", ""): 404}))
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_unpublished_trailing_index_shortens_coverage(self):
+        self.assertEqual(self.run_fill(self.sec(fail={"QTR2": 404})), 0)
+        self.assertEqual(self.events()["through"], "2020-03-06")
+        self.assertIn("2020q2: index not published", self.logs)
+
+    def test_index_error_other_than_404_writes_nothing(self):
+        with self.assertRaises(B.BuildError):
+            self.run_fill(self.sec(fail={"QTR1": 503}))
+        self.assertFalse(os.path.exists(self.out))
+
+    def test_universe_file_is_required(self):
+        with self.assertRaises(B.BuildError):
+            B.universe_ciks(self.data)
+        with open(os.path.join(self.data, "universe_symbols.txt"), "w") as f:
+            f.write("ABC\n")
+        with open(os.path.join(self.data, "reference.json"), "w") as f:
+            json.dump({"data": {"ciks": {"1": "ABC", "2": "XYZ"}}}, f)
+        self.assertEqual(B.universe_ciks(self.data), {1})
+
+    def test_help_documents_the_fill(self):
+        out = io.StringIO()
+        real, sys.stdout = sys.stdout, out
+        try:
+            with self.assertRaises(SystemExit):
+                B.main(["--help"])
+        finally:
+            sys.stdout = real
+        self.assertIn("--fill-from-filings", out.getvalue())
 
 
 if __name__ == "__main__":
