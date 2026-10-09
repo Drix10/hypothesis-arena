@@ -127,12 +127,16 @@ def parse_index(text):
 
 
 def _index(fetcher, y, q, today):
-    """form.idx text of one quarter; a quarter that has ended is kept on disk."""
+    """form.idx text of one quarter. Only an ended quarter's index is kept on
+    disk: one fetched mid-quarter would later pass for complete."""
     path = os.path.join(fetcher.out_dir, "%dQTR%d.form.idx" % (y, q))
-    if _quarter_end(y, q) < today and os.path.exists(path):
+    ended = _quarter_end(y, q) < today
+    if ended and os.path.exists(path):
         with open(path, encoding="utf-8", errors="replace") as f:
             return f.read()
     body = fetcher._get(customer_coverage_probe.INDEX_URL.format(y, q))
+    if not ended:
+        return body.decode("utf-8", errors="replace")
     os.makedirs(fetcher.out_dir, exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "wb") as f:

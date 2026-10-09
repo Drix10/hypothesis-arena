@@ -346,6 +346,15 @@ class FillTest(Workdir):
                       "1 cached), 0 malformed, 1 rows; index through "
                       "2020-04-02", self.logs)
 
+    def test_index_fetched_mid_quarter_is_refetched_once_ended(self):
+        sec = self.sec()
+        fetcher = B.edgar_filings.Fetcher(CONTACT, os.path.join(self.tmp, "xml"),
+                                          transport=sec, sleep=lambda s: None)
+        B._index(fetcher, 2020, 1, datetime.date(2020, 3, 20))
+        B._index(fetcher, 2020, 1, datetime.date(2020, 4, 5))
+        B._index(fetcher, 2020, 1, datetime.date(2020, 4, 6))
+        self.assertEqual(len([u for u in sec.urls if "QTR1" in u]), 2)
+
     def test_non_404_filing_error_writes_nothing(self):
         for status in (403, 429, 503):
             sec = self.sec(fail={ACC1.replace("-", ""): status})
